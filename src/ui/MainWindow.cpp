@@ -118,6 +118,9 @@ MainWindow::MainWindow(QWidget* parent)
             &MainWindow::onCellInspectRequested);
     connect(m_worker, &MeasureWorker::cellSweepPreview, this, &MainWindow::onCellSweepPreview);
     connect(m_connections, &ConnectionBar::themeToggleRequested, this, &MainWindow::onToggleTheme);
+    connect(m_connections, &ConnectionBar::vnaSettingsChanged, this, &MainWindow::onApplyVnaSettings);
+    connect(m_connections, &ConnectionBar::probeVnaRequested, this, &MainWindow::onProbeVna);
+    connect(m_worker, &MeasureWorker::probeFinished, this, &MainWindow::onProbeFinished);
     connect(m_measure, &MeasureTab::openWizardRequested, this, &MainWindow::onOpenWizard);
     connect(m_measure, &MeasureTab::resumeSeriesRequested, this, &MainWindow::onResumeSeries);
 
@@ -128,6 +131,7 @@ MainWindow::MainWindow(QWidget* parent)
     loadExampleDefaults();
     refreshThemeButton();
     scanUnfinishedSeries();
+    onApplyVnaSettings();
 }
 
 MainWindow::~MainWindow()
@@ -166,6 +170,7 @@ void MainWindow::onOpenWizard()
     StartWizard wizard(this);
     wizard.setSweepPreset(m_measure->fStartGhz(), m_measure->fStopGhz(), m_measure->points(),
                           m_measure->ifbwHz(), m_measure->powerDbm(), m_measure->averages());
+    wizard.setVnaEndpoint(m_connections->vnaHost(), m_connections->vnaPort());
     if (wizard.exec() != QDialog::Accepted) {
         return;
     }
@@ -396,6 +401,38 @@ void MainWindow::scanUnfinishedSeries()
         }
     }
     m_measure->setUnfinishedSeriesHint(m_unfinishedSeries);
+}
+
+void MainWindow::onApplyVnaSettings()
+{
+    QMetaObject::invokeMethod(
+        m_worker, "configureVna", Qt::QueuedConnection,
+        Q_ARG(int, m_connections->vnaBackend()), Q_ARG(QString, m_connections->vnaHost()),
+        Q_ARG(int, m_connections->vnaPort()), Q_ARG(QString, m_connections->vnaComPort()),
+        Q_ARG(bool, m_connections->allowDirectAccess()));
+}
+
+void MainWindow::onProbeVna()
+{
+    onApplyVnaSettings();
+    QMetaObject::invokeMethod(m_worker, "probeVna", Qt::QueuedConnection);
+}
+
+void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
+{
+    if (ok) {
+        m_connections->setDiagnostic(QStringLiteral("Связь OK: %1").arg(idnOrError));
+        statusBar()->showMessage(QStringLiteral("VNA IDN: %1").arg(idnOrError), 8000);
+    } else {
+        m_connections->setDiagnostic(QStringLiteral("Нет связи: %1").arg(idnOrError));
+        QMessageBox::warning(
+            this, QStringLiteral("Проверка VNA"),
+            QStringLiteral(
+                "Не удалось подключиться к S2VNA/C2220.\n\n%1\n\n"
+                "Проверьте: S2VNA запущена, Socket Server включён (порт), "
+                "прибор подключен. Пока нет прибора — режим «Имитатор».")
+                .arg(idnOrError));
+    }
 }
 
 void MainWindow::onResumeSeries()

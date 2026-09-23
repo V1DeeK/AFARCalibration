@@ -10,17 +10,32 @@
 #include <QVector>
 #include <memory>
 
+class C2220Vna;
+class IScpiTransport;
+class IVna;
 class QTimer;
+class ScpiComTransport;
+class ScpiSocketTransport;
 
 /// Worker измерения в QThread: prepare/start/pause/stop + stepOnce без блокировки GUI.
 class MeasureWorker final : public QObject {
     Q_OBJECT
 
 public:
+    /// 0 = имитатор, 1 = TCP Socket (S2VNA), 2 = COM.
+    enum VnaBackend : int { BackendSimulator = 0, BackendSocket = 1, BackendCom = 2 };
+
     explicit MeasureWorker(QObject* parent = nullptr);
     ~MeasureWorker() override;
 
 public slots:
+    void configureVna(int backend,
+                      const QString& host,
+                      int port,
+                      const QString& comPort,
+                      bool allowDirectAccess);
+    /// connect + *IDN? (и disconnect для имитатора не обязателен).
+    void probeVna();
     void prepare(const QString& dataRoot,
                  const QString& runConfigPath,
                  const QString& attenuatorCsvPath,
@@ -45,6 +60,7 @@ signals:
                            bool temperatureValid);
     void stateChanged(int state, const QString& russianText, const QString& colorName);
     void prepareFinished(bool ok, const QString& diagnostics);
+    void probeFinished(bool ok, const QString& idnOrError);
     void progressChanged(qint64 completed,
                          qint64 total,
                          int channel,
@@ -80,6 +96,8 @@ private slots:
     void onTick();
 
 private:
+    void rebuildVna();
+    [[nodiscard]] IVna* activeVna();
     void emitConnection();
     void emitState();
     void emitProgress();
@@ -92,7 +110,18 @@ private:
     static QString stateToRussian(afar::RunState state);
     static QString stateColor(afar::RunState state);
 
-    VnaSimulator m_vna;
+    int m_backend{BackendSimulator};
+    QString m_host{QStringLiteral("127.0.0.1")};
+    int m_port{5025};
+    QString m_comPort{QStringLiteral("COM3")};
+    bool m_allowDirect{false};
+
+    std::unique_ptr<VnaSimulator> m_simVna;
+    std::unique_ptr<ScpiSocketTransport> m_socket;
+    std::unique_ptr<ScpiComTransport> m_com;
+    std::unique_ptr<C2220Vna> m_c2220;
+    IVna* m_vna{nullptr};
+
     DutSimulator m_dut;
     std::unique_ptr<afar::MeasurementOrchestrator> m_orch;
     QTimer* m_timer = nullptr;

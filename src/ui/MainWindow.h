@@ -58,6 +58,9 @@ private slots:
                             const QVector<double>& phaseUnwrapDeg);
     void onToggleTheme();
     void onResumeSeries();
+    void onApplyVnaSettings();
+    void onProbeVna();
+    void onProbeFinished(bool ok, const QString& idnOrError);
     void onEtaChanged(const QString& text);
     void onSweepPreview(const QVector<double>& freqGhz,
                         const QVector<double>& magDb,

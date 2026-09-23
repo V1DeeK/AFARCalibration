@@ -1,8 +1,12 @@
 #include "ConnectionBar.h"
 
+#include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
+#include <QSettings>
+#include <QSpinBox>
 #include <QVBoxLayout>
 
 ConnectionBar::ConnectionBar(QWidget* parent)
@@ -36,12 +40,121 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     row->addWidget(m_theme);
     root->addLayout(row);
 
+    auto* cfg = new QHBoxLayout();
+    cfg->addWidget(new QLabel(QStringLiteral("VNA:"), this));
+    m_backend = new QComboBox(this);
+    m_backend->addItem(QStringLiteral("Имитатор"), 0);
+    m_backend->addItem(QStringLiteral("S2VNA Socket"), 1);
+    m_backend->addItem(QStringLiteral("S2VNA COM"), 2);
+    cfg->addWidget(m_backend);
+    cfg->addWidget(new QLabel(QStringLiteral("Host"), this));
+    m_host = new QLineEdit(QStringLiteral("127.0.0.1"), this);
+    m_host->setMaximumWidth(140);
+    cfg->addWidget(m_host);
+    cfg->addWidget(new QLabel(QStringLiteral("Port"), this));
+    m_port = new QSpinBox(this);
+    m_port->setRange(1, 65535);
+    m_port->setValue(5025);
+    cfg->addWidget(m_port);
+    cfg->addWidget(new QLabel(QStringLiteral("COM"), this));
+    m_com = new QLineEdit(QStringLiteral("COM3"), this);
+    m_com->setMaximumWidth(80);
+    cfg->addWidget(m_com);
+    m_probe = new QPushButton(QStringLiteral("Проверить связь"), this);
+    m_probe->setObjectName(QStringLiteral("btnPrimary"));
+    cfg->addWidget(m_probe);
+    cfg->addStretch(1);
+    root->addLayout(cfg);
+
     m_diagnostic = new QLabel(this);
     m_diagnostic->setWordWrap(true);
     m_diagnostic->setVisible(false);
     m_diagnostic->setStyleSheet(
         QStringLiteral("background:#fff3cd; color:#664d03; padding:4px 6px; border-radius:3px;"));
     root->addWidget(m_diagnostic);
+
+    connect(m_backend, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConnectionBar::onBackendChanged);
+    connect(m_probe, &QPushButton::clicked, this, [this]() {
+        saveSettings();
+        emit vnaSettingsChanged();
+        emit probeVnaRequested();
+    });
+    connect(m_host, &QLineEdit::editingFinished, this, [this]() {
+        saveSettings();
+        emit vnaSettingsChanged();
+    });
+    connect(m_port, &QSpinBox::editingFinished, this, [this]() {
+        saveSettings();
+        emit vnaSettingsChanged();
+    });
+    connect(m_com, &QLineEdit::editingFinished, this, [this]() {
+        saveSettings();
+        emit vnaSettingsChanged();
+    });
+
+    loadSettings();
+    updateFieldsEnabled();
+}
+
+void ConnectionBar::onBackendChanged(int)
+{
+    updateFieldsEnabled();
+    saveSettings();
+    emit vnaSettingsChanged();
+}
+
+void ConnectionBar::updateFieldsEnabled()
+{
+    const int b = vnaBackend();
+    m_host->setEnabled(b == 1);
+    m_port->setEnabled(b == 1);
+    m_com->setEnabled(b == 2);
+}
+
+void ConnectionBar::loadSettings()
+{
+    QSettings s;
+    const int backend = s.value(QStringLiteral("vna/backend"), 0).toInt();
+    m_backend->setCurrentIndex(qBound(0, backend, 2));
+    m_host->setText(s.value(QStringLiteral("vna/host"), QStringLiteral("127.0.0.1")).toString());
+    m_port->setValue(s.value(QStringLiteral("vna/port"), 5025).toInt());
+    m_com->setText(s.value(QStringLiteral("vna/com"), QStringLiteral("COM3")).toString());
+    updateFieldsEnabled();
+}
+
+void ConnectionBar::saveSettings() const
+{
+    QSettings s;
+    s.setValue(QStringLiteral("vna/backend"), vnaBackend());
+    s.setValue(QStringLiteral("vna/host"), vnaHost());
+    s.setValue(QStringLiteral("vna/port"), vnaPort());
+    s.setValue(QStringLiteral("vna/com"), vnaComPort());
+}
+
+int ConnectionBar::vnaBackend() const
+{
+    return m_backend->currentData().toInt();
+}
+
+QString ConnectionBar::vnaHost() const
+{
+    return m_host->text().trimmed();
+}
+
+int ConnectionBar::vnaPort() const
+{
+    return m_port->value();
+}
+
+QString ConnectionBar::vnaComPort() const
+{
+    return m_com->text().trimmed();
+}
+
+bool ConnectionBar::allowDirectAccess() const
+{
+    return false;
 }
 
 void ConnectionBar::setVnaInfo(const QString& model, const QString& address, bool connected)

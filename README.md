@@ -101,7 +101,7 @@ set PATH=C:\Qt\6.8.3\mingw_64\bin;C:\Qt\Tools\mingw1310_64\bin;%PATH%
 build\src\AfarRxCalibrationStudio.exe
 ```
 
-Нужны DLL Qt из `mingw_64` в `PATH` (или рядом с exe). По умолчанию железо **не** трогается: в `MeasureWorker` — имитаторы. Команды в прибор/изделие идут только через `measurement-core` (`afar_measure`); GUI ставит задачи и рисует состояние.
+Нужны DLL Qt из `mingw_64` в `PATH` (или рядом с exe). По умолчанию железо **не** трогается: режим **Имитатор**. Для живого C2220 — см. [`docs/S2VNA-setup.md`](docs/S2VNA-setup.md): установить S2VNA, включить Socket 5025, в полосе соединений выбрать **S2VNA Socket** и **«Проверить связь»**. Команды в прибор идут только через `measurement-core` (`afar_measure` + `C2220Vna`).
 
 ### Быстрый прогон на имитаторах
 

@@ -20,6 +20,7 @@ public:
                         int ifbwHz,
                         double powerDbm,
                         int averages);
+    void setVnaEndpoint(const QString& host, int port);
 
     [[nodiscard]] QString dataRoot() const;
     [[nodiscard]] QString runConfigPath() const;
@@ -70,4 +71,6 @@ private:
     int m_points{201};
     int m_ifbwHz{1000};
     int m_averages{8};
+    QString m_vnaHost{QStringLiteral("127.0.0.1")};
+    int m_vnaPort{5025};
 };

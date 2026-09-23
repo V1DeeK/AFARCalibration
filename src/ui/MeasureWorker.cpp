@@ -1,13 +1,17 @@
 #include "MeasureWorker.h"
 
 #include "AttenuatorCodes.h"
+#include "C2220Vna.h"
 #include "PhaseMath.h"
 #include "RawS21Store.h"
 #include "RunConfig.h"
+#include "ScpiComTransport.h"
+#include "ScpiSocketTransport.h"
 
 #include <QTimer>
 
 #include <cmath>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -27,14 +31,85 @@ enum CellStatus : int {
 
 MeasureWorker::MeasureWorker(QObject* parent)
     : QObject(parent)
-    , m_orch(std::make_unique<afar::MeasurementOrchestrator>(&m_vna, &m_dut))
 {
     m_timer = new QTimer(this);
     m_timer->setInterval(10);
     connect(m_timer, &QTimer::timeout, this, &MeasureWorker::onTick);
+    rebuildVna();
+    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
 }
 
 MeasureWorker::~MeasureWorker() = default;
+
+void MeasureWorker::rebuildVna()
+{
+    m_c2220.reset();
+    m_socket.reset();
+    m_com.reset();
+    m_simVna.reset();
+    m_vna = nullptr;
+
+    if (m_backend == BackendSocket) {
+        m_socket = std::make_unique<ScpiSocketTransport>(m_host.toStdString(),
+                                                          static_cast<std::uint16_t>(m_port));
+        C2220Vna::Profile profile;
+        profile.allow_direct_access = m_allowDirect;
+        m_c2220 = std::make_unique<C2220Vna>(*m_socket, profile);
+        m_vna = m_c2220.get();
+    } else if (m_backend == BackendCom) {
+        m_com = std::make_unique<ScpiComTransport>(m_comPort.toStdString());
+        C2220Vna::Profile profile;
+        profile.allow_direct_access = m_allowDirect;
+        m_c2220 = std::make_unique<C2220Vna>(*m_com, profile);
+        m_vna = m_c2220.get();
+    } else {
+        m_simVna = std::make_unique<VnaSimulator>();
+        m_vna = m_simVna.get();
+    }
+}
+
+IVna* MeasureWorker::activeVna()
+{
+    return m_vna;
+}
+
+void MeasureWorker::configureVna(int backend,
+                                 const QString& host,
+                                 int port,
+                                 const QString& comPort,
+                                 bool allowDirectAccess)
+{
+    m_timer->stop();
+    m_orch.reset();
+    m_backend = backend;
+    m_host = host.trimmed().isEmpty() ? QStringLiteral("127.0.0.1") : host.trimmed();
+    m_port = (port > 0 && port < 65536) ? port : 5025;
+    m_comPort = comPort.trimmed().isEmpty() ? QStringLiteral("COM3") : comPort.trimmed();
+    m_allowDirect = allowDirectAccess;
+    rebuildVna();
+    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+    emitConnection();
+    emit diagnostic(QString());
+}
+
+void MeasureWorker::probeVna()
+{
+    if (!m_vna) {
+        emit probeFinished(false, QStringLiteral("VNA не сконфигурирован"));
+        return;
+    }
+    try {
+        m_vna->connect();
+        const QString idn = QString::fromStdString(m_vna->identify());
+        emitConnection();
+        emit probeFinished(true, idn);
+        emit diagnostic(QStringLiteral("IDN: %1").arg(idn));
+    } catch (const std::exception& ex) {
+        emitConnection();
+        emit probeFinished(false, QString::fromUtf8(ex.what()));
+        emit diagnostic(QString::fromUtf8(ex.what()));
+    }
+}
 
 QString MeasureWorker::stateToRussian(afar::RunState state)
 {
@@ -162,21 +237,30 @@ void MeasureWorker::updateEta(qint64 completed, qint64 total)
 void MeasureWorker::emitConnection()
 {
     QString model = QStringLiteral("PLANAR C2220");
-    QString address = QStringLiteral("имитатор");
+    QString address = QStringLiteral("не задан");
     QString iface = QStringLiteral("имитатор");
     double temp = 0.0;
     bool tempOk = false;
+    bool vnaOk = false;
     if (m_dut.connected()) {
         temp = m_dut.temperature_c();
         tempOk = true;
         iface = QStringLiteral("DutSimulator");
     }
-    if (m_vna.connected()) {
+    if (m_simVna) {
         address = QStringLiteral("VnaSimulator");
         model = QStringLiteral("PLANAR C2220 (SIM)");
+        vnaOk = m_simVna->connected();
+    } else if (m_c2220) {
+        vnaOk = m_c2220->connected();
+        model = QStringLiteral("PLANAR C2220");
+        if (m_backend == BackendSocket) {
+            address = QStringLiteral("%1:%2").arg(m_host).arg(m_port);
+        } else {
+            address = m_comPort;
+        }
     }
-    emit connectionChanged(model, address, m_vna.connected(), iface, m_dut.connected(), temp,
-                           tempOk);
+    emit connectionChanged(model, address, vnaOk, iface, m_dut.connected(), temp, tempOk);
 }
 
 void MeasureWorker::emitState()
@@ -363,7 +447,7 @@ void MeasureWorker::prepare(const QString& dataRoot,
     }
 
     // Новый оркестратор: повторный prepare из Idle после Complete/Error невозможен.
-    m_orch = std::make_unique<afar::MeasurementOrchestrator>(&m_vna, &m_dut);
+    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
     m_orch->setConfig(cfg, att);
     m_orch->setSleepEnabled(false);
 
@@ -403,7 +487,7 @@ void MeasureWorker::prepareRecovery(const QString& seriesDir)
     m_timer->stop();
     resetEta();
     m_sweepThrottleArmed = false;
-    m_orch = std::make_unique<afar::MeasurementOrchestrator>(&m_vna, &m_dut);
+    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
     m_orch->setSleepEnabled(false);
     std::string diag;
     const bool ok = m_orch->prepareRecovery(seriesDir.toStdString(), diag);

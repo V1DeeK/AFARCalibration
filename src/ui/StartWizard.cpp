@@ -82,6 +82,12 @@ void StartWizard::setSweepPreset(double fStartGhz,
     }
 }
 
+void StartWizard::setVnaEndpoint(const QString& host, int port)
+{
+    m_vnaHost = host.trimmed().isEmpty() ? QStringLiteral("127.0.0.1") : host.trimmed();
+    m_vnaPort = (port > 0 && port < 65536) ? port : 5025;
+}
+
 void StartWizard::buildPages()
 {
     {
@@ -414,8 +420,12 @@ bool StartWizard::materializeSimFixtures(QString& diagnostics)
         << "\",\n"
            "  \"vna\": {\n"
            "    \"model\": \"PLANAR C2220\",\n"
-           "    \"host\": \"127.0.0.1\",\n"
-           "    \"port\": 5025,\n"
+           "    \"host\": \""
+        << m_vnaHost
+        << "\",\n"
+           "    \"port\": "
+        << m_vnaPort
+        << ",\n"
            "    \"s_parameter\": \"S21\",\n"
            "    \"f_start_hz\": "
         << fStart

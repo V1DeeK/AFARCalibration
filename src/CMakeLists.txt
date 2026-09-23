@@ -179,6 +179,7 @@ unset(_afar_examples_dir)
 target_link_libraries(AfarRxCalibrationStudio PRIVATE
     Qt6::Widgets
     afar_measure
+    afar_vna
     afar_sim
     afar_report
     afar_data

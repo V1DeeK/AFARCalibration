@@ -2,10 +2,13 @@
 
 #include <QFrame>
 
+class QComboBox;
 class QLabel;
+class QLineEdit;
 class QPushButton;
+class QSpinBox;
 
-/// Полоса соединений (UI-01 / UI-003): C2220, контроллер, температура, статус текстом и цветом.
+/// Полоса соединений (UI-01): C2220, контроллер, температура, статус, выбор транспорта VNA.
 class ConnectionBar final : public QFrame {
     Q_OBJECT
 
@@ -19,14 +22,35 @@ public:
     void setDiagnostic(const QString& text);
     void setThemeButtonText(const QString& text);
 
+    void loadSettings();
+    void saveSettings() const;
+
+    [[nodiscard]] int vnaBackend() const;
+    [[nodiscard]] QString vnaHost() const;
+    [[nodiscard]] int vnaPort() const;
+    [[nodiscard]] QString vnaComPort() const;
+    [[nodiscard]] bool allowDirectAccess() const;
+
 signals:
     void themeToggleRequested();
+    void vnaSettingsChanged();
+    void probeVnaRequested();
+
+private slots:
+    void onBackendChanged(int index);
 
 private:
+    void updateFieldsEnabled();
+
     QLabel* m_vna = nullptr;
     QLabel* m_controller = nullptr;
     QLabel* m_temperature = nullptr;
     QLabel* m_status = nullptr;
     QLabel* m_diagnostic = nullptr;
     QPushButton* m_theme = nullptr;
+    QComboBox* m_backend = nullptr;
+    QLineEdit* m_host = nullptr;
+    QSpinBox* m_port = nullptr;
+    QLineEdit* m_com = nullptr;
+    QPushButton* m_probe = nullptr;
 };
