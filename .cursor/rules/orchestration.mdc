@@ -1,0 +1,10 @@
+---
+description: Команда /orchestrate — конвейер крупной задачи
+alwaysApply: true
+---
+
+# Оркестрация
+
+`/orchestrate` — команда полного конвейера. Текст команды: `.cursor/commands/orchestrate.md`. Порядок работы: `.cursor/skills/orchestrate/SKILL.md`.
+
+Когда пользователь вызывает `/orchestrate` или просит оркестрацию, прочитай этот скилл и выполни его фазы. Не пиши код, пока пользователь не подтвердил план.

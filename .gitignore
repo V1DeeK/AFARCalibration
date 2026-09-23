@@ -1,0 +1,33 @@
+# Каталог сборки (не исходник)
+build/
+
+# Бинарники и объекты
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+*.ilk
+
+# Локальные пресеты CMake (не общий CMakePresets.json)
+CMakeUserPresets.json
+
+# Локальные настройки IDE (Qt Creator, Visual Studio)
+*.user
+.vs/
+*.autosave
+
+# Состояние оркестрации и рабочие файлы Cursor
+.cursor/workspace/
+.cursor/projects/
+
+# Локальные логи и временные файлы
+*.log
+*.tmp
+*~
+
+# Не игнорировать docs/, schemas/, examples/, cmake/, .cursor/rules/, .cursor/skills/, .cursor/commands/

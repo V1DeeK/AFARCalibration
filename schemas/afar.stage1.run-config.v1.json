@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "afar.stage1.run-config.v1.json",
+  "title": "afar.stage1.run-config/v1",
+  "description": "Конфигурация серии измерений этапа 1 (AFAR-RX-CAL-SW-TZ-01, т. 6.1). Неизвестные поля на любом уровне — ошибка (AT-02).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run_id",
+    "vna",
+    "controller",
+    "dut",
+    "timing",
+    "limits"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "afar.stage1.run-config/v1",
+      "description": "Имя схемы. Ровно afar.stage1.run-config/v1 (DATA-02)."
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "description": "Идентификатор серии. Шаблон ТЗ: RX16-YYYYMMDD-NNN. Пользовательский id — латиница, цифры, дефис, подчёркивание (FR-03)."
+    },
+    "vna": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Профиль ВАЦ. Порт и хост — параметры стенда, не константы программы. Боевые адреса в git не кладутся (т. 10.4).",
+      "required": [
+        "model",
+        "host",
+        "port",
+        "s_parameter",
+        "f_start_hz",
+        "f_stop_hz",
+        "points",
+        "ifbw_hz",
+        "power_dbm",
+        "averages"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Модель прибора. Для этапа 1 — PLANAR C2220."
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Адрес TCP Socket из профиля. Пример: 127.0.0.1, не боевой IP стенда."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Порт Socket из профиля S2VNA. 5025 в примере ТЗ — иллюстрация, не константа кода."
+        },
+        "s_parameter": {
+          "type": "string",
+          "const": "S21",
+          "description": "Измеряемый параметр. Этап 1 — только S21."
+        },
+        "f_start_hz": {
+          "type": "integer",
+          "minimum": 100000,
+          "maximum": 20000000000,
+          "description": "Начало полосы, Гц (целое). Предел C2220: 100 кГц…20 ГГц. f_stop_hz строго больше f_start_hz."
+        },
+        "f_stop_hz": {
+          "type": "integer",
+          "minimum": 100000,
+          "maximum": 20000000000,
+          "description": "Конец полосы, Гц (целое). Строго больше f_start_hz."
+        },
+        "points": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 500001,
+          "description": "Число точек свипа N_F. Предел C2220: 2…500001."
+        },
+        "ifbw_hz": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
+          "description": "Полоса ПЧ, Гц. Предел C2220: 1 Гц…1 МГц."
+        },
+        "power_dbm": {
+          "type": "number",
+          "minimum": -60,
+          "maximum": 10,
+          "description": "Мощность порта, дБм. Предел C2220: −60…+10 дБм."
+        },
+        "averages": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Число усреднений свипа."
+        }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Профиль контроллера АФАР. Значения в примере — не изделие и не утверждённый протокол (т. 14).",
+      "required": ["driver", "endpoint"],
+      "properties": {
+        "driver": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Идентификатор драйвера. Пример: serial-v1."
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Точка подключения (COM, TCP и т.п.). Пример: COM7 — не изделие."
+        }
+      }
+    },
+    "dut": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Изделие и сетка кодов.",
+      "required": [
+        "serial",
+        "channels",
+        "phase_codes",
+        "attenuator_codes_file",
+        "reference"
+      ],
+      "properties": {
+        "serial": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Заводской номер изделия."
+        },
+        "channels": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Диапазон каналов 1…16. last не меньше first.",
+          "required": ["first", "last"],
+          "properties": {
+            "first": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16
+            },
+            "last": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16
+            }
+          }
+        },
+        "phase_codes": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Диапазон кодов фазовращателя 0…63. last не меньше first. lsb_deg — цена младшего разряда, градусы.",
+          "required": ["first", "last", "lsb_deg"],
+          "properties": {
+            "first": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            },
+            "last": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            },
+            "lsb_deg": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Цена младшего разряда фазовращателя, градусы. Для 6 бит типично 5.625 (360/64)."
+            }
+          }
+        },
+        "attenuator_codes_file": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "description": "Имя CSV кодов аттенюатора относительно каталога серии. Без разделителей пути (т. 10.4)."
+        },
+        "reference": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Опорное состояние. По умолчанию ТЗ: att_code=0, phase_code=0 (FR-08).",
+          "required": ["att_code", "phase_code"],
+          "properties": {
+            "att_code": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            },
+            "phase_code": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            }
+          }
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Выдержки и частота опоры.",
+      "required": ["settle_ms", "reference_after_phase_row"],
+      "properties": {
+        "settle_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Выдержка по умолчанию, мс. Построковое значение в CSV может отличаться."
+        },
+        "reference_after_phase_row": {
+          "type": "boolean",
+          "description": "Снимать опору после каждой строки из 64 фаз (FR-08)."
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Пороги контроля качества. Стартовые значения FR-17 — настройки ПО, не аттестованная метрология изделия.",
+      "required": ["max_drift_phase_deg", "max_phase_residual_deg"],
+      "properties": {
+        "max_drift_phase_deg": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Порог дрейфа опоры, градусы. Стартовый FR-17: 1.0."
+        },
+        "max_phase_residual_deg": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Порог остатка фазы обратной LUT, градусы. Стартовый FR-17: 2.8125."
+        }
+      }
+    }
+  }
+}
