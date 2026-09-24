@@ -14,8 +14,8 @@ class StartWizard final : public QWizard {
 public:
     explicit StartWizard(QWidget* parent = nullptr);
 
-    void setSweepPreset(double fStartGhz,
-                        double fStopGhz,
+    void setSweepPreset(double fStartHz,
+                        double fStopHz,
                         int points,
                         int ifbwHz,
                         double powerDbm,
@@ -47,8 +47,8 @@ public slots:
 
 signals:
     /// Запрос короткого съёма; Cancel мастера сигнал не шлёт.
-    void probeCodesRequested(double fStartGhz,
-                             double fStopGhz,
+    void probeCodesRequested(double fStartHz,
+                             double fStopHz,
                              int points,
                              int ifbwHz,
                              double powerDbm,
@@ -93,9 +93,9 @@ private:
     QLabel* m_tempHint = nullptr;
     QString m_cfgPath;
     QString m_csvPath;
-    double m_fStartGhz{4.9};
-    double m_fStopGhz{6.0};
-    int m_points{201};
+    double m_fStartHz{1.246e9};
+    double m_fStopHz{1.346e9};
+    int m_points{101};
     int m_ifbwHz{1000};
     int m_averages{8};
     QString m_vnaHost{QStringLiteral("127.0.0.1")};

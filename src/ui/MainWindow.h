@@ -66,6 +66,15 @@ private slots:
     void onSweepPreview(const QVector<double>& freqGhz,
                         const QVector<double>& magDb,
                         const QVector<double>& phaseUnwrapDeg);
+    void onSparamsPreview(const QVector<double>& freqGhz,
+                          const QVector<double>& s11mag,
+                          const QVector<double>& s11ph,
+                          const QVector<double>& s21mag,
+                          const QVector<double>& s21ph,
+                          const QVector<double>& s12mag,
+                          const QVector<double>& s12ph,
+                          const QVector<double>& s22mag,
+                          const QVector<double>& s22ph);
     void onSeriesArtifactsPreview(const QString& runId,
                                   qint64 completedStates,
                                   const QString& directPath,

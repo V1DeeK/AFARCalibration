@@ -103,6 +103,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_worker, &MeasureWorker::progressChanged, this, &MainWindow::onProgress);
     connect(m_worker, &MeasureWorker::etaChanged, this, &MainWindow::onEtaChanged);
     connect(m_worker, &MeasureWorker::sweepPreview, this, &MainWindow::onSweepPreview);
+    connect(m_worker, &MeasureWorker::sparamsPreview, this, &MainWindow::onSparamsPreview);
     connect(m_worker, &MeasureWorker::pathsChanged, this, &MainWindow::onPaths);
     connect(m_worker, &MeasureWorker::matrixSnapshot, this, &MainWindow::onMatrixSnapshot);
     connect(m_worker, &MeasureWorker::axesChanged, this,
@@ -153,34 +154,40 @@ MainWindow::~MainWindow()
 void MainWindow::loadExampleDefaults()
 {
     const std::filesystem::path examples(AFAR_EXAMPLES_DIR);
-    const auto cfgPath = examples / "run-config.example.json";
+    const auto cfg1296 = examples / "run-config.c2220-1296.example.json";
+    const auto cfgDefault = examples / "run-config.example.json";
     afar::RunConfig cfg;
     std::string diag;
-    if (!examples.empty() && afar::RunConfig::loadFromFile(cfgPath, cfg, diag)) {
+    auto applyCfg = [this](const afar::RunConfig& c) {
         m_measure->applyRunConfigDefaults(
-            static_cast<double>(cfg.vna.f_start_hz) / 1e9,
-            static_cast<double>(cfg.vna.f_stop_hz) / 1e9, cfg.vna.points, cfg.vna.ifbw_hz,
-            cfg.vna.power_dbm, cfg.vna.averages);
-        m_connections->setVnaInfo(QString::fromStdString(cfg.vna.model),
+            static_cast<double>(c.vna.f_start_hz), static_cast<double>(c.vna.f_stop_hz),
+            c.vna.points, c.vna.ifbw_hz, c.vna.power_dbm, c.vna.averages);
+        m_connections->setVnaInfo(QString::fromStdString(c.vna.model),
                                   QStringLiteral("VnaSimulator (не Socket)"), false);
         m_connections->setControllerInfo(QStringLiteral("DutSimulator"), false);
+    };
+    if (!examples.empty() && afar::RunConfig::loadFromFile(cfg1296, cfg, diag)) {
+        applyCfg(cfg);
+    } else if (!examples.empty() && afar::RunConfig::loadFromFile(cfgDefault, cfg, diag)) {
+        applyCfg(cfg);
     } else {
-        m_measure->applyRunConfigDefaults(4.9, 6.0, 201, 1000, -30.0, 8);
+        // Минимум UI-303: пресет @1296 МГц.
+        m_measure->applyRunConfigDefaults(1.246e9, 1.346e9, 101, 1000, -30.0, 8);
     }
 }
 
 void MainWindow::onOpenWizard()
 {
     StartWizard wizard(this);
-    wizard.setSweepPreset(m_measure->fStartGhz(), m_measure->fStopGhz(), m_measure->points(),
+    wizard.setSweepPreset(m_measure->fStartHz(), m_measure->fStopHz(), m_measure->points(),
                           m_measure->ifbwHz(), m_measure->powerDbm(), m_measure->averages());
     wizard.setVnaEndpoint(m_connections->vnaHost(), m_connections->vnaPort());
     connect(&wizard, &StartWizard::probeCodesRequested, this,
-            [this](double fStartGhz, double fStopGhz, int points, int ifbwHz, double powerDbm,
+            [this](double fStartHz, double fStopHz, int points, int ifbwHz, double powerDbm,
                    int averages) {
                 onApplyVnaSettings();
                 QMetaObject::invokeMethod(m_worker, "runProbeCodes", Qt::QueuedConnection,
-                                          Q_ARG(double, fStartGhz), Q_ARG(double, fStopGhz),
+                                          Q_ARG(double, fStartHz), Q_ARG(double, fStopHz),
                                           Q_ARG(int, points), Q_ARG(int, ifbwHz),
                                           Q_ARG(double, powerDbm), Q_ARG(int, averages));
             });
@@ -317,6 +324,20 @@ void MainWindow::onSweepPreview(const QVector<double>& freqGhz,
                                 const QVector<double>& phaseUnwrapDeg)
 {
     m_measure->setSweepCurves(freqGhz, magDb, phaseUnwrapDeg);
+}
+
+void MainWindow::onSparamsPreview(const QVector<double>& freqGhz,
+                                  const QVector<double>& s11mag,
+                                  const QVector<double>& s11ph,
+                                  const QVector<double>& s21mag,
+                                  const QVector<double>& s21ph,
+                                  const QVector<double>& s12mag,
+                                  const QVector<double>& s12ph,
+                                  const QVector<double>& s22mag,
+                                  const QVector<double>& s22ph)
+{
+    m_measure->setSparamsCurves(freqGhz, s11mag, s11ph, s21mag, s21ph, s12mag, s12ph, s22mag,
+                                s22ph);
 }
 
 void MainWindow::onSeriesArtifactsPreview(const QString& runId,
