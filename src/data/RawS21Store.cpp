@@ -43,6 +43,45 @@ bool readVec(std::fstream& f, std::vector<T>& v, std::size_t n)
     return static_cast<bool>(f);
 }
 
+bool writeUtf8(std::fstream& f, const std::string& s)
+{
+    const auto n = static_cast<std::uint32_t>(s.size());
+    if (!writePod(f, n)) {
+        return false;
+    }
+    if (n == 0) {
+        return true;
+    }
+    f.write(s.data(), static_cast<std::streamsize>(n));
+    return static_cast<bool>(f);
+}
+
+bool readUtf8(std::fstream& f, std::string& s)
+{
+    std::uint32_t n = 0;
+    if (!readPod(f, n)) {
+        return false;
+    }
+    s.resize(n);
+    if (n == 0) {
+        return true;
+    }
+    f.read(s.data(), static_cast<std::streamsize>(n));
+    return static_cast<bool>(f);
+}
+
+bool writeMeta(std::fstream& f, const RawS21Meta& meta)
+{
+    return writeUtf8(f, meta.run_config_json) && writeUtf8(f, meta.vna_idn)
+        && writeUtf8(f, meta.vna_calibration_id);
+}
+
+bool readMeta(std::fstream& f, RawS21Meta& meta)
+{
+    return readUtf8(f, meta.run_config_json) && readUtf8(f, meta.vna_idn)
+        && readUtf8(f, meta.vna_calibration_id);
+}
+
 }  // namespace
 
 std::uint64_t RawS21Store::computeStateStride(std::uint32_t n_freq)
@@ -84,12 +123,14 @@ RawS21Store& RawS21Store::operator=(RawS21Store&& other) noexcept
     att_codes_ = std::move(other.att_codes_);
     phase_codes_ = std::move(other.phase_codes_);
     frequency_hz_ = std::move(other.frequency_hz_);
+    meta_ = std::move(other.meta_);
     states_offset_ = other.states_offset_;
     refs_offset_ = other.refs_offset_;
     state_stride_ = other.state_stride_;
     ref_stride_ = other.ref_stride_;
     other.n_channel_ = other.n_att_ = other.n_phase_ = other.n_freq_ = 0;
     other.states_offset_ = other.refs_offset_ = other.state_stride_ = other.ref_stride_ = 0;
+    other.meta_ = {};
     return *this;
 }
 
@@ -106,6 +147,7 @@ bool RawS21Store::create(const std::filesystem::path& path,
                          const std::vector<std::uint16_t>& att_codes,
                          const std::vector<std::uint8_t>& phase_codes,
                          const std::vector<std::uint64_t>& frequency_hz,
+                         const RawS21Meta& meta,
                          RawS21Store& out,
                          std::string& diagnostics)
 {
@@ -150,6 +192,10 @@ bool RawS21Store::create(const std::filesystem::path& path,
         diagnostics = "write axes failed";
         return false;
     }
+    if (!writeMeta(f, meta)) {
+        diagnostics = "write meta failed";
+        return false;
+    }
 
     const auto states_offset = static_cast<std::uint64_t>(f.tellp());
     const std::size_t n_states = static_cast<std::size_t>(n_ch) * n_att * n_ph;
@@ -183,6 +229,7 @@ bool RawS21Store::create(const std::filesystem::path& path,
     out.att_codes_ = att_codes;
     out.phase_codes_ = phase_codes;
     out.frequency_hz_ = frequency_hz;
+    out.meta_ = meta;
     out.states_offset_ = states_offset;
     out.refs_offset_ = refs_offset;
     out.state_stride_ = state_stride;
@@ -233,6 +280,12 @@ bool RawS21Store::open(const std::filesystem::path& path,
         return false;
     }
 
+    RawS21Meta meta;
+    if (!readMeta(f, meta)) {
+        diagnostics = "cannot read meta";
+        return false;
+    }
+
     const auto state_stride = computeStateStride(n_f);
     const auto ref_stride = computeRefStride(n_f);
     const auto states_offset = static_cast<std::uint64_t>(f.tellg());
@@ -249,6 +302,7 @@ bool RawS21Store::open(const std::filesystem::path& path,
     out.att_codes_ = std::move(att_codes);
     out.phase_codes_ = std::move(phase_codes);
     out.frequency_hz_ = std::move(frequency_hz);
+    out.meta_ = std::move(meta);
     out.states_offset_ = states_offset;
     out.refs_offset_ = refs_offset;
     out.state_stride_ = state_stride;

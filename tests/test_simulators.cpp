@@ -1,3 +1,4 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <string>
 
+using Catch::Approx;
 using Catch::Matchers::ContainsSubstring;
 
 TEST_CASE("AT-01 identify contains C2220", "[simulators]")
@@ -43,18 +45,49 @@ TEST_CASE("measure_s21 returns linear frequency axis and finite S21", "[simulato
     cfg.power_dbm = -10.0;
     cfg.ifbw_hz = 1000;
     cfg.averages = 1;
+    cfg.s_parameter = SParameter::S21;
     vna.configure(cfg);
 
     const auto sweep = vna.measure_s21();
     REQUIRE(sweep.frequency_hz.size() == cfg.points);
     REQUIRE(sweep.s21.size() == cfg.points);
+    REQUIRE(sweep.s11.empty());
+    REQUIRE(sweep.s12.empty());
+    REQUIRE(sweep.s22.empty());
     REQUIRE_FALSE(sweep.overload);
     REQUIRE(sweep.frequency_hz.front() == cfg.f_start_hz);
     REQUIRE(sweep.frequency_hz.back() == cfg.f_stop_hz);
     for (const auto& z : sweep.s21) {
         REQUIRE(std::isfinite(z.real()));
         REQUIRE(std::isfinite(z.imag()));
+        REQUIRE(std::abs(z) == Approx(0.8).margin(1e-9));
     }
+}
+
+TEST_CASE("measure_trace S11 fills s11 and measure_s21 rejects", "[simulators]")
+{
+    VnaSimulator vna;
+    vna.connect();
+    SweepConfig cfg{};
+    cfg.f_start_hz = 1'000'000'000ULL;
+    cfg.f_stop_hz = 2'000'000'000ULL;
+    cfg.points = 3;
+    cfg.power_dbm = -10.0;
+    cfg.ifbw_hz = 1000;
+    cfg.averages = 1;
+    cfg.s_parameter = SParameter::S11;
+    vna.configure(cfg);
+
+    const auto sweep = vna.measure_trace();
+    REQUIRE(sweep.s11.size() == cfg.points);
+    REQUIRE(sweep.s21.empty());
+    REQUIRE(sweep.s12.empty());
+    REQUIRE(sweep.s22.empty());
+    for (const auto& z : sweep.s11) {
+        REQUIRE(std::abs(z) == Approx(0.3).margin(1e-9));
+    }
+
+    REQUIRE_THROWS_AS(vna.measure_s21(), std::runtime_error);
 }
 
 TEST_CASE("dut apply/readback roundtrip", "[simulators]")

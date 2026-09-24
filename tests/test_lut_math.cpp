@@ -23,6 +23,8 @@ using afar::cal::interpolate_reference;
 using afar::cal::magnitude_db;
 using afar::cal::normalize;
 using afar::cal::select_inverse_codes;
+using afar::cal::reference_drift_phase_deg;
+using afar::cal::repeatability_from_attempts;
 using afar::cal::unwrap_degrees;
 using afar::cal::unwrap_phase_deg;
 using afar::cal::wrap180;
@@ -105,6 +107,34 @@ TEST_CASE("unwrap phase along axis", "[lut_math][AT-09]")
     REQUIRE_THAT(deg[1], WithinAbs(90.0, kTol));
     REQUIRE_THAT(deg[2], WithinAbs(180.0, kTol));
     REQUIRE_THAT(deg[3], WithinAbs(270.0, kTol));
+}
+
+TEST_CASE("reference drift between neighboring samples is not zero", "[lut_math][AT-09]")
+{
+    const double deg = 12.5;
+    const double rad = deg * std::numbers::pi_v<double> / 180.0;
+    const std::complex<double> r_prev{1.0, 0.0};
+    const std::complex<double> r_curr{std::cos(rad), std::sin(rad)};
+
+    const auto drift = reference_drift_phase_deg(r_prev, r_curr);
+    REQUIRE(drift.has_value());
+    REQUIRE_THAT(*drift, WithinAbs(deg, 1e-9));
+    REQUIRE(*drift != 0.0);
+
+    const auto back = reference_drift_phase_deg(r_curr, r_prev);
+    REQUIRE(back.has_value());
+    REQUIRE_THAT(*back, WithinAbs(-deg, 1e-9));
+
+    // Ноль — не измерение дрейфа (в том числе лишний слот N_A).
+    REQUIRE_FALSE(reference_drift_phase_deg({0.0, 0.0}, r_curr).has_value());
+    REQUIRE_FALSE(reference_drift_phase_deg(r_prev, {0.0, 0.0}).has_value());
+
+    const auto none = repeatability_from_attempts({r_prev});
+    REQUIRE_FALSE(none.has_value());
+    const auto again = repeatability_from_attempts({r_prev, r_curr});
+    REQUIRE(again.has_value());
+    REQUIRE_THAT(again->deg, WithinAbs(deg, 1e-9));
+    REQUIRE(again->deg != 0.0);
 }
 
 TEST_CASE("direct LUT fields from normalized sample", "[lut_math][AT-09]")

@@ -89,6 +89,8 @@ afar_enable_warnings(afar_qc)
 add_library(afar_report STATIC
     report/ParquetExport.cpp
     report/ParquetExport.h
+    report/RawS21TableExport.cpp
+    report/RawS21TableExport.h
     report/Manifest.cpp
     report/Manifest.h
     report/RunReportPdf.cpp
@@ -100,6 +102,29 @@ target_include_directories(afar_report PUBLIC
 )
 target_link_libraries(afar_report PUBLIC afar_cal afar_data)
 afar_enable_warnings(afar_report)
+
+# Версии и хеш коммита вшиваются при конфигурации. Из GUI git не вызывается.
+find_package(Git QUIET)
+set(AFAR_GIT_COMMIT "")
+if(GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        OUTPUT_VARIABLE AFAR_GIT_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _afar_git_rc
+    )
+    if(NOT _afar_git_rc EQUAL 0)
+        set(AFAR_GIT_COMMIT "")
+    endif()
+endif()
+unset(_afar_git_rc)
+
+set(AFAR_JSON_VERSION "3.11.3")
+if(DEFINED nlohmann_json_VERSION AND NOT nlohmann_json_VERSION STREQUAL "")
+    set(AFAR_JSON_VERSION "${nlohmann_json_VERSION}")
+endif()
 
 add_library(afar_measure STATIC
     measure/RunStateMachine.cpp
@@ -145,6 +170,15 @@ afar_enable_warnings(afar_dut)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 set(CMAKE_AUTOMOC ON)
+if(NOT DEFINED Qt6_VERSION)
+    set(Qt6_VERSION "unknown")
+endif()
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/report/AfarBuildInfo.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/report/AfarBuildInfo.h
+    @ONLY
+)
+target_include_directories(afar_report PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/report)
 
 add_executable(AfarRxCalibrationStudio WIN32
     app/main.cpp

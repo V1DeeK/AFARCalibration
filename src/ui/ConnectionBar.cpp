@@ -27,9 +27,14 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_controller = new QLabel(QStringLiteral("Контроллер: нет связи"), this);
     m_temperature = new QLabel(QStringLiteral("Температура: —"), this);
     m_status = new QLabel(QStringLiteral("Статус: простой"), this);
+    m_source = new QLabel(QStringLiteral("Источник: имитатор (не метрология стенда)"), this);
+    m_source->setObjectName(QStringLiteral("dataSourceBadge"));
+    m_source->setStyleSheet(
+        QStringLiteral("color:#664d03; font-weight:600; padding:1px 4px;"));
 
     row->addWidget(title);
     row->addStretch(1);
+    row->addWidget(m_source);
     row->addWidget(m_vna);
     row->addWidget(m_controller);
     row->addWidget(m_temperature);
@@ -205,4 +210,9 @@ void ConnectionBar::setDiagnostic(const QString& text)
 void ConnectionBar::setThemeButtonText(const QString& text)
 {
     m_theme->setText(text);
+}
+
+void ConnectionBar::setDataSourceText(const QString& text)
+{
+    m_source->setText(text);
 }

@@ -93,6 +93,21 @@ std::string format_double(double v)
     return oss.str();
 }
 
+const char* s_parameter_scpi(SParameter p)
+{
+    switch (p) {
+    case SParameter::S11:
+        return "S11";
+    case SParameter::S21:
+        return "S21";
+    case SParameter::S12:
+        return "S12";
+    case SParameter::S22:
+        return "S22";
+    }
+    return "S21";
+}
+
 }  // namespace
 
 C2220Vna::C2220Vna(IScpiTransport& transport)
@@ -188,7 +203,7 @@ void C2220Vna::configure(const SweepConfig& config)
     write_cmd("SENS:SWE:POIN " + std::to_string(config.points));
     write_cmd("SENS:BAND " + std::to_string(config.ifbw_hz));
     write_cmd("SOUR:POW " + format_double(config.power_dbm));
-    write_cmd("CALC:PAR:DEF S21");
+    write_cmd(std::string("CALC:PAR:DEF ") + s_parameter_scpi(config.s_parameter));
 
     config_ = config;
     configured_ = true;
@@ -220,26 +235,43 @@ ComplexSweep C2220Vna::measure_once()
 
     ComplexSweep sweep;
     sweep.frequency_hz.resize(config_.points);
-    sweep.s21.resize(config_.points);
     sweep.overload = false;
+
+    std::vector<std::complex<double>>* trace = nullptr;
+    switch (config_.s_parameter) {
+    case SParameter::S11:
+        trace = &sweep.s11;
+        break;
+    case SParameter::S21:
+        trace = &sweep.s21;
+        break;
+    case SParameter::S12:
+        trace = &sweep.s12;
+        break;
+    case SParameter::S22:
+        trace = &sweep.s22;
+        break;
+    }
+    trace->resize(config_.points);
+
     for (std::uint32_t i = 0; i < config_.points; ++i) {
         sweep.frequency_hz[i] = static_cast<std::uint64_t>(axis[i] + 0.5);
-        sweep.s21[i] = {values[static_cast<std::size_t>(i) * 2u],
-                        values[static_cast<std::size_t>(i) * 2u + 1u]};
+        (*trace)[i] = {values[static_cast<std::size_t>(i) * 2u],
+                       values[static_cast<std::size_t>(i) * 2u + 1u]};
     }
     return sweep;
 }
 
-ComplexSweep C2220Vna::measure_s21()
+ComplexSweep C2220Vna::measure_trace()
 {
-    require_connected("measure_s21");
+    require_connected("measure_trace");
     if (!configured_) {
-        throw std::runtime_error("C2220Vna: measure_s21 without configure");
+        throw std::runtime_error("C2220Vna: measure_trace without configure");
     }
 
     transport_.set_io_timeout_ms(profile_.sweep_timeout_ms);
 
-    std::runtime_error last{"C2220Vna: measure_s21 failed"};
+    std::runtime_error last{"C2220Vna: measure_trace failed"};
     const int attempts = profile_.measure_retries + 1;
     for (int attempt = 0; attempt < attempts; ++attempt) {
         try {
@@ -249,6 +281,18 @@ ComplexSweep C2220Vna::measure_s21()
         }
     }
     throw last;
+}
+
+ComplexSweep C2220Vna::measure_s21()
+{
+    require_connected("measure_s21");
+    if (!configured_) {
+        throw std::runtime_error("C2220Vna: measure_s21 without configure");
+    }
+    if (config_.s_parameter != SParameter::S21) {
+        throw std::runtime_error("C2220Vna: measure_s21 requires s_parameter == S21");
+    }
+    return measure_trace();
 }
 
 std::vector<std::string> C2220Vna::drain_errors()

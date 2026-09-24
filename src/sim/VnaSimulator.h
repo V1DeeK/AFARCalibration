@@ -22,6 +22,7 @@ public:
     void connect() override;
     std::string identify() override;
     void configure(const SweepConfig& config) override;
+    ComplexSweep measure_trace() override;
     ComplexSweep measure_s21() override;
     std::vector<std::string> drain_errors() override;
     void abort() noexcept override;

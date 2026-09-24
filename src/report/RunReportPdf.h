@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 
@@ -10,11 +10,15 @@ struct RunReportInfo {
     std::string run_id;
     std::size_t completed_states{0};
     std::size_t valid_direct_count{0};
-    std::string software_version{"0.1.0"};
+    /// Если пусто — в PDF пишется макрос сборки AFAR_SOFTWARE_VERSION.
+    std::string software_version;
     std::string series_path;
+    /// Пороги серии (настройки ПО, не аттестованная метрология).
+    double max_drift_phase_deg{0};
+    double max_phase_residual_deg{0};
 };
 
-/// Минимальный валидный PDF 1.4 (текстовый) с run_id, completed, версией ПО.
+/// Минимальный валидный PDF 1.4: серия, версии сборки, пороги, THRU.
 bool writeRunReportPdf(const std::filesystem::path& path,
                        const RunReportInfo& info,
                        std::string& diagnostics);

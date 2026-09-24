@@ -169,6 +169,7 @@ build\src\AfarRxCalibrationStudio.exe
 - C++-интерфейсы и автомат: [`docs/contracts/cpp-interfaces.md`](docs/contracts/cpp-interfaces.md)
 - Каталог серии и форматы: [`docs/contracts/data-formats.md`](docs/contracts/data-formats.md)
 - Итог волн 0–10: [`docs/reports/2026-09-22-afar-stage1-wave0-10.md`](docs/reports/2026-09-22-afar-stage1-wave0-10.md)
+- Сверка ТЗ / GAP: [`docs/reports/2026-09-24-afar-tz-gap.md`](docs/reports/2026-09-24-afar-tz-gap.md)
 - Документация прибора: [`Planar_documentation/`](Planar_documentation/)
 
 Синтаксис SCPI сверяется с **установленной** на стенде версией S2VNA. Программа **не включает** прямой доступ к приёмникам (`SYSTem:RECeiver:DIRect:ACCess`); если режим уже ON и нет явного профиля стенда, серия не стартует.

@@ -1,3 +1,7 @@
+#if __has_include("AfarBuildInfo.h")
+#include "AfarBuildInfo.h"
+#endif
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "DutSimulator.h"
@@ -5,6 +9,7 @@
 #include "MeasurementOrchestrator.h"
 #include "ParquetExport.h"
 #include "RawS21Store.h"
+#include "RawS21TableExport.h"
 #include "RunReportPdf.h"
 #include "VnaSimulator.h"
 #include "probe_fixtures.h"
@@ -14,6 +19,12 @@
 
 #ifndef AFAR_SOFTWARE_VERSION
 #define AFAR_SOFTWARE_VERSION "0.1.0"
+#endif
+#ifndef AFAR_CXX_COMPILER_ID
+#define AFAR_CXX_COMPILER_ID "unknown"
+#endif
+#ifndef AFAR_GIT_COMMIT
+#define AFAR_GIT_COMMIT ""
 #endif
 
 TEST_CASE("AT-11 export: parquet reopen, sha256, valid count",
@@ -51,6 +62,24 @@ TEST_CASE("AT-11 export: parquet reopen, sha256, valid count",
     REQUIRE(std::filesystem::is_regular_file(series.inverseLutPath()));
     REQUIRE(std::filesystem::is_regular_file(series.reportPath()));
     REQUIRE(std::filesystem::is_regular_file(series.manifestPath()));
+    REQUIRE(std::filesystem::is_regular_file(series.rawS21CsvPath()));
+    REQUIRE(series.rawS21CsvPath().filename() == afar::SeriesDirectory::kRawS21Csv);
+    REQUIRE(series.rawS21CsvPath().filename() != afar::SeriesDirectory::kRawS21);
+    {
+        std::ifstream csv(series.rawS21CsvPath(), std::ios::binary);
+        REQUIRE(csv);
+        std::string header;
+        REQUIRE(std::getline(csv, header));
+        if (!header.empty() && header.back() == '\r') {
+            header.pop_back();
+        }
+        REQUIRE(header
+                == "run_id,timestamp_utc,channel,att_code,phase_code,freq_hz,"
+                   "s21_re,s21_im,temp_c,attempt,overload,valid");
+        std::string first_row;
+        REQUIRE(std::getline(csv, first_row));
+        REQUIRE(first_row.find(run_id) != std::string::npos);
+    }
     REQUIRE(afar::report::isValidPdfSmoke(series.reportPath(), diag));
 
     // --- DATA-03 / AT-11: reopen + sizes + checksum + valid ---
@@ -87,6 +116,21 @@ TEST_CASE("AT-11 export: parquet reopen, sha256, valid count",
         REQUIRE(body.find(AFAR_SOFTWARE_VERSION) != std::string::npos);
         REQUIRE(body.find("completed_states: " + std::to_string(completed))
                 != std::string::npos);
+        REQUIRE(body.find(std::string("compiler: ") + AFAR_CXX_COMPILER_ID) != std::string::npos);
+        REQUIRE(body.find("max_drift_phase_deg: 1") != std::string::npos);
+        REQUIRE(body.find("max_phase_residual_deg: 2.8125") != std::string::npos);
+        const std::string thru =
+            "THRU: \xD0\xBD\xD0\xB5 \xD0\xB8\xD0\xB7\xD0\xBC\xD0\xB5\xD1\x80\xD0\xB5\xD0\xBD / "
+            "\xD0\xB7\xD0\xBD\xD0\xB0\xD1\x87\xD0\xB5\xD0\xBD\xD0\xB8\xD1\x8F "
+            "\xD0\xBC\xD0\xB0\xD1\x81\xD1\x82\xD0\xB5\xD1\x80\xD0\xB0";
+        REQUIRE(body.find(thru) != std::string::npos);
+        const std::string hash_missing =
+            "\xD1\x85\xD0\xB5\xD1\x88 \xD0\xBD\xD0\xB5 \xD0\xB2\xD1\x88\xD0\xB8\xD1\x82";
+        if (std::string(AFAR_GIT_COMMIT).empty()) {
+            REQUIRE(body.find(hash_missing) != std::string::npos);
+        } else {
+            REQUIRE(body.find(AFAR_GIT_COMMIT) != std::string::npos);
+        }
     }
 
     // Пересчёт SHA одной строки манифеста совпадает.

@@ -1,0 +1,45 @@
+{
+  "schema": "afar.stage1.run-config/v1",
+  "run_id": "RX16-20260924-1296",
+  "vna": {
+    "model": "PLANAR C2220",
+    "host": "127.0.0.1",
+    "port": 5025,
+    "s_parameter": "S21",
+    "f_start_hz": 1246000000,
+    "f_stop_hz": 1346000000,
+    "points": 101,
+    "ifbw_hz": 1000,
+    "power_dbm": -30.0,
+    "averages": 8
+  },
+  "controller": {
+    "driver": "serial-v1",
+    "endpoint": "COM7"
+  },
+  "dut": {
+    "serial": "EXAMPLE-NOT-A-PRODUCT",
+    "channels": {
+      "first": 1,
+      "last": 16
+    },
+    "phase_codes": {
+      "first": 0,
+      "last": 63,
+      "lsb_deg": 5.625
+    },
+    "attenuator_codes_file": "attenuator-codes.csv",
+    "reference": {
+      "att_code": 0,
+      "phase_code": 0
+    }
+  },
+  "timing": {
+    "settle_ms": 20,
+    "reference_after_phase_row": true
+  },
+  "limits": {
+    "max_drift_phase_deg": 1.0,
+    "max_phase_residual_deg": 2.8125
+  }
+}

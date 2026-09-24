@@ -66,8 +66,8 @@ bool RunStateMachine::isAllowed(RunState from, RunState to) noexcept
     case RunState::Finalizing:
         return to == RunState::Complete || to == RunState::Error;
     case RunState::Complete:
-        // Remanifest после Complete: при сбое writeManifest — в Error.
-        return to == RunState::Error;
+        // т. 8.4: из Complete исходящих рёбер нет (манифест пишется в Finalizing).
+        return false;
     case RunState::Error:
         return to == RunState::Recovery || to == RunState::Aborted;
     case RunState::Aborted:

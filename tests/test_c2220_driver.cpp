@@ -355,11 +355,15 @@ TEST_CASE("C2220Vna configure and measure_s21 against stub", "[c2220]")
     cfg.power_dbm = -20.0;
     cfg.ifbw_hz = 1000;
     cfg.averages = 1;
+    cfg.s_parameter = SParameter::S21;
     REQUIRE_NOTHROW(vna.configure(cfg));
 
     const auto sweep = vna.measure_s21();
     REQUIRE(sweep.frequency_hz.size() == 3);
     REQUIRE(sweep.s21.size() == 3);
+    REQUIRE(sweep.s11.empty());
+    REQUIRE(sweep.s12.empty());
+    REQUIRE(sweep.s22.empty());
     REQUIRE(sweep.frequency_hz[0] == 1'000'000'000ULL);
     REQUIRE(sweep.frequency_hz[2] == 2'000'000'000ULL);
     REQUIRE(sweep.s21[0].real() == Approx(1.0));
@@ -374,6 +378,38 @@ TEST_CASE("C2220Vna configure and measure_s21 against stub", "[c2220]")
 
     const auto errs = vna.drain_errors();
     REQUIRE(errs.empty());
+}
+
+TEST_CASE("C2220Vna configure S11 fills s11 via measure_trace", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    SweepConfig cfg{};
+    cfg.f_start_hz = 1'000'000'000ULL;
+    cfg.f_stop_hz = 2'000'000'000ULL;
+    cfg.points = 3;
+    cfg.power_dbm = -20.0;
+    cfg.ifbw_hz = 1000;
+    cfg.averages = 1;
+    cfg.s_parameter = SParameter::S11;
+    REQUIRE_NOTHROW(vna.configure(cfg));
+
+    const auto sweep = vna.measure_trace();
+    REQUIRE(stub.saw_exact("CALC:PAR:DEF S11"));
+    REQUIRE(sweep.frequency_hz.size() == 3);
+    REQUIRE(sweep.s11.size() == 3);
+    REQUIRE(sweep.s21.empty());
+    REQUIRE(sweep.s12.empty());
+    REQUIRE(sweep.s22.empty());
+    REQUIRE(sweep.s11[0].real() == Approx(1.0));
+    REQUIRE_FALSE(sweep.overload);
+
+    REQUIRE_THROWS_AS(vna.measure_s21(), std::runtime_error);
 }
 
 TEST_CASE("ScpiComTransport compiles and rejects missing port", "[c2220][com]")

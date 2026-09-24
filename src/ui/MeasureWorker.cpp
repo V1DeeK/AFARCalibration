@@ -2,20 +2,176 @@
 
 #include "AttenuatorCodes.h"
 #include "C2220Vna.h"
+#include "ParquetExport.h"
 #include "PhaseMath.h"
 #include "RawS21Store.h"
 #include "RunConfig.h"
+#include "RunEventLog.h"
 #include "ScpiComTransport.h"
 #include "ScpiSocketTransport.h"
 
 #include <QTimer>
 
 #include <cmath>
+#include <complex>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
+
+struct DiskSnippet {
+    qint64 count{-1};
+    QString fragment;
+};
+
+QString joinLines(const std::vector<std::string>& lines)
+{
+    QString out;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (i > 0) {
+            out += QLatin1Char('\n');
+        }
+        out += QString::fromUtf8(lines[i].data(), static_cast<int>(lines[i].size()));
+    }
+    return out;
+}
+
+DiskSnippet readLutSnippet(const std::filesystem::path& path)
+{
+    DiskSnippet out;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return out;
+    }
+    char magic[sizeof(afar::report::kAfarPqMagic)]{};
+    in.read(magic, static_cast<std::streamsize>(sizeof(magic)));
+    if (!in || std::memcmp(magic, afar::report::kAfarPqMagic, sizeof(magic)) != 0) {
+        out.fragment = QStringLiteral("файл открыт, заголовок AFARPQ не совпал");
+        return out;
+    }
+    std::string line;
+    std::vector<std::string> head;
+    qint64 valid = 0;
+    bool header = true;
+    bool any = false;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.empty()) {
+            continue;
+        }
+        any = true;
+        if (head.size() < 4) {
+            head.push_back(line);
+        }
+        if (header) {
+            header = false;
+            continue;
+        }
+        const auto tab = line.rfind('\t');
+        const auto field = (tab == std::string::npos) ? line : line.substr(tab + 1);
+        if (field == "1") {
+            ++valid;
+        }
+    }
+    out.fragment = any ? joinLines(head) : QStringLiteral("(после AFARPQ строк нет)");
+    out.count = valid;
+    return out;
+}
+
+DiskSnippet readReportSnippet(const std::filesystem::path& path)
+{
+    DiskSnippet out;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return out;
+    }
+    std::ostringstream oss;
+    oss << in.rdbuf();
+    const std::string bytes = oss.str();
+    if (bytes.size() < 5 || bytes.compare(0, 5, "%PDF-") != 0) {
+        out.fragment = QStringLiteral("файл открыт, заголовок PDF не совпал");
+        return out;
+    }
+    const std::string key = "valid_direct_count:";
+    const auto pos = bytes.find(key);
+    if (pos != std::string::npos) {
+        std::size_t i = pos + key.size();
+        while (i < bytes.size() && (bytes[i] == ' ' || bytes[i] == '\t')) {
+            ++i;
+        }
+        std::size_t end = i;
+        while (end < bytes.size() && bytes[end] >= '0' && bytes[end] <= '9') {
+            ++end;
+        }
+        if (end > i) {
+            try {
+                out.count = static_cast<qint64>(std::stoll(bytes.substr(i, end - i)));
+            } catch (...) {
+                out.count = -1;
+            }
+        }
+    }
+    std::vector<std::string> head;
+    std::size_t cursor = 0;
+    while (head.size() < 6 && cursor < bytes.size()) {
+        const auto open = bytes.find('(', cursor);
+        if (open == std::string::npos) {
+            break;
+        }
+        const auto close = bytes.find(')', open + 1);
+        if (close == std::string::npos) {
+            break;
+        }
+        const auto inner = bytes.substr(open + 1, close - open - 1);
+        const bool reportLine = inner.find("AFAR") != std::string::npos
+            || inner.find("run_id") != std::string::npos
+            || inner.find("valid_direct_count") != std::string::npos
+            || inner.find("completed_states") != std::string::npos
+            || inner.find("software_version") != std::string::npos
+            || inner.find("series_path") != std::string::npos;
+        if (!inner.empty() && reportLine) {
+            head.push_back(inner);
+        }
+        cursor = close + 1;
+    }
+    out.fragment = head.empty() ? QStringLiteral("(в PDF нет текстовых строк протокола)")
+                                : joinLines(head);
+    return out;
+}
+
+DiskSnippet readManifestSnippet(const std::filesystem::path& path)
+{
+    DiskSnippet out;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return out;
+    }
+    std::string line;
+    std::vector<std::string> head;
+    qint64 lines = 0;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.empty()) {
+            continue;
+        }
+        ++lines;
+        if (head.size() < 6) {
+            head.push_back(line);
+        }
+    }
+    out.count = lines;
+    out.fragment = head.empty() ? QStringLiteral("(манифест пуст)") : joinLines(head);
+    return out;
+}
 
 enum CellStatus : int {
     CellWaiting = 0,
@@ -94,21 +250,82 @@ void MeasureWorker::configureVna(int backend,
 
 void MeasureWorker::probeVna()
 {
-    if (!m_vna) {
+    if (!m_vna || !m_orch) {
         emit probeFinished(false, QStringLiteral("VNA не сконфигурирован"));
         return;
     }
-    try {
-        m_vna->connect();
-        const QString idn = QString::fromStdString(m_vna->identify());
-        emitConnection();
-        emit probeFinished(true, idn);
-        emit diagnostic(QStringLiteral("IDN: %1").arg(idn));
-    } catch (const std::exception& ex) {
-        emitConnection();
-        emit probeFinished(false, QString::fromUtf8(ex.what()));
-        emit diagnostic(QString::fromUtf8(ex.what()));
+    using afar::RunState;
+    const auto st = m_orch->state();
+    if (st == RunState::Running || st == RunState::Pausing || st == RunState::Paused
+        || st == RunState::Stopping || st == RunState::Connecting || st == RunState::SelfTest
+        || st == RunState::Finalizing || st == RunState::Ready) {
+        emit probeFinished(false,
+                           QStringLiteral("Проверка связи только из Idle (цикл не активен)"));
+        return;
     }
+    if (st != RunState::Idle) {
+        // Complete / Error / Aborted — новый оркестратор в Idle.
+        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+    }
+    std::string idn;
+    const bool ok = m_orch->probeIdentify(idn);
+    emitConnection();
+    emitState();
+    emit probeFinished(ok, QString::fromStdString(idn));
+    if (ok) {
+        emit diagnostic(QStringLiteral("IDN: %1").arg(QString::fromStdString(idn)));
+    } else {
+        emit diagnostic(QString::fromStdString(idn));
+    }
+}
+
+void MeasureWorker::runProbeCodes(double fStartGhz,
+                                  double fStopGhz,
+                                  int points,
+                                  int ifbwHz,
+                                  double powerDbm,
+                                  int averages)
+{
+    if (!m_vna || !m_orch) {
+        emit probeCodesFinished(false, QStringLiteral("VNA не сконфигурирован"));
+        return;
+    }
+    using afar::RunState;
+    const auto st = m_orch->state();
+    if (st == RunState::Running || st == RunState::Pausing || st == RunState::Paused
+        || st == RunState::Stopping || st == RunState::Connecting || st == RunState::SelfTest
+        || st == RunState::Finalizing || st == RunState::Ready) {
+        emit probeCodesFinished(
+            false, QStringLiteral("Пробные коды только из Idle (серия не подготовлена)"));
+        return;
+    }
+    if (st != RunState::Idle) {
+        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+    }
+    // На живом VNA (S2VNA/COM) settle через doSleep обязателен: DutSimulator
+    // без readback идёт в confirmDutOrSettle → doSleep. Ускоряем только имитатор.
+    if (m_backend == BackendSimulator) {
+        m_orch->setSleepEnabled(false);
+    }
+
+    SweepConfig sweep{};
+    sweep.f_start_hz = static_cast<std::uint64_t>(fStartGhz * 1e9 + 0.5);
+    sweep.f_stop_hz = static_cast<std::uint64_t>(fStopGhz * 1e9 + 0.5);
+    sweep.points = static_cast<std::uint32_t>(points > 1 ? points : 11);
+    sweep.ifbw_hz = static_cast<std::uint32_t>(ifbwHz > 0 ? ifbwHz : 1000);
+    sweep.power_dbm = powerDbm;
+    sweep.averages = static_cast<std::uint16_t>(averages > 0 ? averages : 1);
+
+    // Короткий набор: att 0 и последний «типичный» enabled (1), фазы 0 и 63.
+    constexpr std::uint16_t kAttLast = 1;
+    constexpr std::uint8_t kPhaseLast = 63;
+    std::string diag;
+    const bool ok = m_orch->runProbeCodes(sweep, kAttLast, kPhaseLast, diag);
+    emitConnection();
+    emitState();
+    emit probeCodesFinished(ok, QString::fromStdString(diag));
+    emit diagnostic(ok ? QStringLiteral("Пробные коды: OK")
+                       : QString::fromStdString(diag));
 }
 
 QString MeasureWorker::stateToRussian(afar::RunState state)
@@ -309,26 +526,160 @@ void MeasureWorker::maybeEmitSweepPreview()
     m_sweepThrottleArmed = true;
 
     const auto& sweep = m_orch->lastMeasuredSweep();
-    const auto unwrap = afar::cal::unwrap_phase_deg(sweep.s21);
+    const auto fillMagPhase = [](const std::vector<std::complex<double>>& z,
+                                 QVector<double>& magDb,
+                                 QVector<double>& phaseDeg) {
+        const auto unwrap = afar::cal::unwrap_phase_deg(z);
+        const int n = static_cast<int>(z.size());
+        magDb.resize(n);
+        phaseDeg.resize(n);
+        for (int i = 0; i < n; ++i) {
+            magDb[i] = afar::cal::magnitude_db(z[static_cast<std::size_t>(i)]);
+            phaseDeg[i] = i < static_cast<int>(unwrap.size())
+                              ? unwrap[static_cast<std::size_t>(i)]
+                              : 0.0;
+        }
+    };
+
     QVector<double> freqGhz;
-    QVector<double> magDb;
-    QVector<double> phaseDeg;
-    const int n = static_cast<int>(sweep.s21.size());
+    const int nFreq = static_cast<int>(sweep.frequency_hz.size());
+    const int nS21 = static_cast<int>(sweep.s21.size());
+    const int n = nFreq > 0 ? nFreq : nS21;
     freqGhz.reserve(n);
-    magDb.reserve(n);
-    phaseDeg.reserve(n);
     for (int i = 0; i < n; ++i) {
         double fGhz = 0.0;
-        if (i < static_cast<int>(sweep.frequency_hz.size())) {
+        if (i < nFreq) {
             fGhz = static_cast<double>(sweep.frequency_hz[static_cast<std::size_t>(i)]) / 1e9;
         }
         freqGhz.push_back(fGhz);
-        magDb.push_back(afar::cal::magnitude_db(sweep.s21[static_cast<std::size_t>(i)]));
-        phaseDeg.push_back(i < static_cast<int>(unwrap.size())
-                               ? unwrap[static_cast<std::size_t>(i)]
-                               : 0.0);
     }
-    emit sweepPreview(freqGhz, magDb, phaseDeg);
+
+    QVector<double> s11mag, s11ph, s21mag, s21ph, s12mag, s12ph, s22mag, s22ph;
+    fillMagPhase(sweep.s11, s11mag, s11ph);
+    fillMagPhase(sweep.s21, s21mag, s21ph);
+    fillMagPhase(sweep.s12, s12mag, s12ph);
+    fillMagPhase(sweep.s22, s22mag, s22ph);
+
+    // Обратная совместимость: S21-only preview для текущего UI.
+    emit sweepPreview(freqGhz, s21mag, s21ph);
+    emit sparamsPreview(freqGhz, s11mag, s11ph, s21mag, s21ph, s12mag, s12ph, s22mag, s22ph);
+}
+
+void MeasureWorker::emitArtifactPreviews()
+{
+    if (!m_orch || m_orch->series().root().empty() || m_artifactPreviewSent) {
+        return;
+    }
+    if (m_orch->state() != afar::RunState::Complete) {
+        return;
+    }
+    const auto& s = m_orch->series();
+    const auto direct = readLutSnippet(s.directLutPath());
+    const auto inverse = readLutSnippet(s.inverseLutPath());
+    const auto report = readReportSnippet(s.reportPath());
+    const auto manifest = readManifestSnippet(s.manifestPath());
+
+    qint64 directTotal = -1;
+    qint64 inverseTotal = -1;
+    bool directFlat = false;
+    bool inverseFlat = false;
+    QVector<double> lutFreq;
+    QVector<double> lutMag;
+    QVector<double> lutPhaseErr;
+    int lutCh = 0;
+    int lutAtt = 0;
+    int lutPh = 0;
+
+    {
+        std::vector<afar::cal::DirectLutEntry> rows;
+        std::string diag;
+        if (afar::report::readDirectLut(s.directLutPath(), rows, diag)) {
+            directTotal = static_cast<qint64>(rows.size());
+            int checked = 0;
+            int flatish = 0;
+            for (const auto& e : rows) {
+                if (!e.valid) {
+                    continue;
+                }
+                ++checked;
+                if (std::fabs(e.mag_db) < 0.05 || std::fabs(e.s21_re - 1.0) < 0.05) {
+                    ++flatish;
+                }
+                if (checked >= 32) {
+                    break;
+                }
+            }
+            directFlat = checked > 0 && flatish * 2 >= checked;
+
+            bool keyFound = false;
+            std::uint8_t keyCh = 0;
+            std::uint16_t keyAtt = 0;
+            std::uint8_t keyPh = 0;
+            for (const auto& e : rows) {
+                if (!e.valid) {
+                    continue;
+                }
+                if (!keyFound) {
+                    keyCh = e.channel;
+                    keyAtt = e.att_code;
+                    keyPh = e.phase_code;
+                    keyFound = true;
+                    lutCh = keyCh;
+                    lutAtt = keyAtt;
+                    lutPh = keyPh;
+                }
+                if (e.channel != keyCh || e.att_code != keyAtt || e.phase_code != keyPh) {
+                    continue;
+                }
+                lutFreq.push_back(static_cast<double>(e.freq_hz) / 1e9);
+                lutMag.push_back(e.mag_db);
+                lutPhaseErr.push_back(e.phase_error_deg);
+            }
+        }
+    }
+    {
+        std::vector<afar::report::InverseLutEntry> rows;
+        std::string diag;
+        if (afar::report::readInverseLut(s.inverseLutPath(), rows, diag)) {
+            inverseTotal = static_cast<qint64>(rows.size());
+            int checked = 0;
+            int flatish = 0;
+            for (const auto& e : rows) {
+                if (!e.valid) {
+                    continue;
+                }
+                ++checked;
+                // Плоский SIM: измеренные atten/phase около нуля при нулевых целях.
+                if (std::fabs(e.measured_atten_db) < 0.05
+                    && std::fabs(e.phase_residual_deg) < 0.05) {
+                    ++flatish;
+                }
+                if (checked >= 32) {
+                    break;
+                }
+            }
+            inverseFlat = checked > 0 && flatish * 2 >= checked;
+        }
+    }
+
+    const qint64 completedStates = m_orch->store().isOpen()
+        ? static_cast<qint64>(m_orch->store().completedCount())
+        : -1;
+    const QString runId = QString::fromStdString(s.runId());
+
+    m_artifactPreviewSent = true;
+    emit seriesArtifactsPreview(runId, completedStates,
+                                QString::fromStdString(s.directLutPath().string()), direct.count,
+                                directTotal, directFlat, direct.fragment,
+                                QString::fromStdString(s.inverseLutPath().string()), inverse.count,
+                                inverseTotal, inverseFlat, inverse.fragment,
+                                QString::fromStdString(s.reportPath().string()), report.count,
+                                report.fragment,
+                                QString::fromStdString(s.manifestPath().string()), manifest.count,
+                                manifest.fragment);
+    if (lutFreq.size() >= 2) {
+        emit directLutCurvePreview(lutFreq, lutMag, lutPhaseErr, lutCh, lutAtt, lutPh);
+    }
 }
 
 void MeasureWorker::emitPaths()
@@ -422,11 +773,13 @@ void MeasureWorker::emitMatrix(int channel, int attCode)
 void MeasureWorker::prepare(const QString& dataRoot,
                             const QString& runConfigPath,
                             const QString& attenuatorCsvPath,
-                            bool forceSafeState)
+                            bool forceSafeState,
+                            const QString& vnaCalibrationId)
 {
     m_timer->stop();
     resetEta();
     m_sweepThrottleArmed = false;
+    m_artifactPreviewSent = false;
     if (forceSafeState) {
         m_dut.set_safe_state();
     }
@@ -452,7 +805,8 @@ void MeasureWorker::prepare(const QString& dataRoot,
     m_orch->setSleepEnabled(false);
 
     const bool ok = m_orch->prepare(dataRoot.toStdString(), runConfigPath.toStdString(),
-                                    attenuatorCsvPath.toStdString(), diag);
+                                    attenuatorCsvPath.toStdString(), diag,
+                                    vnaCalibrationId.toStdString());
     emitConnection();
     emitState();
     if (ok) {
@@ -487,6 +841,7 @@ void MeasureWorker::prepareRecovery(const QString& seriesDir)
     m_timer->stop();
     resetEta();
     m_sweepThrottleArmed = false;
+    m_artifactPreviewSent = false;
     m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
     m_orch->setSleepEnabled(false);
     std::string diag;
@@ -611,6 +966,28 @@ void MeasureWorker::requestRemeasure(int channel, int attCode, const QVector<int
 
 void MeasureWorker::requestCellPreview(int channel, int attCode, int phase)
 {
+    // UI-03: UTC последнего STATE_OK из run-events.jsonl (не из слота store).
+    QString slotUtc;
+    if (m_orch && !m_orch->series().root().empty()) {
+        std::vector<afar::RunEvent> events;
+        std::string loadDiag;
+        if (afar::RunEventLog::load(m_orch->series().runEventsPath(), events, loadDiag)) {
+            for (const auto& ev : events) {
+                if (ev.event_code != "STATE_OK") {
+                    continue;
+                }
+                if (!ev.channel || !ev.att_code || !ev.phase_code) {
+                    continue;
+                }
+                if (*ev.channel == channel && *ev.att_code == attCode
+                    && *ev.phase_code == phase) {
+                    slotUtc = QString::fromStdString(ev.timestamp_utc);
+                }
+            }
+        }
+    }
+    emit cellSlotRecordedUtc(channel, attCode, phase, slotUtc);
+
     if (!m_orch || !m_orch->store().isOpen()) {
         emit diagnostic(QStringLiteral("Нет открытой серии — сначала мастер запуска"));
         return;
@@ -682,6 +1059,9 @@ void MeasureWorker::onTick()
     emitMatrix(m_matrixChannel, m_matrixAtt);
 
     const auto st = m_orch->state();
+    if (st == afar::RunState::Complete) {
+        emitArtifactPreviews();
+    }
     if (st == afar::RunState::Paused || st == afar::RunState::Complete
         || st == afar::RunState::Aborted || st == afar::RunState::Error
         || st == afar::RunState::Ready || !progressed) {

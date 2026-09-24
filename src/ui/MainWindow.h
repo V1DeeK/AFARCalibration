@@ -61,10 +61,35 @@ private slots:
     void onApplyVnaSettings();
     void onProbeVna();
     void onProbeFinished(bool ok, const QString& idnOrError);
+    void refreshDataSourceBadge(bool probeOk = false, const QString& idnOrError = {});
     void onEtaChanged(const QString& text);
     void onSweepPreview(const QVector<double>& freqGhz,
                         const QVector<double>& magDb,
                         const QVector<double>& phaseUnwrapDeg);
+    void onSeriesArtifactsPreview(const QString& runId,
+                                  qint64 completedStates,
+                                  const QString& directPath,
+                                  qint64 directValid,
+                                  qint64 directTotal,
+                                  bool directFlat,
+                                  const QString& directFragment,
+                                  const QString& inversePath,
+                                  qint64 inverseValid,
+                                  qint64 inverseTotal,
+                                  bool inverseFlat,
+                                  const QString& inverseFragment,
+                                  const QString& reportPath,
+                                  qint64 reportValid,
+                                  const QString& reportFragment,
+                                  const QString& manifestPath,
+                                  qint64 manifestLines,
+                                  const QString& manifestFragment);
+    void onDirectLutCurvePreview(const QVector<double>& freqGhz,
+                                 const QVector<double>& magDb,
+                                 const QVector<double>& phaseErrorDeg,
+                                 int channel,
+                                 int attCode,
+                                 int phaseCode);
     void updateCycleButtons(int state);
 
 private:

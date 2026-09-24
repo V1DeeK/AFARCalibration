@@ -9,6 +9,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QStringConverter>
 #include <QTextStream>
@@ -57,8 +58,10 @@ void StartWizard::onHelpRequested()
         this, QStringLiteral("Как пользоваться мастером"),
         QStringLiteral(
             "Это обязательный обход т. 4.2 ТЗ перед Старт.\n\n"
-            "• На шаге с галочкой отметьте «Подтверждаю», иначе «Далее» не пустит "
-            "и покажет причину.\n"
+            "• Полная калибровка ВАЦ (SOLT / Response / Thru) — только в S2VNA "
+            "(docs/S2VNA-setup.md); AFAR калибровку по SCPI не выполняет.\n"
+            "• На шаге калибровки отметьте чеклист Response/Thru и подтверждение; "
+            "при желании укажите vna_calibration_id вручную.\n"
             "• THRU должен быть ≤ 0,20 дБ и ≤ 2,0° (пороги можно править, это не метрология).\n"
             "• «Отмена» ничего не шлёт в прибор (на имитаторе SCPI нет).\n"
             "• «Готово» создаёт каталог серии и доводит автомат до READY.\n"
@@ -129,20 +132,75 @@ void StartWizard::buildPages()
                        "Отметьте «Подтверждаю», чтобы идти дальше."),
         &m_idnOk));
 
-    addPage(makeCheckPage(
-        QStringLiteral("3. Калибровка ВАЦ (флаг профиля)"),
-        QStringLiteral("Это проверка идентификатора/флага калибровки из профиля, "
-                       "не подмена метрологической аттестации."),
-        &m_calOk));
+    {
+        // UI-205 / CAL-001 / CAL-002: калибровка только в S2VNA, чеклист без SCPI.
+        auto* page = new QWizardPage(this);
+        page->setTitle(QStringLiteral("3. Калибровка ВАЦ (в S2VNA)"));
+        auto* layout = new QVBoxLayout(page);
+        auto* lab = new QLabel(
+            QStringLiteral(
+                "Полная калибровка ВАЦ (SOLT / Response / Thru) выполняется в программе "
+                "S2VNA до серии; здесь только подтверждение оператора. "
+                "AFAR не шлёт команды калибровки по SCPI.\n\n"
+                "Порядок: docs/S2VNA-setup.md → калибровка в S2VNA → этот чеклист → серия."),
+            page);
+        lab->setWordWrap(true);
+        layout->addWidget(lab);
+
+        m_calStatus = new QLabel(page);
+        m_calStatus->setWordWrap(true);
+        layout->addWidget(m_calStatus);
+
+        layout->addWidget(new QLabel(
+            QStringLiteral("Чеклист Response / Thru (сделайте в S2VNA):"), page));
+        m_calStepResponse = new QCheckBox(
+            QStringLiteral("1. Выполнен Response (нормализация) в S2VNA"), page);
+        m_calStepThru = new QCheckBox(
+            QStringLiteral("2. Выполнен Thru в S2VNA (или эквивалент для тракта)"), page);
+        m_calStepApplied = new QCheckBox(
+            QStringLiteral("3. Калибровка применена к активному каналу S2VNA"), page);
+        layout->addWidget(m_calStepResponse);
+        layout->addWidget(m_calStepThru);
+        layout->addWidget(m_calStepApplied);
+
+        layout->addWidget(new QLabel(
+            QStringLiteral("Идентификатор калибровки ВАЦ (вручную, опционально):"), page));
+        m_vnaCalId = new QLineEdit(page);
+        m_vnaCalId->setPlaceholderText(
+            QStringLiteral("vna_calibration_id — из S2VNA / журнала, не SCPI"));
+        {
+            QSettings settings;
+            m_vnaCalId->setText(
+                settings.value(QStringLiteral("ui/vna_calibration_id")).toString());
+        }
+        layout->addWidget(m_vnaCalId);
+        connect(m_vnaCalId, &QLineEdit::editingFinished, this,
+                &StartWizard::persistVnaCalibrationId);
+
+        m_calOk = new QCheckBox(
+            QStringLiteral("Подтверждаю: калибровка выполнена в S2VNA"), page);
+        layout->addWidget(m_calOk);
+        layout->addStretch(1);
+
+        const auto refresh = [this](bool) { refreshCalStatusLabel(); };
+        connect(m_calStepResponse, &QCheckBox::toggled, this, refresh);
+        connect(m_calStepThru, &QCheckBox::toggled, this, refresh);
+        connect(m_calStepApplied, &QCheckBox::toggled, this, refresh);
+        connect(m_calOk, &QCheckBox::toggled, this, refresh);
+        refreshCalStatusLabel();
+        addPage(page);
+    }
 
     {
         auto* page = new QWizardPage(this);
-        page->setTitle(QStringLiteral("4. Проверка THRU"));
+        page->setTitle(QStringLiteral("4. Проверка THRU (пороги FR-05)"));
         auto* layout = new QVBoxLayout(page);
         auto* lab = new QLabel(
-            QStringLiteral("Пороги по умолчанию FR-05: ≤0,20 дБ / ≤2,0°. "
-                           "Не выдавать за утверждённые метрологом. "
-                           "На имитаторе впишите контрольные значения в пределах порога."),
+            QStringLiteral(
+                "После Thru в S2VNA введите измеренные отклонения. "
+                "Пороги по умолчанию FR-05: ≤0,20 дБ / ≤2,0° — настройки ПО, "
+                "не утверждённая метрология и не калибровка из AFAR. "
+                "На имитаторе впишите контрольные значения в пределах порога."),
             page);
         lab->setWordWrap(true);
         layout->addWidget(lab);
@@ -168,11 +226,27 @@ void StartWizard::buildPages()
         QStringLiteral("Убедитесь, что приёмник не в перегрузке, и отметьте «Подтверждаю»."),
         &m_noOverload));
 
-    addPage(makeCheckPage(
-        QStringLiteral("6. Пробные коды"),
-        QStringLiteral("Крайние и средние коды фазы/att прогонит оркестратор "
-                       "(на имитаторе — компактный probe-профиль). Отметьте «Подтверждаю»."),
-        &m_probeOk));
+    {
+        auto* page = new QWizardPage(this);
+        page->setTitle(QStringLiteral("6. Пробные коды"));
+        auto* layout = new QVBoxLayout(page);
+        auto* lab = new QLabel(
+            QStringLiteral(
+                "По галочке оркестратор снимет короткий набор: канал 1, att 0 и 1, "
+                "фазы 0 и 63 (на имитаторе и при выбранном живом VNA). "
+                "Отмена мастера SCPI не шлёт. Дождитесь успеха до «Готово»."),
+            page);
+        lab->setWordWrap(true);
+        layout->addWidget(lab);
+        m_probeOk = new QCheckBox(QStringLiteral("Подтверждаю"), page);
+        layout->addWidget(m_probeOk);
+        m_probeStatus = new QLabel(QStringLiteral("Пробные коды не сняты."), page);
+        m_probeStatus->setWordWrap(true);
+        layout->addWidget(m_probeStatus);
+        layout->addStretch(1);
+        connect(m_probeOk, &QCheckBox::toggled, this, &StartWizard::onProbeCheckToggled);
+        addPage(page);
+    }
 
     {
         auto* page = new QWizardPage(this);
@@ -283,7 +357,39 @@ bool StartWizard::idnConfirmed() const
 
 bool StartWizard::calConfirmed() const
 {
-    return m_calOk && m_calOk->isChecked();
+    return m_calOk && m_calOk->isChecked() && calChecklistComplete();
+}
+
+bool StartWizard::calChecklistComplete() const
+{
+    return m_calStepResponse && m_calStepResponse->isChecked()
+        && m_calStepThru && m_calStepThru->isChecked()
+        && m_calStepApplied && m_calStepApplied->isChecked();
+}
+
+QString StartWizard::vnaCalibrationId() const
+{
+    return m_vnaCalId ? m_vnaCalId->text().trimmed() : QString();
+}
+
+void StartWizard::refreshCalStatusLabel()
+{
+    if (!m_calStatus) {
+        return;
+    }
+    const bool ok = calConfirmed();
+    m_calStatus->setText(
+        ok ? QStringLiteral("Калибровка ВАЦ: подтверждена")
+           : QStringLiteral("Калибровка ВАЦ: нет"));
+}
+
+void StartWizard::persistVnaCalibrationId()
+{
+    if (!m_vnaCalId) {
+        return;
+    }
+    QSettings settings;
+    settings.setValue(QStringLiteral("ui/vna_calibration_id"), m_vnaCalId->text().trimmed());
 }
 
 bool StartWizard::noOverloadConfirmed() const
@@ -293,7 +399,50 @@ bool StartWizard::noOverloadConfirmed() const
 
 bool StartWizard::probeConfirmed() const
 {
-    return m_probeOk && m_probeOk->isChecked();
+    return m_probeOk && m_probeOk->isChecked() && m_probeCodesOk;
+}
+
+void StartWizard::onProbeCheckToggled(bool checked)
+{
+    if (!checked) {
+        m_probeCodesOk = false;
+        m_probeCodesPending = false;
+        if (m_probeStatus) {
+            m_probeStatus->setText(QStringLiteral("Пробные коды не сняты."));
+        }
+        return;
+    }
+    if (m_probeCodesPending) {
+        return;
+    }
+    m_probeCodesOk = false;
+    m_probeCodesPending = true;
+    if (m_probeStatus) {
+        m_probeStatus->setText(QStringLiteral("Съём пробных кодов…"));
+    }
+    if (m_probeOk) {
+        m_probeOk->setEnabled(false);
+    }
+    const double power = m_power ? m_power->value() : -30.0;
+    emit probeCodesRequested(m_fStartGhz, m_fStopGhz, m_points, m_ifbwHz, power, m_averages);
+}
+
+void StartWizard::onProbeCodesFinished(bool ok, const QString& message)
+{
+    m_probeCodesPending = false;
+    m_probeCodesOk = ok;
+    if (m_probeOk) {
+        m_probeOk->setEnabled(true);
+        if (!ok) {
+            // Снять галочку, чтобы повторно запросить съём.
+            QSignalBlocker blocker(m_probeOk);
+            m_probeOk->setChecked(false);
+        }
+    }
+    if (m_probeStatus) {
+        m_probeStatus->setText(ok ? QStringLiteral("Успех: %1").arg(message)
+                                  : QStringLiteral("Отказ: %1").arg(message));
+    }
 }
 
 QString StartWizard::thruSummary() const
@@ -353,10 +502,20 @@ bool StartWizard::validateCurrentPage()
                                  QStringLiteral("Подтвердите идентификацию C2220 и контроллера."));
         return false;
     }
-    if (id == 2 && !m_calOk->isChecked()) {
-        QMessageBox::information(this, QStringLiteral("Шаг не завершён"),
-                                 QStringLiteral("Подтвердите флаг калибровки ВАЦ."));
-        return false;
+    if (id == 2) {
+        if (!calChecklistComplete()) {
+            QMessageBox::information(
+                this, QStringLiteral("Шаг не завершён"),
+                QStringLiteral("Отметьте все пункты чеклиста Response/Thru в S2VNA."));
+            return false;
+        }
+        if (!m_calOk->isChecked()) {
+            QMessageBox::information(
+                this, QStringLiteral("Шаг не завершён"),
+                QStringLiteral("Подтвердите, что калибровка выполнена в S2VNA."));
+            return false;
+        }
+        persistVnaCalibrationId();
     }
     if (id == 3) {
         if (m_thruMag->value() > 0.20 || m_thruPhase->value() > 2.0) {
@@ -372,9 +531,13 @@ bool StartWizard::validateCurrentPage()
                                  QStringLiteral("Подтвердите отсутствие перегрузки."));
         return false;
     }
-    if (id == 5 && !m_probeOk->isChecked()) {
-        QMessageBox::information(this, QStringLiteral("Шаг не завершён"),
-                                 QStringLiteral("Подтвердите пробные коды."));
+    if (id == 5 && (!m_probeOk->isChecked() || !m_probeCodesOk || m_probeCodesPending)) {
+        QMessageBox::information(
+            this, QStringLiteral("Шаг не завершён"),
+            m_probeCodesPending
+                ? QStringLiteral("Дождитесь окончания пробного съёма.")
+                : QStringLiteral(
+                      "Отметьте «Подтверждаю» и дождитесь успеха пробных кодов."));
         return false;
     }
     if (id == 6) {
@@ -385,6 +548,7 @@ bool StartWizard::validateCurrentPage()
 
 bool StartWizard::materializeSimFixtures(QString& diagnostics)
 {
+    persistVnaCalibrationId();
     diagnostics.clear();
     QDir root(dataRoot());
     if (!root.mkpath(QStringLiteral("."))) {

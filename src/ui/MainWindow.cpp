@@ -121,11 +121,15 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_connections, &ConnectionBar::vnaSettingsChanged, this, &MainWindow::onApplyVnaSettings);
     connect(m_connections, &ConnectionBar::probeVnaRequested, this, &MainWindow::onProbeVna);
     connect(m_worker, &MeasureWorker::probeFinished, this, &MainWindow::onProbeFinished);
+    connect(m_worker, &MeasureWorker::seriesArtifactsPreview, this,
+            &MainWindow::onSeriesArtifactsPreview);
+    connect(m_worker, &MeasureWorker::directLutCurvePreview, this,
+            &MainWindow::onDirectLutCurvePreview);
     connect(m_measure, &MeasureTab::openWizardRequested, this, &MainWindow::onOpenWizard);
     connect(m_measure, &MeasureTab::resumeSeriesRequested, this, &MainWindow::onResumeSeries);
 
     statusBar()->showMessage(
-        QStringLiteral("CAL C2220: не проверена · THRU: — · Сырые данные: append-only · SHA-256"));
+        QStringLiteral("ВАЦ (S2VNA): не подтверждена · THRU: — · Сырые данные: append-only · SHA-256"));
 
     m_thread->start();
     loadExampleDefaults();
@@ -171,6 +175,17 @@ void MainWindow::onOpenWizard()
     wizard.setSweepPreset(m_measure->fStartGhz(), m_measure->fStopGhz(), m_measure->points(),
                           m_measure->ifbwHz(), m_measure->powerDbm(), m_measure->averages());
     wizard.setVnaEndpoint(m_connections->vnaHost(), m_connections->vnaPort());
+    connect(&wizard, &StartWizard::probeCodesRequested, this,
+            [this](double fStartGhz, double fStopGhz, int points, int ifbwHz, double powerDbm,
+                   int averages) {
+                onApplyVnaSettings();
+                QMetaObject::invokeMethod(m_worker, "runProbeCodes", Qt::QueuedConnection,
+                                          Q_ARG(double, fStartGhz), Q_ARG(double, fStopGhz),
+                                          Q_ARG(int, points), Q_ARG(int, ifbwHz),
+                                          Q_ARG(double, powerDbm), Q_ARG(int, averages));
+            });
+    connect(m_worker, &MeasureWorker::probeCodesFinished, &wizard,
+            &StartWizard::onProbeCodesFinished, Qt::QueuedConnection);
     if (wizard.exec() != QDialog::Accepted) {
         return;
     }
@@ -192,16 +207,18 @@ void MainWindow::onOpenWizard()
                             wizard.calConfirmed(), wizard.thruSummary(),
                             wizard.noOverloadConfirmed(), wizard.probeConfirmed(),
                             wizard.powerDbm(), wizard.engineerProfile());
+    m_measure->setVnaCalibrationIdHint(wizard.vnaCalibrationId());
     statusBar()->showMessage(
-        QStringLiteral("CAL C2220: %1 · THRU: %2 · Сырые данные: append-only · SHA-256")
-            .arg(wizard.calConfirmed() ? QStringLiteral("действительна (флаг)")
-                                       : QStringLiteral("не проверена"),
+        QStringLiteral("ВАЦ (S2VNA): %1 · THRU: %2 · Сырые данные: append-only · SHA-256")
+            .arg(wizard.calConfirmed() ? QStringLiteral("подтверждена оператором")
+                                       : QStringLiteral("не подтверждена"),
                  wizard.thruSummary()));
     QMetaObject::invokeMethod(m_worker, "prepare", Qt::QueuedConnection,
                               Q_ARG(QString, wizard.dataRoot()),
                               Q_ARG(QString, wizard.runConfigPath()),
                               Q_ARG(QString, wizard.attenuatorCsvPath()),
-                              Q_ARG(bool, wizard.forceSafeState()));
+                              Q_ARG(bool, wizard.forceSafeState()),
+                              Q_ARG(QString, wizard.vnaCalibrationId()));
 }
 
 void MainWindow::onStart()
@@ -249,6 +266,7 @@ void MainWindow::onStateChanged(int state, const QString& russianText, const QSt
     m_state = state;
     m_connections->setRunStatus(russianText, colorName);
     updateCycleButtons(state);
+    m_measure->setRunStateGuide(state);
     using afar::RunState;
     const auto st = static_cast<RunState>(state);
     if (st == RunState::Running) {
@@ -299,6 +317,43 @@ void MainWindow::onSweepPreview(const QVector<double>& freqGhz,
                                 const QVector<double>& phaseUnwrapDeg)
 {
     m_measure->setSweepCurves(freqGhz, magDb, phaseUnwrapDeg);
+}
+
+void MainWindow::onSeriesArtifactsPreview(const QString& runId,
+                                          qint64 completedStates,
+                                          const QString& directPath,
+                                          qint64 directValid,
+                                          qint64 directTotal,
+                                          bool directFlat,
+                                          const QString& directFragment,
+                                          const QString& inversePath,
+                                          qint64 inverseValid,
+                                          qint64 inverseTotal,
+                                          bool inverseFlat,
+                                          const QString& inverseFragment,
+                                          const QString& reportPath,
+                                          qint64 reportValid,
+                                          const QString& reportFragment,
+                                          const QString& manifestPath,
+                                          qint64 manifestLines,
+                                          const QString& manifestFragment)
+{
+    m_measure->applySeriesArtifactsPreview(runId, completedStates, directPath, directValid,
+                                           directTotal, directFlat, directFragment, inversePath,
+                                           inverseValid, inverseTotal, inverseFlat, inverseFragment,
+                                           reportPath, reportValid, reportFragment, manifestPath,
+                                           manifestLines, manifestFragment);
+}
+
+void MainWindow::onDirectLutCurvePreview(const QVector<double>& freqGhz,
+                                         const QVector<double>& magDb,
+                                         const QVector<double>& phaseErrorDeg,
+                                         int channel,
+                                         int attCode,
+                                         int phaseCode)
+{
+    m_measure->applyDirectLutCurvePreview(freqGhz, magDb, phaseErrorDeg, channel, attCode,
+                                          phaseCode);
 }
 
 void MainWindow::onPaths(const QString& seriesRoot,
@@ -410,6 +465,7 @@ void MainWindow::onApplyVnaSettings()
         Q_ARG(int, m_connections->vnaBackend()), Q_ARG(QString, m_connections->vnaHost()),
         Q_ARG(int, m_connections->vnaPort()), Q_ARG(QString, m_connections->vnaComPort()),
         Q_ARG(bool, m_connections->allowDirectAccess()));
+    refreshDataSourceBadge();
 }
 
 void MainWindow::onProbeVna()
@@ -418,8 +474,37 @@ void MainWindow::onProbeVna()
     QMetaObject::invokeMethod(m_worker, "probeVna", Qt::QueuedConnection);
 }
 
+void MainWindow::refreshDataSourceBadge(bool probeOk, const QString& idnOrError)
+{
+    const int backend = m_connections->vnaBackend();
+    const QString idn = idnOrError.trimmed();
+    const bool idnLooksSim =
+        idn.contains(QStringLiteral("SIM"), Qt::CaseInsensitive)
+        || idn.contains(QStringLiteral("VnaSimulator"), Qt::CaseInsensitive);
+
+    if (backend == 0 || (probeOk && idnLooksSim)) {
+        m_connections->setDataSourceText(
+            QStringLiteral("Источник: имитатор (не метрология стенда)"));
+        return;
+    }
+
+    if (probeOk && (backend == 1 || backend == 2) && !idn.isEmpty()) {
+        QString brief = idn;
+        if (brief.size() > 64) {
+            brief = brief.left(61) + QStringLiteral("...");
+        }
+        m_connections->setDataSourceText(
+            QStringLiteral("Источник: живой VNA · %1").arg(brief));
+        return;
+    }
+
+    m_connections->setDataSourceText(
+        QStringLiteral("Источник: VNA (связь не проверена)"));
+}
+
 void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
 {
+    refreshDataSourceBadge(ok, idnOrError);
     if (ok) {
         m_connections->setDiagnostic(QStringLiteral("Связь OK: %1").arg(idnOrError));
         statusBar()->showMessage(QStringLiteral("VNA IDN: %1").arg(idnOrError), 8000);

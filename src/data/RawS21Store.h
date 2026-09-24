@@ -21,6 +21,14 @@ struct RawS21StateRecord {
     bool completed{false};
 };
 
+/// Meta `/meta/*` (т. 7.2): UTF-8 строки в контейнере AFARH5.
+struct RawS21Meta {
+    std::string run_config_json;
+    std::string vna_idn;
+    /// До RMD-004 — пустая строка; create из-за пустого id не падает.
+    std::string vna_calibration_id;
+};
+
 /// Собственный бинарный формат raw-s21.h5 без libhdf5 (DATA-006).
 /// Magic: "AFARH5\\1", version 1. Один слот на (ch, att, phase).
 class RawS21Store {
@@ -36,12 +44,13 @@ public:
     RawS21Store(RawS21Store&&) noexcept;
     RawS21Store& operator=(RawS21Store&&) noexcept;
 
-    /// Создаёт новый файл с осями и пустыми слотами (completed=false).
+    /// Создаёт новый файл с meta, осями и пустыми слотами (completed=false).
     static bool create(const std::filesystem::path& path,
                        const std::vector<std::uint8_t>& channels,
                        const std::vector<std::uint16_t>& att_codes,
                        const std::vector<std::uint8_t>& phase_codes,
                        const std::vector<std::uint64_t>& frequency_hz,
+                       const RawS21Meta& meta,
                        RawS21Store& out,
                        std::string& diagnostics);
 
@@ -63,6 +72,12 @@ public:
     [[nodiscard]] const std::vector<std::uint64_t>& frequencyHz() const noexcept
     {
         return frequency_hz_;
+    }
+    [[nodiscard]] const std::string& runConfigJson() const noexcept { return meta_.run_config_json; }
+    [[nodiscard]] const std::string& vnaIdn() const noexcept { return meta_.vna_idn; }
+    [[nodiscard]] const std::string& vnaCalibrationId() const noexcept
+    {
+        return meta_.vna_calibration_id;
     }
 
     [[nodiscard]] std::optional<std::size_t> indexOf(std::uint8_t channel,
@@ -118,6 +133,7 @@ private:
     std::vector<std::uint16_t> att_codes_;
     std::vector<std::uint8_t> phase_codes_;
     std::vector<std::uint64_t> frequency_hz_;
+    RawS21Meta meta_;
     std::uint64_t states_offset_{0};
     std::uint64_t refs_offset_{0};
     std::uint64_t state_stride_{0};

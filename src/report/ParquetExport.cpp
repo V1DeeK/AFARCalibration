@@ -9,6 +9,7 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -127,6 +128,55 @@ std::optional<std::uint32_t> referenceAttRow(const RawS21Store& store, std::uint
         }
     }
     return std::nullopt;
+}
+
+bool is_measured_sample(std::complex<double> z)
+{
+    if (!std::isfinite(z.real()) || !std::isfinite(z.imag())) {
+        return false;
+    }
+    const double mag2 = z.real() * z.real() + z.imag() * z.imag();
+    return mag2 > 0.0 && std::isfinite(mag2);
+}
+
+/// Строки опоры 0…N_A−1. Слот N_A (лишний) не читается: он нулевой и не измерение.
+std::vector<std::vector<std::complex<double>>> loadMeasuredReferenceRows(
+    const RawS21Store& store,
+    std::uint8_t channel)
+{
+    std::vector<std::vector<std::complex<double>>> refs(store.nAtt());
+    for (std::uint32_t row = 0; row < store.nAtt(); ++row) {
+        std::string diag;
+        if (!store.readReference(channel, row, refs[row], diag)) {
+            refs[row].assign(store.nFreq(), {0.0, 0.0});
+        }
+    }
+    return refs;
+}
+
+double driftAgainstPreviousReference(
+    const std::vector<std::vector<std::complex<double>>>& refs,
+    std::uint32_t row,
+    std::size_t freq_index)
+{
+    if (row >= refs.size() || freq_index >= refs[row].size()
+        || !is_measured_sample(refs[row][freq_index])) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    std::uint32_t prev = row;
+    while (prev > 0) {
+        --prev;
+        if (freq_index >= refs[prev].size() || !is_measured_sample(refs[prev][freq_index])) {
+            continue;
+        }
+        const auto drift =
+            cal::reference_drift_phase_deg(refs[prev][freq_index], refs[row][freq_index]);
+        if (!drift) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        return *drift;
+    }
+    return std::numeric_limits<double>::quiet_NaN();
 }
 
 }  // namespace
@@ -279,7 +329,9 @@ bool buildDirectLutFromStore(const RawS21Store& store,
 {
     out.clear();
     const double lsb = config.dut.phase_codes.lsb_deg;
+    const double drift_limit = config.limits.max_drift_phase_deg;
     for (const auto ch : store.channels()) {
+        const auto refs = loadMeasuredReferenceRows(store, ch);
         for (const auto att : store.attCodes()) {
             for (const auto ph : store.phaseCodes()) {
                 if (!store.isCompleted(ch, att, ph)) {
@@ -321,11 +373,25 @@ bool buildDirectLutFromStore(const RawS21Store& store,
                     in.phase_unwrapped_deg =
                         (fi < unwrapped.size()) ? unwrapped[fi] : 0.0;
                     in.nominal_phase_deg = nominal;
-                    in.drift_phase_deg = 0.0;
-                    in.repeatability_db = 0.0;
-                    in.repeatability_deg = 0.0;
+                    const auto att_row = referenceAttRow(store, att);
+                    in.drift_phase_deg = att_row
+                        ? driftAgainstPreviousReference(refs, *att_row, fi)
+                        : std::numeric_limits<double>::quiet_NaN();
+                    // В слоте хранится только последний свип: истории повторных attempt нет.
+                    const auto repeatability = cal::repeatability_from_attempts({});
+                    if (repeatability) {
+                        in.repeatability_db = repeatability->db;
+                        in.repeatability_deg = repeatability->deg;
+                    } else {
+                        in.repeatability_db = std::numeric_limits<double>::quiet_NaN();
+                        in.repeatability_deg = std::numeric_limits<double>::quiet_NaN();
+                    }
                     in.sample_valid = (fi < rec.valid.size()) && (rec.valid[fi] != 0)
                         && (fi < norm.size()) && norm[fi].valid && !rec.overload;
+                    if (std::isfinite(in.drift_phase_deg)
+                        && std::fabs(in.drift_phase_deg) > drift_limit) {
+                        in.sample_valid = false;
+                    }
                     out.push_back(cal::build_direct_lut_entry(in));
                 }
             }

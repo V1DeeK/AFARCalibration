@@ -61,8 +61,8 @@
         },
         "s_parameter": {
           "type": "string",
-          "const": "S21",
-          "description": "Измеряемый параметр. Этап 1 — только S21."
+          "enum": ["S11", "S12", "S21", "S22"],
+          "description": "Параметр для CALC:PAR:DEF / SweepConfig. Серия @1296: в JSON обычно S21; оркестратор может снимать все 4 трассы (S11…S22) отдельно от этого поля."
         },
         "f_start_hz": {
           "type": "integer",

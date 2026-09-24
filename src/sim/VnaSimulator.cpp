@@ -19,6 +19,30 @@ std::complex<double> synthetic_s21(std::uint64_t frequency_hz)
     return std::polar(kMag, phase_rad);
 }
 
+std::complex<double> synthetic_s11(std::uint64_t frequency_hz)
+{
+    // Reflection-like: |S11|=0.3, фаза от частоты (отличимо от S21).
+    constexpr double kMag = 0.3;
+    const double phase_rad =
+        3.14159265358979323846 * (static_cast<double>(frequency_hz) / 1.0e9);
+    return std::polar(kMag, phase_rad);
+}
+
+std::complex<double> synthetic_value(SParameter p, std::uint64_t frequency_hz)
+{
+    switch (p) {
+    case SParameter::S11:
+        return synthetic_s11(frequency_hz);
+    case SParameter::S21:
+        return synthetic_s21(frequency_hz);
+    case SParameter::S12:
+        return {0.05, -0.02};  // отличимая константа
+    case SParameter::S22:
+        return {0.25, 0.1};  // отличимая константа
+    }
+    return synthetic_s21(frequency_hz);
+}
+
 }  // namespace
 
 void VnaSimulator::throw_if_failure_on_io(const char* op)
@@ -68,20 +92,36 @@ void VnaSimulator::configure(const SweepConfig& config)
     configured_ = true;
 }
 
-ComplexSweep VnaSimulator::measure_s21()
+ComplexSweep VnaSimulator::measure_trace()
 {
-    throw_if_failure_on_io("measure_s21");
+    throw_if_failure_on_io("measure_trace");
     if (!connected_) {
-        throw std::runtime_error("VnaSimulator: measure_s21 without connect");
+        throw std::runtime_error("VnaSimulator: measure_trace without connect");
     }
     if (!configured_) {
-        throw std::runtime_error("VnaSimulator: measure_s21 without configure");
+        throw std::runtime_error("VnaSimulator: measure_trace without configure");
     }
 
     ComplexSweep sweep;
     sweep.frequency_hz.resize(config_.points);
-    sweep.s21.resize(config_.points);
     sweep.overload = (failureMode_ == FailureMode::Overload);
+
+    std::vector<std::complex<double>>* trace = nullptr;
+    switch (config_.s_parameter) {
+    case SParameter::S11:
+        trace = &sweep.s11;
+        break;
+    case SParameter::S21:
+        trace = &sweep.s21;
+        break;
+    case SParameter::S12:
+        trace = &sweep.s12;
+        break;
+    case SParameter::S22:
+        trace = &sweep.s22;
+        break;
+    }
+    trace->resize(config_.points);
 
     const auto n = config_.points;
     for (std::uint32_t i = 0; i < n; ++i) {
@@ -94,14 +134,29 @@ ComplexSweep VnaSimulator::measure_s21()
         }
         sweep.frequency_hz[i] = f;
         if (failureMode_ == FailureMode::Nan) {
-            sweep.s21[i] = {
+            (*trace)[i] = {
                 std::numeric_limits<double>::quiet_NaN(),
                 std::numeric_limits<double>::quiet_NaN()};
         } else {
-            sweep.s21[i] = synthetic_s21(f);
+            (*trace)[i] = synthetic_value(config_.s_parameter, f);
         }
     }
     return sweep;
+}
+
+ComplexSweep VnaSimulator::measure_s21()
+{
+    throw_if_failure_on_io("measure_s21");
+    if (!connected_) {
+        throw std::runtime_error("VnaSimulator: measure_s21 without connect");
+    }
+    if (!configured_) {
+        throw std::runtime_error("VnaSimulator: measure_s21 without configure");
+    }
+    if (config_.s_parameter != SParameter::S21) {
+        throw std::runtime_error("VnaSimulator: measure_s21 requires s_parameter == S21");
+    }
+    return measure_trace();
 }
 
 std::vector<std::string> VnaSimulator::drain_errors()
@@ -114,7 +169,9 @@ std::vector<std::string> VnaSimulator::drain_errors()
 
 void VnaSimulator::abort() noexcept
 {
-    // Безопасный no-op: не бросает, не трогает железо.
+    // Как у C2220Vna: сброс флага связи (GAP-LAYER-001 — чужая модель не остаётся «подключённой»).
+    connected_ = false;
+    configured_ = false;
 }
 
 void VnaSimulator::set_failure_mode(FailureMode mode)
