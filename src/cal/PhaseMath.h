@@ -1,6 +1,7 @@
 #pragma once
 
 #include <complex>
+#include <cstdint>
 #include <vector>
 
 namespace afar::cal {
@@ -22,5 +23,22 @@ std::vector<double> unwrap_phase_deg(const std::vector<std::complex<double>>& s_
 
 /// Развёртка уже угловых (градусных) отсчётов.
 std::vector<double> unwrap_degrees(const std::vector<double>& wrapped_deg);
+
+struct FilterMetrics {
+    bool valid{};
+    bool has_3db_band{};
+    std::uint64_t peak_frequency_hz{};
+    double peak_db{};
+    double insertion_loss_db{};
+    double lower_3db_hz{};
+    double upper_3db_hz{};
+    double center_hz{};
+    double bandwidth_3db_hz{};
+    double max_stopband_rejection_db{};
+};
+
+/// Минимальные метрики полосового фильтра по комплексной S21.
+FilterMetrics analyze_filter(const std::vector<std::uint64_t>& frequency_hz,
+                             const std::vector<std::complex<double>>& s21);
 
 }  // namespace afar::cal

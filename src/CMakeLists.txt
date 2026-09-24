@@ -17,7 +17,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/Json.cmake)
 add_library(afar_interfaces INTERFACE)
 target_include_directories(afar_interfaces INTERFACE ${PROJECT_SOURCE_DIR}/include)
 
-# VNA-002…005: SCPI Socket/COM + C2220Vna (закрытый набор из vna-c2220-scpi.md)
+# VNA-002…005: SCPI Socket/COM + C1220/C2220 (закрытый набор из vna-c2220-scpi.md)
 add_library(afar_vna STATIC
     vna/ScpiSocketTransport.cpp
     vna/ScpiComTransport.cpp

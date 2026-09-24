@@ -23,29 +23,38 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     auto* title = new QLabel(QStringLiteral("AFAR RX Calibration Studio"), this);
     title->setStyleSheet(QStringLiteral("font-weight: 600;"));
 
-    m_vna = new QLabel(QStringLiteral("C2220: нет связи"), this);
-    m_controller = new QLabel(QStringLiteral("Контроллер: нет связи"), this);
+    m_vna = new QLabel(QStringLiteral("VNA: нет связи"), this);
+    m_vna->setObjectName(QStringLiteral("vnaStatus"));
+    m_controller = new QLabel(
+        QStringLiteral("Контроллер серии: ИМИТАТОР (для S-параметров не нужен)"), this);
+    m_controller->setObjectName(QStringLiteral("controllerStatus"));
+    m_filterReady = new QLabel(QStringLiteral("S-параметры: нужна связь VNA"), this);
+    m_filterReady->setObjectName(QStringLiteral("filterReadyStatus"));
     m_temperature = new QLabel(QStringLiteral("Температура: —"), this);
-    m_status = new QLabel(QStringLiteral("Статус: простой"), this);
+    m_status = new QLabel(QStringLiteral("Серия АФАР: простой"), this);
 
     row->addWidget(title);
     row->addStretch(1);
+    row->addWidget(m_filterReady);
     row->addWidget(m_vna);
-    row->addWidget(m_controller);
-    row->addWidget(m_temperature);
-    row->addWidget(m_status);
     m_theme = new QPushButton(QStringLiteral("Тема: светлая"), this);
     m_theme->setObjectName(QStringLiteral("btnTheme"));
     connect(m_theme, &QPushButton::clicked, this, &ConnectionBar::themeToggleRequested);
     row->addWidget(m_theme);
     root->addLayout(row);
 
+    auto* seriesRow = new QHBoxLayout();
+    seriesRow->addWidget(m_controller);
+    seriesRow->addWidget(m_temperature);
+    seriesRow->addWidget(m_status);
+    seriesRow->addStretch(1);
+    root->addLayout(seriesRow);
+
     auto* cfg = new QHBoxLayout();
     cfg->addWidget(new QLabel(QStringLiteral("VNA:"), this));
     m_backend = new QComboBox(this);
     m_backend->addItem(QStringLiteral("Имитатор"), 0);
     m_backend->addItem(QStringLiteral("S2VNA Socket"), 1);
-    m_backend->addItem(QStringLiteral("S2VNA COM"), 2);
     cfg->addWidget(m_backend);
     cfg->addWidget(new QLabel(QStringLiteral("Host"), this));
     m_host = new QLineEdit(QStringLiteral("127.0.0.1"), this);
@@ -56,10 +65,8 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_port->setRange(1, 65535);
     m_port->setValue(5025);
     cfg->addWidget(m_port);
-    cfg->addWidget(new QLabel(QStringLiteral("COM"), this));
     m_com = new QLineEdit(QStringLiteral("COM3"), this);
-    m_com->setMaximumWidth(80);
-    cfg->addWidget(m_com);
+    m_com->hide();  // Последовательный COM не является COM/DCOM API S2VNA.
     m_probe = new QPushButton(QStringLiteral("Проверить связь"), this);
     m_probe->setObjectName(QStringLiteral("btnPrimary"));
     cfg->addWidget(m_probe);
@@ -116,7 +123,8 @@ void ConnectionBar::loadSettings()
 {
     QSettings s;
     const int backend = s.value(QStringLiteral("vna/backend"), 0).toInt();
-    m_backend->setCurrentIndex(qBound(0, backend, 2));
+    const int index = m_backend->findData(backend);
+    m_backend->setCurrentIndex(index >= 0 ? index : 0);
     m_host->setText(s.value(QStringLiteral("vna/host"), QStringLiteral("127.0.0.1")).toString());
     m_port->setValue(s.value(QStringLiteral("vna/port"), 5025).toInt());
     m_com->setText(s.value(QStringLiteral("vna/com"), QStringLiteral("COM3")).toString());
@@ -160,21 +168,33 @@ bool ConnectionBar::allowDirectAccess() const
 void ConnectionBar::setVnaInfo(const QString& model, const QString& address, bool connected)
 {
     if (connected) {
-        m_vna->setText(QStringLiteral("C2220: %1 @ %2").arg(model, address));
+        m_vna->setText(QStringLiteral("VNA: %1 @ %2").arg(model, address));
         m_vna->setStyleSheet(QStringLiteral("color:#0a7a2f;"));
+        m_filterReady->setText(QStringLiteral("S-параметры: ГОТОВО"));
+        m_filterReady->setStyleSheet(QStringLiteral("color:#0a7a2f; font-weight:700;"));
     } else {
-        m_vna->setText(QStringLiteral("C2220: нет связи (%1 @ %2)").arg(model, address));
+        m_vna->setText(QStringLiteral("VNA: нет связи (%1 @ %2)").arg(model, address));
         m_vna->setStyleSheet(QStringLiteral("color:#8a1f11;"));
+        m_filterReady->setText(QStringLiteral("S-параметры: нужна связь VNA"));
+        m_filterReady->setStyleSheet(QStringLiteral("color:#8a1f11; font-weight:700;"));
     }
 }
 
 void ConnectionBar::setControllerInfo(const QString& iface, bool connected)
 {
+    const bool simulator = iface.contains(QStringLiteral("sim"), Qt::CaseInsensitive)
+        || iface.contains(QStringLiteral("имитатор"), Qt::CaseInsensitive);
+    if (simulator) {
+        m_controller->setText(
+            QStringLiteral("Контроллер серии: ИМИТАТОР (для S-параметров не нужен)"));
+        m_controller->setStyleSheet(QStringLiteral("color:#9a6700;"));
+        return;
+    }
     if (connected) {
-        m_controller->setText(QStringLiteral("Контроллер: %1").arg(iface));
+        m_controller->setText(QStringLiteral("Контроллер серии: %1").arg(iface));
         m_controller->setStyleSheet(QStringLiteral("color:#0a7a2f;"));
     } else {
-        m_controller->setText(QStringLiteral("Контроллер: нет связи (%1)").arg(iface));
+        m_controller->setText(QStringLiteral("Контроллер серии: нет связи (%1)").arg(iface));
         m_controller->setStyleSheet(QStringLiteral("color:#8a1f11;"));
     }
 }
@@ -191,7 +211,7 @@ void ConnectionBar::setTemperatureC(double temperature_c, bool valid)
 
 void ConnectionBar::setRunStatus(const QString& text, const QString& colorName)
 {
-    m_status->setText(QStringLiteral("Статус: %1").arg(text));
+    m_status->setText(QStringLiteral("Серия АФАР: %1").arg(text));
     m_status->setStyleSheet(QStringLiteral("color:%1; font-weight:600;").arg(colorName));
 }
 

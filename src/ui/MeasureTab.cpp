@@ -3,8 +3,10 @@
 #include "S21PlotWidget.h"
 
 #include <QDoubleSpinBox>
+#include <QComboBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
@@ -23,9 +25,9 @@ MeasureTab::MeasureTab(QWidget* parent)
     m_stages = new QListWidget(this);
     const QStringList stages = {
         QStringLiteral("1 Подключения"),
-        QStringLiteral("2 Калибровка C2220"),
+        QStringLiteral("2 Калибровка VNA"),
         QStringLiteral("3 Линейность"),
-        QStringLiteral("4 Перебор кодов"),
+        QStringLiteral("4 S-параметры / фильтр"),
         QStringLiteral("5 Прямая LUT"),
         QStringLiteral("6 Обратная LUT"),
         QStringLiteral("7 Валидация"),
@@ -65,17 +67,17 @@ QWidget* MeasureTab::makeConnectionsPage()
     m_connectHow = new QLabel(
         QStringLiteral(
             "Как запустить серию на имитаторах:\n"
-            "1. Нажмите синюю кнопку «Мастер запуска» внизу окна или кнопку ниже.\n"
+            "1. Нажмите синюю кнопку «Настроить серию АФАР» внизу окна или кнопку ниже.\n"
             "2. На каждом шаге отметьте «Подтверждаю» и жмите «Далее».\n"
             "3. На последнем шаге — «Готово»: оркестратор дойдёт до READY.\n"
-            "4. Зелёная «Старт» начнёт перебор. Жёлтая «Пауза», красная «Стоп» "
+            "4. Зелёная «Старт серии АФАР» начнёт перебор. Жёлтая «Пауза», красная «Стоп» "
             "(Стоп спросит подтверждение).\n"
-            "Частоты и точки свипа берутся из этапа «4 Перебор кодов»."),
+            "Частоты и точки свипа берутся из этапа «4 S-параметры / фильтр»."),
         page);
     m_connectHow->setWordWrap(true);
     m_connectHow->setObjectName(QStringLiteral("hintLabel"));
 
-    auto* openWizard = new QPushButton(QStringLiteral("Открыть мастер запуска"), page);
+    auto* openWizard = new QPushButton(QStringLiteral("Настроить серию АФАР"), page);
     openWizard->setObjectName(QStringLiteral("btnPrimary"));
     connect(openWizard, &QPushButton::clicked, this, &MeasureTab::openWizardRequested);
 
@@ -100,12 +102,37 @@ QWidget* MeasureTab::makeCalPage()
 {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
-    auto* title = new QLabel(QStringLiteral("Этап 2. Калибровка C2220"), page);
+    auto* title = new QLabel(QStringLiteral("Этап 2. Калибровка VNA"), page);
     title->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700;"));
     m_calText = new QLabel(page);
     m_calText->setWordWrap(true);
+    auto* calibration = new QGroupBox(QStringLiteral("Полная двухпортовая SOLT-калибровка"), page);
+    auto* grid = new QGridLayout(calibration);
+    auto addStep = [this, calibration, grid](const QString& text, int step, int row, int column) {
+        auto* button = new QPushButton(text, calibration);
+        connect(button, &QPushButton::clicked, this,
+                [this, step] { emit calibrationStepRequested(step); });
+        grid->addWidget(button, row, column);
+    };
+    auto* connectVna = new QPushButton(QStringLiteral("1 Соединение: проверить VNA"), calibration);
+    connect(connectVna, &QPushButton::clicked, this, &MeasureTab::calibrationConnectionRequested);
+    grid->addWidget(connectVna, 0, 0, 1, 2);
+    addStep(QStringLiteral("2 Два порта: начать SOLT"), 0, 1, 0);
+    addStep(QStringLiteral("Порт 1: открытый канал"), 1, 2, 0);
+    addStep(QStringLiteral("Порт 1: КЗ"), 2, 3, 0);
+    addStep(QStringLiteral("Порт 1: нагрузка 50 Ом"), 3, 4, 0);
+    addStep(QStringLiteral("Порт 2: открытый канал"), 4, 2, 1);
+    addStep(QStringLiteral("Порт 2: КЗ"), 5, 3, 1);
+    addStep(QStringLiteral("Порт 2: нагрузка 50 Ом"), 6, 4, 1);
+    addStep(QStringLiteral("Перемычка: порт 1 ↔ порт 2"), 7, 5, 0);
+    addStep(QStringLiteral("Применить калибровку"), 8, 5, 1);
+    m_calibrationStatus = new QLabel(QStringLiteral("Калибровка: шаги ещё не выполнялись"), page);
+    m_calibrationStatus->setWordWrap(true);
+    m_calibrationStatus->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(title);
     layout->addWidget(m_calText);
+    layout->addWidget(calibration);
+    layout->addWidget(m_calibrationStatus);
     layout->addStretch(1);
     return page;
 }
@@ -130,17 +157,24 @@ QWidget* MeasureTab::makeSweepPage()
     auto* center = new QVBoxLayout(page);
 
     auto* params = new QGroupBox(QStringLiteral("Параметры свипа"), page);
-    auto* form = new QFormLayout(params);
+    auto* form = new QGridLayout(params);
+    m_sParameter = new QComboBox(params);
+    m_sParameter->addItems({QStringLiteral("S21"), QStringLiteral("S11"),
+                            QStringLiteral("S12"), QStringLiteral("S22")});
+    m_frequencyUnit = new QComboBox(params);
+    m_frequencyUnit->addItem(QStringLiteral("Гц"), 1.0);
+    m_frequencyUnit->addItem(QStringLiteral("кГц"), 1.0e3);
+    m_frequencyUnit->addItem(QStringLiteral("МГц"), 1.0e6);
+    m_frequencyUnit->addItem(QStringLiteral("ГГц"), 1.0e9);
+    m_frequencyUnit->setCurrentIndex(3);
     m_fStart = new QDoubleSpinBox(params);
-    m_fStart->setRange(0.1, 40.0);
-    m_fStart->setDecimals(3);
-    m_fStart->setSuffix(QStringLiteral(" ГГц"));
+    m_fStart->setRange(0.0001, 20.0);
+    m_fStart->setDecimals(9);
     m_fStop = new QDoubleSpinBox(params);
-    m_fStop->setRange(0.1, 40.0);
-    m_fStop->setDecimals(3);
-    m_fStop->setSuffix(QStringLiteral(" ГГц"));
+    m_fStop->setRange(0.0001, 20.0);
+    m_fStop->setDecimals(9);
     m_points = new QSpinBox(params);
-    m_points->setRange(2, 10001);
+    m_points->setRange(2, 500001);
     m_ifbw = new QSpinBox(params);
     m_ifbw->setRange(1, 1000000);
     m_ifbw->setSuffix(QStringLiteral(" Гц"));
@@ -149,16 +183,45 @@ QWidget* MeasureTab::makeSweepPage()
     m_power->setDecimals(1);
     m_power->setSuffix(QStringLiteral(" дБм"));
     m_averages = new QSpinBox(params);
-    m_averages->setRange(1, 1024);
-    form->addRow(QStringLiteral("f нач."), m_fStart);
-    form->addRow(QStringLiteral("f кон."), m_fStop);
-    form->addRow(QStringLiteral("Точки"), m_points);
-    form->addRow(QStringLiteral("ПЧ"), m_ifbw);
-    form->addRow(QStringLiteral("Мощность"), m_power);
-    form->addRow(QStringLiteral("Усреднение"), m_averages);
+    m_averages->setRange(1, 999);
+    const auto addField = [params, form](const QString& label, QWidget* field, int row, int pair) {
+        const int column = pair * 2;
+        form->addWidget(new QLabel(label, params), row, column);
+        form->addWidget(field, row, column + 1);
+    };
+    addField(QStringLiteral("S-параметр"), m_sParameter, 0, 0);
+    addField(QStringLiteral("Единицы частоты"), m_frequencyUnit, 0, 1);
+    addField(QStringLiteral("f нач."), m_fStart, 1, 0);
+    addField(QStringLiteral("f кон."), m_fStop, 1, 1);
+    addField(QStringLiteral("Точки"), m_points, 2, 0);
+    addField(QStringLiteral("ПЧ"), m_ifbw, 2, 1);
+    addField(QStringLiteral("Мощность"), m_power, 3, 0);
+    addField(QStringLiteral("Усреднение"), m_averages, 3, 1);
+    form->setColumnStretch(1, 1);
+    form->setColumnStretch(3, 1);
 
+    connect(m_frequencyUnit, &QComboBox::currentIndexChanged, this,
+            &MeasureTab::onFrequencyUnitChanged);
+
+    auto* buttons = new QHBoxLayout();
+    auto* singleSweep = new QPushButton(QStringLiteral("Измерить выбранный S-параметр"), page);
+    singleSweep->setObjectName(QStringLiteral("btnPrimary"));
+    connect(singleSweep, &QPushButton::clicked, this, &MeasureTab::singleSweepRequested);
+    m_saveCsv = new QPushButton(QStringLiteral("Сохранить последнее измерение в CSV"), page);
+    m_saveCsv->setEnabled(false);
+    connect(m_saveCsv, &QPushButton::clicked, this, &MeasureTab::saveCsvRequested);
+    buttons->addWidget(singleSweep);
+    buttons->addWidget(m_saveCsv);
     m_current = new QLabel(QStringLiteral("Канал: —  Att: —  Фаза: —"), page);
     m_plot = new S21PlotWidget(page);
+    connect(m_sParameter, &QComboBox::currentTextChanged, m_plot,
+            &S21PlotWidget::setTraceName);
+    auto* resetView = new QPushButton(QStringLiteral("Показать весь диапазон"), page);
+    connect(resetView, &QPushButton::clicked, m_plot, &S21PlotWidget::resetView);
+    buttons->addWidget(resetView);
+    m_filterMetrics = new QLabel(QStringLiteral("Метрики фильтра: —"), page);
+    m_filterMetrics->setWordWrap(true);
+    m_filterMetrics->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
     m_progress = new QProgressBar(page);
     m_progress->setRange(0, 100);
@@ -166,9 +229,21 @@ QWidget* MeasureTab::makeSweepPage()
     m_counter = new QLabel(QStringLiteral("Состояния: 0 / 0"), page);
     m_eta = new QLabel(QStringLiteral("ETA: —"), page);
 
+    auto* modeHint = new QLabel(
+        QStringLiteral("Одиночное измерение требует только зелёной связи VNA. Контроллер "
+                       "серии АФАР и нижняя кнопка «Старт серии» здесь не используются.\n"
+                       "График: колесо — масштаб, левая кнопка мыши — прокрутка, "
+                       "двойной щелчок — весь диапазон."),
+        page);
+    modeHint->setWordWrap(true);
+    modeHint->setObjectName(QStringLiteral("hintLabel"));
+
+    center->addWidget(modeHint);
     center->addWidget(params);
+    center->addLayout(buttons);
     center->addWidget(m_current);
     center->addWidget(m_plot, 1);
+    center->addWidget(m_filterMetrics);
     center->addWidget(m_progress);
     center->addWidget(m_counter);
     center->addWidget(m_eta);
@@ -234,12 +309,31 @@ void MeasureTab::applyRunConfigDefaults(double fStartGhz,
                                         double powerDbm,
                                         int averages)
 {
-    m_fStart->setValue(fStartGhz);
-    m_fStop->setValue(fStopGhz);
+    m_fStart->setValue(fStartGhz * 1.0e9 / m_frequencyScale);
+    m_fStop->setValue(fStopGhz * 1.0e9 / m_frequencyScale);
     m_points->setValue(points);
     m_ifbw->setValue(ifbwHz);
     m_power->setValue(powerDbm);
     m_averages->setValue(averages);
+}
+
+void MeasureTab::onFrequencyUnitChanged(int index)
+{
+    const double newScale = m_frequencyUnit->itemData(index).toDouble();
+    if (!(newScale > 0.0) || !m_fStart || !m_fStop) {
+        return;
+    }
+    const double startHz = m_fStart->value() * m_frequencyScale;
+    const double stopHz = m_fStop->value() * m_frequencyScale;
+    m_frequencyScale = newScale;
+    const int decimals = index == 0 ? 0 : (index == 1 ? 3 : (index == 2 ? 6 : 9));
+    for (auto* field : {m_fStart, m_fStop}) {
+        field->setDecimals(decimals);
+        field->setRange(100000.0 / newScale, 20000000000.0 / newScale);
+        field->setSingleStep(1000000.0 / newScale);
+    }
+    m_fStart->setValue(startHz / newScale);
+    m_fStop->setValue(stopHz / newScale);
 }
 
 void MeasureTab::setStageHighlight(int stageIndex0)
@@ -279,6 +373,21 @@ void MeasureTab::setSweepCurves(const QVector<double>& freqGhz,
     m_plot->setCurves(freqGhz, magDb, phaseUnwrapDeg);
 }
 
+void MeasureTab::setFilterMetrics(const QString& text)
+{
+    m_filterMetrics->setText(text.isEmpty() ? QStringLiteral("Метрики фильтра: —") : text);
+}
+
+void MeasureTab::setCalibrationStatus(const QString& text)
+{
+    m_calibrationStatus->setText(text);
+}
+
+void MeasureTab::setCsvAvailable(bool available)
+{
+    m_saveCsv->setEnabled(available);
+}
+
 void MeasureTab::setStandCheck(bool connectionsOk,
                                bool idnOk,
                                bool calOk,
@@ -293,7 +402,7 @@ void MeasureTab::setStandCheck(bool connectionsOk,
             "Калибровка ВАЦ в этапе 1 — проверка флага/идентификатора профиля "
             "(не замена метрологической аттестации).\n\n"
             "Подключения: %1\n"
-            "IDN C2220 / контроллер: %2\n"
+            "IDN C1220/C2220 / контроллер: %2\n"
             "Флаг калибровки: %3\n"
             "THRU: %4\n"
             "Пороги по умолчанию FR-05: 0,20 дБ / 2,0° — конфигурируются в мастере.")
@@ -365,12 +474,12 @@ void MeasureTab::setUnfinishedSeriesHint(const QString& path)
 
 double MeasureTab::fStartGhz() const
 {
-    return m_fStart->value();
+    return m_fStart->value() * m_frequencyScale / 1.0e9;
 }
 
 double MeasureTab::fStopGhz() const
 {
-    return m_fStop->value();
+    return m_fStop->value() * m_frequencyScale / 1.0e9;
 }
 
 int MeasureTab::points() const
@@ -391,4 +500,9 @@ double MeasureTab::powerDbm() const
 int MeasureTab::averages() const
 {
     return m_averages->value();
+}
+
+QString MeasureTab::sParameter() const
+{
+    return m_sParameter->currentText();
 }

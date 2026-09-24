@@ -107,9 +107,6 @@ C2220Vna::C2220Vna(IScpiTransport& transport, Profile profile)
     if (profile_.measure_retries < 0) {
         profile_.measure_retries = 0;
     }
-    if (profile_.required_model.empty()) {
-        profile_.required_model = "C2220";
-    }
 }
 
 void C2220Vna::require_connected(const char* op) const
@@ -132,8 +129,11 @@ std::string C2220Vna::query(const std::string& cmd)
 
 void C2220Vna::reject_if_foreign_model(const std::string& idn) const
 {
-    if (idn.find(profile_.required_model) == std::string::npos) {
-        throw std::runtime_error("C2220Vna: foreign VNA model in *IDN?: " + idn);
+    const bool supported = profile_.required_model.empty()
+        ? (idn.find("C1220") != std::string::npos || idn.find("C2220") != std::string::npos)
+        : idn.find(profile_.required_model) != std::string::npos;
+    if (!supported) {
+        throw std::runtime_error("PlanarVna: unsupported VNA model in *IDN?: " + idn);
     }
 }
 
@@ -154,15 +154,7 @@ void C2220Vna::connect()
     connected_ = true;
     configured_ = false;
 
-    try {
-        // На старте связи / серии — проверка прямого доступа (HW-VNA-05).
-        transport_.set_io_timeout_ms(profile_.sweep_timeout_ms);
-        check_direct_access();
-    } catch (...) {
-        connected_ = false;
-        transport_.disconnect();
-        throw;
-    }
+    transport_.set_io_timeout_ms(profile_.sweep_timeout_ms);
 }
 
 std::string C2220Vna::identify()
@@ -170,6 +162,10 @@ std::string C2220Vna::identify()
     require_connected("identify");
     const std::string idn = query("*IDN?");
     reject_if_foreign_model(idn);
+    // Эта команда существует только у C2220. C1220 нельзя опрашивать ею.
+    if (idn.find("C2220") != std::string::npos) {
+        check_direct_access();
+    }
     return idn;
 }
 
@@ -182,13 +178,27 @@ void C2220Vna::configure(const SweepConfig& config)
     if (config.f_stop_hz < config.f_start_hz) {
         throw std::invalid_argument("C2220Vna: f_stop_hz < f_start_hz");
     }
+    if (config.averages < 1 || config.averages > 999) {
+        throw std::invalid_argument("C2220Vna: averages must be in 1..999");
+    }
 
     write_cmd("SENS:FREQ:STAR " + std::to_string(config.f_start_hz));
     write_cmd("SENS:FREQ:STOP " + std::to_string(config.f_stop_hz));
     write_cmd("SENS:SWE:POIN " + std::to_string(config.points));
     write_cmd("SENS:BAND " + std::to_string(config.ifbw_hz));
     write_cmd("SOUR:POW " + format_double(config.power_dbm));
-    write_cmd("CALC:PAR:DEF S21");
+    write_cmd(std::string("CALC:PAR:DEF ") + scpi_name(config.parameter));
+    write_cmd("FORM:DATA ASC");
+    write_cmd("TRIG:SOUR BUS");
+    if (config.averages > 1) {
+        write_cmd("SENS:AVER:COUN " + std::to_string(config.averages));
+        write_cmd("SENS:AVER ON");
+        write_cmd("TRIG:AVER ON");
+        write_cmd("SENS:AVER:CLE");
+    } else {
+        write_cmd("TRIG:AVER OFF");
+        write_cmd("SENS:AVER OFF");
+    }
 
     config_ = config;
     configured_ = true;
@@ -249,6 +259,46 @@ ComplexSweep C2220Vna::measure_s21()
         }
     }
     throw last;
+}
+
+void C2220Vna::calibrate_two_port(TwoPortCalibrationStep step)
+{
+    require_connected("calibrate_two_port");
+    const char* command = nullptr;
+    switch (step) {
+    case TwoPortCalibrationStep::Begin:
+        command = "SENS:CORR:COLL:METH:SOLT2 1,2";
+        break;
+    case TwoPortCalibrationStep::OpenPort1:
+        command = "SENS:CORR:COLL:OPEN 1";
+        break;
+    case TwoPortCalibrationStep::ShortPort1:
+        command = "SENS:CORR:COLL:SHOR 1";
+        break;
+    case TwoPortCalibrationStep::LoadPort1:
+        command = "SENS:CORR:COLL:LOAD 1";
+        break;
+    case TwoPortCalibrationStep::OpenPort2:
+        command = "SENS:CORR:COLL:OPEN 2";
+        break;
+    case TwoPortCalibrationStep::ShortPort2:
+        command = "SENS:CORR:COLL:SHOR 2";
+        break;
+    case TwoPortCalibrationStep::LoadPort2:
+        command = "SENS:CORR:COLL:LOAD 2";
+        break;
+    case TwoPortCalibrationStep::Thru12:
+        command = "SENS:CORR:COLL:THRU 2,1";
+        break;
+    case TwoPortCalibrationStep::Apply:
+        command = "SENS:CORR:COLL:SAVE";
+        break;
+    }
+    write_cmd(command);
+    const std::string opc = query("*OPC?");
+    if (opc.find('1') == std::string::npos) {
+        throw std::runtime_error("C2220Vna: calibration did not complete: " + opc);
+    }
 }
 
 std::vector<std::string> C2220Vna::drain_errors()

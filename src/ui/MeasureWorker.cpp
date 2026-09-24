@@ -9,6 +9,9 @@
 #include "ScpiSocketTransport.h"
 
 #include <QTimer>
+#include <QLocale>
+#include <QSaveFile>
+#include <QTextStream>
 
 #include <cmath>
 #include <stdexcept>
@@ -26,6 +29,32 @@ enum CellStatus : int {
     /// Фаза отсутствует в оси store (урезанный phase_codes).
     CellOutOfAxis = -1,
 };
+
+SParameter s_parameter_from_index(int index)
+{
+    switch (index) {
+    case 1:
+        return SParameter::S11;
+    case 2:
+        return SParameter::S12;
+    case 3:
+        return SParameter::S22;
+    default:
+        return SParameter::S21;
+    }
+}
+
+QString calibration_step_name(int step)
+{
+    static const QStringList names = {
+        QStringLiteral("Два порта SOLT"), QStringLiteral("Порт 1: открытый канал"),
+        QStringLiteral("Порт 1: КЗ"), QStringLiteral("Порт 1: нагрузка 50 Ом"),
+        QStringLiteral("Порт 2: открытый канал"), QStringLiteral("Порт 2: КЗ"),
+        QStringLiteral("Порт 2: нагрузка 50 Ом"), QStringLiteral("Перемычка 1↔2"),
+        QStringLiteral("Применить калибровку"),
+    };
+    return step >= 0 && step < names.size() ? names[step] : QStringLiteral("Неизвестный шаг");
+}
 
 }  // namespace
 
@@ -86,6 +115,9 @@ void MeasureWorker::configureVna(int backend,
     m_port = (port > 0 && port < 65536) ? port : 5025;
     m_comPort = comPort.trimmed().isEmpty() ? QStringLiteral("COM3") : comPort.trimmed();
     m_allowDirect = allowDirectAccess;
+    m_identifiedIdn.clear();
+    m_lastSingleSweep = {};
+    m_lastSingleParameter.clear();
     rebuildVna();
     m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
     emitConnection();
@@ -101,6 +133,7 @@ void MeasureWorker::probeVna()
     try {
         m_vna->connect();
         const QString idn = QString::fromStdString(m_vna->identify());
+        m_identifiedIdn = idn;
         emitConnection();
         emit probeFinished(true, idn);
         emit diagnostic(QStringLiteral("IDN: %1").arg(idn));
@@ -108,6 +141,211 @@ void MeasureWorker::probeVna()
         emitConnection();
         emit probeFinished(false, QString::fromUtf8(ex.what()));
         emit diagnostic(QString::fromUtf8(ex.what()));
+    }
+}
+
+void MeasureWorker::measureSingleSweep(double fStartGhz,
+                                       double fStopGhz,
+                                       int points,
+                                       int ifbwHz,
+                                       double powerDbm,
+                                       int averages,
+                                       int sParameter)
+{
+    using afar::RunState;
+    if (m_orch) {
+        const auto state = m_orch->state();
+        if (state != RunState::Idle && state != RunState::Complete && state != RunState::Error
+            && state != RunState::Aborted) {
+            emit singleSweepFinished(false,
+                                     QStringLiteral("Одиночный свип недоступен во время серии"));
+            return;
+        }
+    }
+    if (!m_vna || !(fStartGhz < fStopGhz) || points < 2
+        || ifbwHz < 1 || averages < 1 || averages > 999) {
+        emit singleSweepFinished(false, QStringLiteral("Некорректные параметры свипа"));
+        return;
+    }
+
+    try {
+        m_vna->connect();
+        const QString idn = QString::fromStdString(m_vna->identify());
+        m_identifiedIdn = idn;
+
+        SweepConfig config{};
+        config.f_start_hz = static_cast<std::uint64_t>(std::llround(fStartGhz * 1.0e9));
+        config.f_stop_hz = static_cast<std::uint64_t>(std::llround(fStopGhz * 1.0e9));
+        config.points = static_cast<std::uint32_t>(points);
+        config.power_dbm = powerDbm;
+        config.ifbw_hz = static_cast<std::uint32_t>(ifbwHz);
+        config.averages = static_cast<std::uint16_t>(averages);
+        config.parameter = s_parameter_from_index(sParameter);
+        m_vna->configure(config);
+
+        auto errors = m_vna->drain_errors();
+        if (!errors.empty()) {
+            throw std::runtime_error("VNA configure error: " + errors.front());
+        }
+        const ComplexSweep sweep = m_vna->measure_s21();
+        errors = m_vna->drain_errors();
+        if (!errors.empty()) {
+            throw std::runtime_error("VNA measurement error: " + errors.front());
+        }
+        if (sweep.frequency_hz.size() != sweep.s21.size() || sweep.s21.empty()) {
+            throw std::runtime_error("VNA returned inconsistent S-parameter arrays");
+        }
+
+        const auto phase = afar::cal::unwrap_phase_deg(sweep.s21);
+        QVector<double> freqGhz;
+        QVector<double> magDb;
+        QVector<double> phaseDeg;
+        freqGhz.reserve(static_cast<qsizetype>(sweep.s21.size()));
+        magDb.reserve(static_cast<qsizetype>(sweep.s21.size()));
+        phaseDeg.reserve(static_cast<qsizetype>(sweep.s21.size()));
+        for (std::size_t i = 0; i < sweep.s21.size(); ++i) {
+            freqGhz.push_back(static_cast<double>(sweep.frequency_hz[i]) / 1.0e9);
+            magDb.push_back(afar::cal::magnitude_db(sweep.s21[i]));
+            phaseDeg.push_back(phase[i]);
+        }
+
+        const QString parameter = QString::fromLatin1(scpi_name(config.parameter));
+        m_lastSingleSweep = sweep;
+        m_lastSingleParameter = parameter;
+        const auto metrics = afar::cal::analyze_filter(sweep.frequency_hz, sweep.s21);
+        QString metricsText;
+        if ((config.parameter == SParameter::S21 || config.parameter == SParameter::S12)
+            && metrics.valid) {
+            metricsText = QStringLiteral(
+                              "Метрики фильтра: пик %1 %2 дБ @ %3 ГГц; потери %4 дБ")
+                              .arg(parameter)
+                              .arg(metrics.peak_db, 0, 'f', 3)
+                              .arg(static_cast<double>(metrics.peak_frequency_hz) / 1.0e9, 0,
+                                   'f', 6)
+                              .arg(metrics.insertion_loss_db, 0, 'f', 3);
+            if (metrics.has_3db_band) {
+                metricsText += QStringLiteral(
+                                   "; −3 дБ: %1…%2 ГГц; центр %3 ГГц; полоса %4 МГц; "
+                                   "макс. подавление вне полосы %5 дБ")
+                                   .arg(metrics.lower_3db_hz / 1.0e9, 0, 'f', 6)
+                                   .arg(metrics.upper_3db_hz / 1.0e9, 0, 'f', 6)
+                                   .arg(metrics.center_hz / 1.0e9, 0, 'f', 6)
+                                   .arg(metrics.bandwidth_3db_hz / 1.0e6, 0, 'f', 3)
+                                   .arg(metrics.max_stopband_rejection_db, 0, 'f', 3);
+            } else {
+                metricsText += QStringLiteral("; границы −3 дБ в заданном диапазоне не найдены");
+            }
+        } else {
+            metricsText = QStringLiteral(
+                              "Метрики фильтра по полосе применимы к S21/S12; измерен %1")
+                              .arg(parameter);
+        }
+
+        emitConnection();
+        emit sweepPreview(freqGhz, magDb, phaseDeg);
+        emit filterMetricsChanged(metricsText);
+        emit diagnostic(QString());
+        emit singleSweepFinished(
+            true, QStringLiteral("%1 · %2 · %3 точек").arg(idn, parameter).arg(points));
+    } catch (const std::exception& ex) {
+        emitConnection();
+        emit diagnostic(QString::fromUtf8(ex.what()));
+        emit singleSweepFinished(false, QString::fromUtf8(ex.what()));
+    }
+}
+
+void MeasureWorker::saveLastSweepCsv(const QString& csvPath)
+{
+    if (csvPath.trimmed().isEmpty() || m_lastSingleSweep.s21.empty()
+        || m_lastSingleSweep.frequency_hz.size() != m_lastSingleSweep.s21.size()) {
+        emit csvSaveFinished(false, QStringLiteral("Нет последнего измерения для сохранения"),
+                             csvPath);
+        return;
+    }
+    try {
+        const auto phase = afar::cal::unwrap_phase_deg(m_lastSingleSweep.s21);
+        QSaveFile csv(csvPath);
+        if (!csv.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            throw std::runtime_error(csv.errorString().toStdString());
+        }
+        QTextStream out(&csv);
+        out.setEncoding(QStringConverter::Utf8);
+        out.setLocale(QLocale::c());
+        out.setRealNumberNotation(QTextStream::ScientificNotation);
+        out.setRealNumberPrecision(17);
+        out << "s_parameter,frequency_hz,real,imag,magnitude_db,phase_deg\n";
+        for (std::size_t i = 0; i < m_lastSingleSweep.s21.size(); ++i) {
+            const auto& sample = m_lastSingleSweep.s21[i];
+            out << m_lastSingleParameter << ','
+                << static_cast<qulonglong>(m_lastSingleSweep.frequency_hz[i]) << ','
+                << sample.real() << ',' << sample.imag() << ','
+                << afar::cal::magnitude_db(sample) << ',' << phase[i] << '\n';
+        }
+        out.flush();
+        if (!csv.commit()) {
+            throw std::runtime_error(csv.errorString().toStdString());
+        }
+        emit csvSaveFinished(true,
+                             QStringLiteral("%1: сохранено %2 точек")
+                                 .arg(m_lastSingleParameter)
+                                 .arg(m_lastSingleSweep.s21.size()),
+                             csvPath);
+    } catch (const std::exception& ex) {
+        emit csvSaveFinished(false, QString::fromUtf8(ex.what()), csvPath);
+    }
+}
+
+void MeasureWorker::runCalibrationStep(int step,
+                                       double fStartGhz,
+                                       double fStopGhz,
+                                       int points,
+                                       int ifbwHz,
+                                       double powerDbm,
+                                       int averages)
+{
+    using afar::RunState;
+    if (m_orch) {
+        const auto state = m_orch->state();
+        if (state != RunState::Idle && state != RunState::Complete && state != RunState::Error
+            && state != RunState::Aborted) {
+            emit calibrationFinished(
+                false, step, QStringLiteral("Калибровка недоступна во время серии"));
+            return;
+        }
+    }
+    if (!m_vna || step < 0 || step > 8) {
+        emit calibrationFinished(false, step, QStringLiteral("Некорректный шаг калибровки"));
+        return;
+    }
+    try {
+        m_vna->connect();
+        m_identifiedIdn = QString::fromStdString(m_vna->identify());
+        if (step == 0) {
+            if (!(fStartGhz < fStopGhz) || points < 2 || ifbwHz < 1 || averages < 1
+                || averages > 999) {
+                throw std::invalid_argument("Invalid calibration sweep parameters");
+            }
+            SweepConfig config{};
+            config.f_start_hz = static_cast<std::uint64_t>(std::llround(fStartGhz * 1.0e9));
+            config.f_stop_hz = static_cast<std::uint64_t>(std::llround(fStopGhz * 1.0e9));
+            config.points = static_cast<std::uint32_t>(points);
+            config.power_dbm = powerDbm;
+            config.ifbw_hz = static_cast<std::uint32_t>(ifbwHz);
+            config.averages = static_cast<std::uint16_t>(averages);
+            config.parameter = SParameter::S21;
+            m_vna->configure(config);
+        }
+        m_vna->calibrate_two_port(static_cast<TwoPortCalibrationStep>(step));
+        const auto errors = m_vna->drain_errors();
+        if (!errors.empty()) {
+            throw std::runtime_error("VNA calibration error: " + errors.front());
+        }
+        emitConnection();
+        emit calibrationFinished(true, step,
+                                 QStringLiteral("Выполнено: %1").arg(calibration_step_name(step)));
+    } catch (const std::exception& ex) {
+        emit diagnostic(QString::fromUtf8(ex.what()));
+        emit calibrationFinished(false, step, QString::fromUtf8(ex.what()));
     }
 }
 
@@ -236,7 +474,7 @@ void MeasureWorker::updateEta(qint64 completed, qint64 total)
 
 void MeasureWorker::emitConnection()
 {
-    QString model = QStringLiteral("PLANAR C2220");
+    QString model = QStringLiteral("PLANAR C1220/C2220");
     QString address = QStringLiteral("не задан");
     QString iface = QStringLiteral("имитатор");
     double temp = 0.0;
@@ -253,7 +491,8 @@ void MeasureWorker::emitConnection()
         vnaOk = m_simVna->connected();
     } else if (m_c2220) {
         vnaOk = m_c2220->connected();
-        model = QStringLiteral("PLANAR C2220");
+        const QString detected = m_identifiedIdn.section(QLatin1Char(','), 1, 1).trimmed();
+        model = detected.isEmpty() ? QStringLiteral("PLANAR C1220/C2220") : detected;
         if (m_backend == BackendSocket) {
             address = QStringLiteral("%1:%2").arg(m_host).arg(m_port);
         } else {

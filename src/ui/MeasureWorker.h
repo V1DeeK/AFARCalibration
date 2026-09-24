@@ -36,6 +36,21 @@ public slots:
                       bool allowDirectAccess);
     /// connect + *IDN? (и disconnect для имитатора не обязателен).
     void probeVna();
+    void measureSingleSweep(double fStartGhz,
+                            double fStopGhz,
+                            int points,
+                            int ifbwHz,
+                            double powerDbm,
+                            int averages,
+                            int sParameter);
+    void saveLastSweepCsv(const QString& csvPath);
+    void runCalibrationStep(int step,
+                            double fStartGhz,
+                            double fStopGhz,
+                            int points,
+                            int ifbwHz,
+                            double powerDbm,
+                            int averages);
     void prepare(const QString& dataRoot,
                  const QString& runConfigPath,
                  const QString& attenuatorCsvPath,
@@ -61,6 +76,10 @@ signals:
     void stateChanged(int state, const QString& russianText, const QString& colorName);
     void prepareFinished(bool ok, const QString& diagnostics);
     void probeFinished(bool ok, const QString& idnOrError);
+    void singleSweepFinished(bool ok, const QString& message);
+    void csvSaveFinished(bool ok, const QString& message, const QString& csvPath);
+    void calibrationFinished(bool ok, int step, const QString& message);
+    void filterMetricsChanged(const QString& text);
     void progressChanged(qint64 completed,
                          qint64 total,
                          int channel,
@@ -114,7 +133,10 @@ private:
     QString m_host{QStringLiteral("127.0.0.1")};
     int m_port{5025};
     QString m_comPort{QStringLiteral("COM3")};
+    QString m_identifiedIdn;
     bool m_allowDirect{false};
+    ComplexSweep m_lastSingleSweep;
+    QString m_lastSingleParameter;
 
     std::unique_ptr<VnaSimulator> m_simVna;
     std::unique_ptr<ScpiSocketTransport> m_socket;

@@ -134,3 +134,18 @@ target_include_directories(test_lut_perf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 afar_enable_warnings(test_lut_perf)
 add_test(NAME lut_perf COMMAND test_lut_perf)
 set_tests_properties(lut_perf PROPERTIES TIMEOUT 120)
+
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+add_executable(test_ui_interactions
+    test_ui_interactions.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/ConnectionBar.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/ConnectionBar.h
+    ${PROJECT_SOURCE_DIR}/src/ui/S21PlotWidget.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/S21PlotWidget.h
+)
+target_include_directories(test_ui_interactions PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
+target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain Qt6::Widgets)
+set_target_properties(test_ui_interactions PROPERTIES AUTOMOC ON)
+afar_enable_warnings(test_ui_interactions)
+add_test(NAME ui_interactions COMMAND test_ui_interactions)
+set_tests_properties(ui_interactions PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

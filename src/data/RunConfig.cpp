@@ -203,8 +203,8 @@ bool parseVna(const json& j, VnaConfig& out, std::string& diagnostics)
     if (!requireInt(j.at("averages"), "vna.averages", averages, diagnostics)) {
         return false;
     }
-    if (averages < 1) {
-        diagnostics = "vna.averages: must be >= 1";
+    if (averages < 1 || averages > 999) {
+        diagnostics = "vna.averages: out of instrument range 1..999";
         return false;
     }
     out.averages = static_cast<int>(averages);

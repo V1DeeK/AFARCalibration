@@ -12,9 +12,9 @@
 namespace afar {
 namespace {
 
-bool idnContainsC2220(const std::string& idn)
+bool idnContainsSupportedPlanar(const std::string& idn)
 {
-    return idn.find("C2220") != std::string::npos;
+    return idn.find("C1220") != std::string::npos || idn.find("C2220") != std::string::npos;
 }
 
 bool hasNanOrInf(const ComplexSweep& sweep)
@@ -109,8 +109,8 @@ bool MeasurementOrchestrator::ensureHardwareReady(std::string& diagnostics)
         vna_->connect();
         dut_->connect();
         const auto idn = vna_->identify();
-        if (!idnContainsC2220(idn)) {
-            diagnostics = "VNA IDN does not contain C2220: " + idn;
+        if (!idnContainsSupportedPlanar(idn)) {
+            diagnostics = "VNA IDN does not contain C1220/C2220: " + idn;
             return false;
         }
         SweepConfig sweep{};
@@ -120,7 +120,13 @@ bool MeasurementOrchestrator::ensureHardwareReady(std::string& diagnostics)
         sweep.power_dbm = config_.vna.power_dbm;
         sweep.ifbw_hz = static_cast<std::uint32_t>(config_.vna.ifbw_hz);
         sweep.averages = static_cast<std::uint16_t>(config_.vna.averages);
+        sweep.parameter = SParameter::S21;
         vna_->configure(sweep);
+        const auto errors = vna_->drain_errors();
+        if (!errors.empty()) {
+            diagnostics = "VNA configure error: " + errors.front();
+            return false;
+        }
         return true;
     } catch (const std::exception& ex) {
         diagnostics = ex.what();
@@ -461,6 +467,10 @@ bool MeasurementOrchestrator::measureOneState(const ScanItem& item)
         ++attempt;
         try {
             sweep = vna_->measure_s21();
+            const auto errors = vna_->drain_errors();
+            if (!errors.empty()) {
+                throw std::runtime_error("VNA measurement error: " + errors.front());
+            }
             vna_error = false;
             break;
         } catch (const std::exception& ex) {

@@ -56,13 +56,13 @@ void StartWizard::onHelpRequested()
     QMessageBox::information(
         this, QStringLiteral("Как пользоваться мастером"),
         QStringLiteral(
-            "Это обязательный обход т. 4.2 ТЗ перед Старт.\n\n"
+            "Это обязательный обход т. 4.2 ТЗ перед запуском полной серии АФАР.\n\n"
             "• На шаге с галочкой отметьте «Подтверждаю», иначе «Далее» не пустит "
             "и покажет причину.\n"
             "• THRU должен быть ≤ 0,20 дБ и ≤ 2,0° (пороги можно править, это не метрология).\n"
             "• «Отмена» ничего не шлёт в прибор (на имитаторе SCPI нет).\n"
             "• «Готово» создаёт каталог серии и доводит автомат до READY.\n"
-            "• Затем закройте мастер и нажмите зелёную «Старт»."));
+            "• Затем закройте мастер и нажмите зелёную «Старт серии АФАР»."));
 }
 
 void StartWizard::setSweepPreset(double fStartGhz,
@@ -95,7 +95,7 @@ void StartWizard::buildPages()
         page->setTitle(QStringLiteral("1. Подключения и питание"));
         auto* layout = new QVBoxLayout(page);
         auto* hint = new QLabel(
-            QStringLiteral("Проверьте кабели C2220, контроллер и питание. "
+            QStringLiteral("Проверьте кабели C1220/C2220, контроллер и питание. "
                            "Сейчас работают программные имитаторы — галочка обязательна, "
                            "иначе шаг не закроется."),
             page);
@@ -124,8 +124,8 @@ void StartWizard::buildPages()
     }
 
     addPage(makeCheckPage(
-        QStringLiteral("2. Идентификация C2220 и контроллера"),
-        QStringLiteral("На имитаторах *IDN? содержит C2220; контроллер — DutSimulator. "
+        QStringLiteral("2. Идентификация VNA и контроллера"),
+        QStringLiteral("На имитаторах *IDN? содержит C2220; живой VNA может быть C1220/C2220. "
                        "Отметьте «Подтверждаю», чтобы идти дальше."),
         &m_idnOk));
 
@@ -206,7 +206,8 @@ void StartWizard::buildPages()
         m_tempHint = new QLabel(
             QStringLiteral("После «Готово» оркестратор выполнит prepare → READY "
                            "на VnaSimulator + DutSimulator. Температура имитатора "
-                           "появится в верхней полосе. Затем нажмите зелёную «Старт»."),
+                           "появится в верхней полосе. Затем нажмите зелёную "
+                           "«Старт серии АФАР»."),
             page);
         m_tempHint->setWordWrap(true);
         layout->addWidget(m_tempHint);
@@ -350,7 +351,7 @@ bool StartWizard::validateCurrentPage()
     }
     if (id == 1 && !m_idnOk->isChecked()) {
         QMessageBox::information(this, QStringLiteral("Шаг не завершён"),
-                                 QStringLiteral("Подтвердите идентификацию C2220 и контроллера."));
+                                 QStringLiteral("Подтвердите идентификацию VNA и контроллера."));
         return false;
     }
     if (id == 2 && !m_calOk->isChecked()) {

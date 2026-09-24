@@ -11,7 +11,9 @@
 #include "Theme.h"
 
 #include <QApplication>
+#include <QDateTime>
 #include <QDir>
+#include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -43,10 +45,10 @@ MainWindow::MainWindow(QWidget* parent)
     rootLayout->setSpacing(8);
 
     m_connections = new ConnectionBar(root);
-    m_connections->setVnaInfo(QStringLiteral("PLANAR C2220"), QStringLiteral("VnaSimulator"),
+    m_connections->setVnaInfo(QStringLiteral("PLANAR C1220/C2220"), QStringLiteral("VnaSimulator"),
                               false);
     m_connections->setControllerInfo(QStringLiteral("DutSimulator"), false);
-    m_connections->setRunStatus(QStringLiteral("простой"), QStringLiteral("#333333"));
+    m_connections->setRunStatus(QStringLiteral("не настроена"), QStringLiteral("#666666"));
 
     auto* tabs = new QTabWidget(root);
     m_measure = new MeasureTab(tabs);
@@ -59,21 +61,21 @@ MainWindow::MainWindow(QWidget* parent)
     auto* cycle = new QFrame(root);
     cycle->setFrameShape(QFrame::StyledPanel);
     auto* cycleLayout = new QHBoxLayout(cycle);
-    m_wizardBtn = new QPushButton(QStringLiteral("Мастер запуска"), cycle);
+    m_wizardBtn = new QPushButton(QStringLiteral("Настроить серию АФАР"), cycle);
     m_wizardBtn->setObjectName(QStringLiteral("btnWizard"));
     auto* hint = new QLabel(
-        QStringLiteral("Имитаторы. Синяя «Мастер запуска» → галочки «Далее» → "
-                       "«Готово». Потом зелёная «Старт». Этапы слева — разные экраны."),
+        QStringLiteral("Полная серия АФАР: требует мастер и контроллер изделия. "
+                       "Для одиночного измерения S-параметра эта панель не нужна."),
         cycle);
     hint->setWordWrap(true);
     hint->setObjectName(QStringLiteral("hintLabel"));
-    m_start = new QPushButton(QStringLiteral("Старт"), cycle);
+    m_start = new QPushButton(QStringLiteral("Старт серии АФАР"), cycle);
     m_start->setObjectName(QStringLiteral("btnStart"));
     m_pause = new QPushButton(QStringLiteral("Пауза"), cycle);
     m_pause->setObjectName(QStringLiteral("btnPause"));
     m_stop = new QPushButton(QStringLiteral("Стоп"), cycle);
     m_stop->setObjectName(QStringLiteral("btnStop"));
-    m_start->setEnabled(false);
+    m_start->setEnabled(true);
     m_pause->setEnabled(false);
     m_stop->setEnabled(false);
     cycleLayout->addWidget(m_wizardBtn);
@@ -121,11 +123,24 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_connections, &ConnectionBar::vnaSettingsChanged, this, &MainWindow::onApplyVnaSettings);
     connect(m_connections, &ConnectionBar::probeVnaRequested, this, &MainWindow::onProbeVna);
     connect(m_worker, &MeasureWorker::probeFinished, this, &MainWindow::onProbeFinished);
+    connect(m_worker, &MeasureWorker::singleSweepFinished, this,
+            &MainWindow::onSingleSweepFinished);
+    connect(m_worker, &MeasureWorker::csvSaveFinished, this, &MainWindow::onCsvSaveFinished);
+    connect(m_worker, &MeasureWorker::calibrationFinished, this,
+            &MainWindow::onCalibrationFinished);
+    connect(m_worker, &MeasureWorker::filterMetricsChanged, m_measure,
+            &MeasureTab::setFilterMetrics);
     connect(m_measure, &MeasureTab::openWizardRequested, this, &MainWindow::onOpenWizard);
     connect(m_measure, &MeasureTab::resumeSeriesRequested, this, &MainWindow::onResumeSeries);
+    connect(m_measure, &MeasureTab::singleSweepRequested, this, &MainWindow::onSingleSweep);
+    connect(m_measure, &MeasureTab::saveCsvRequested, this, &MainWindow::onSaveCsv);
+    connect(m_measure, &MeasureTab::calibrationConnectionRequested, this,
+            &MainWindow::onProbeVna);
+    connect(m_measure, &MeasureTab::calibrationStepRequested, this,
+            &MainWindow::onCalibrationStep);
 
     statusBar()->showMessage(
-        QStringLiteral("CAL C2220: не проверена · THRU: — · Сырые данные: append-only · SHA-256"));
+        QStringLiteral("CAL VNA: не проверена · THRU: — · Сырые данные: append-only · SHA-256"));
 
     m_thread->start();
     loadExampleDefaults();
@@ -193,7 +208,7 @@ void MainWindow::onOpenWizard()
                             wizard.noOverloadConfirmed(), wizard.probeConfirmed(),
                             wizard.powerDbm(), wizard.engineerProfile());
     statusBar()->showMessage(
-        QStringLiteral("CAL C2220: %1 · THRU: %2 · Сырые данные: append-only · SHA-256")
+        QStringLiteral("CAL VNA: %1 · THRU: %2 · Сырые данные: append-only · SHA-256")
             .arg(wizard.calConfirmed() ? QStringLiteral("действительна (флаг)")
                                        : QStringLiteral("не проверена"),
                  wizard.thruSummary()));
@@ -206,6 +221,22 @@ void MainWindow::onOpenWizard()
 
 void MainWindow::onStart()
 {
+    using afar::RunState;
+    const auto state = static_cast<RunState>(m_state);
+    if (state == RunState::Paused) {
+        QMetaObject::invokeMethod(m_worker, "resume", Qt::QueuedConnection);
+        return;
+    }
+    if (state != RunState::Ready) {
+        QMessageBox::information(
+            this, QStringLiteral("Старт серии АФАР"),
+            QStringLiteral(
+                "Эта кнопка запускает полный перебор кодов АФАР, а не одиночное измерение "
+                "фильтра. Сначала нажмите «Настроить серию АФАР» и завершите мастер.\n\n"
+                "Для S11/S21/S12/S22 откройте этап 4 и нажмите "
+                "«Измерить выбранный S-параметр». Для этого нужен только зелёный VNA."));
+        return;
+    }
     QMetaObject::invokeMethod(m_worker, "start", Qt::QueuedConnection);
 }
 
@@ -262,11 +293,11 @@ void MainWindow::updateCycleButtons(int state)
 {
     using afar::RunState;
     const auto st = static_cast<RunState>(state);
-    const bool ready = st == RunState::Ready;
     const bool running = st == RunState::Running || st == RunState::Pausing;
     const bool paused = st == RunState::Paused;
-    m_start->setEnabled(ready || paused);
-    m_start->setText(paused ? QStringLiteral("Продолжить") : QStringLiteral("Старт"));
+    m_start->setEnabled(!running);
+    m_start->setText(paused ? QStringLiteral("Продолжить серию")
+                            : QStringLiteral("Старт серии АФАР"));
     m_pause->setEnabled(running);
     m_stop->setEnabled(running || paused);
 }
@@ -422,16 +453,124 @@ void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
 {
     if (ok) {
         m_connections->setDiagnostic(QStringLiteral("Связь OK: %1").arg(idnOrError));
+        m_measure->setCalibrationStatus(
+            QStringLiteral("Соединение с VNA подтверждено: %1").arg(idnOrError));
         statusBar()->showMessage(QStringLiteral("VNA IDN: %1").arg(idnOrError), 8000);
     } else {
         m_connections->setDiagnostic(QStringLiteral("Нет связи: %1").arg(idnOrError));
+        m_measure->setCalibrationStatus(
+            QStringLiteral("Соединение с VNA не установлено: %1").arg(idnOrError));
         QMessageBox::warning(
             this, QStringLiteral("Проверка VNA"),
             QStringLiteral(
-                "Не удалось подключиться к S2VNA/C2220.\n\n%1\n\n"
+                "Не удалось подключиться к S2VNA/C1220/C2220.\n\n%1\n\n"
                 "Проверьте: S2VNA запущена, Socket Server включён (порт), "
                 "прибор подключен. Пока нет прибора — режим «Имитатор».")
                 .arg(idnOrError));
+    }
+}
+
+void MainWindow::onSingleSweep()
+{
+    onApplyVnaSettings();
+    m_measure->setCsvAvailable(false);
+    m_measure->setFilterMetrics(QStringLiteral("Метрики фильтра: измерение…"));
+    const QString parameter = m_measure->sParameter();
+    m_lastMeasuredParameter = parameter;
+    const int parameterIndex = parameter == QStringLiteral("S11") ? 1
+        : parameter == QStringLiteral("S12")                 ? 2
+        : parameter == QStringLiteral("S22")                 ? 3
+                                                                  : 0;
+    QMetaObject::invokeMethod(
+        m_worker, "measureSingleSweep", Qt::QueuedConnection,
+        Q_ARG(double, m_measure->fStartGhz()), Q_ARG(double, m_measure->fStopGhz()),
+        Q_ARG(int, m_measure->points()), Q_ARG(int, m_measure->ifbwHz()),
+        Q_ARG(double, m_measure->powerDbm()), Q_ARG(int, m_measure->averages()),
+        Q_ARG(int, parameterIndex));
+}
+
+void MainWindow::onSingleSweepFinished(bool ok, const QString& message)
+{
+    if (ok) {
+        m_measure->setCsvAvailable(true);
+        statusBar()->showMessage(QStringLiteral("Измерение готово: %1").arg(message), 10000);
+    } else {
+        m_measure->setFilterMetrics(QStringLiteral("Метрики фильтра: измерение не выполнено"));
+        QMessageBox::warning(this, QStringLiteral("Измерение S-параметра"), message);
+    }
+}
+
+void MainWindow::onSaveCsv()
+{
+    const QString parameter = m_lastMeasuredParameter.toLower();
+    const QString name = QStringLiteral("filter-%1-%2.csv")
+                             .arg(parameter,
+                                  QDateTime::currentDateTime().toString(
+                                      QStringLiteral("yyyyMMdd-HHmmss")));
+    const QString initial = QDir(QStandardPaths::writableLocation(
+                                     QStandardPaths::DocumentsLocation))
+                                .filePath(name);
+    const QString csvPath = QFileDialog::getSaveFileName(
+        this, QStringLiteral("Сохранить последнее измерение"), initial,
+        QStringLiteral("CSV (*.csv)"));
+    if (!csvPath.isEmpty()) {
+        QMetaObject::invokeMethod(m_worker, "saveLastSweepCsv", Qt::QueuedConnection,
+                                  Q_ARG(QString, csvPath));
+    }
+}
+
+void MainWindow::onCsvSaveFinished(bool ok, const QString& message, const QString& csvPath)
+{
+    if (ok) {
+        statusBar()->showMessage(QStringLiteral("CSV сохранён: %1").arg(csvPath), 10000);
+        QMessageBox::information(this, QStringLiteral("Сохранение CSV"),
+                                 QStringLiteral("%1\n\n%2").arg(message, csvPath));
+    } else {
+        QMessageBox::warning(this, QStringLiteral("Сохранение CSV"), message);
+    }
+}
+
+void MainWindow::onCalibrationStep(int step)
+{
+    static const QStringList prompts = {
+        QStringLiteral("Будут применены параметры этапа 4 и начата полная SOLT-калибровка "
+                       "портов 1 и 2. В S2VNA должен быть выбран правильный комплект мер."),
+        QStringLiteral("Подключите меру «Открытый канал» к порту 1."),
+        QStringLiteral("Подключите меру КЗ к порту 1."),
+        QStringLiteral("Подключите согласованную нагрузку 50 Ом к порту 1."),
+        QStringLiteral("Подключите меру «Открытый канал» к порту 2."),
+        QStringLiteral("Подключите меру КЗ к порту 2."),
+        QStringLiteral("Подключите согласованную нагрузку 50 Ом к порту 2."),
+        QStringLiteral("Соедините порты 1 и 2 калибровочной перемычкой."),
+        QStringLiteral("Применить собранные коэффициенты двухпортовой калибровки?"),
+    };
+    if (step < 0 || step >= prompts.size()) {
+        return;
+    }
+    const auto answer = QMessageBox::question(
+        this, QStringLiteral("Двухпортовая калибровка"),
+        prompts[step] + QStringLiteral("\n\nПродолжить измерение этого шага?"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    if (step == 0) {
+        onApplyVnaSettings();
+    }
+    m_measure->setCalibrationStatus(QStringLiteral("Калибровка: выполняется шаг %1…").arg(step + 1));
+    QMetaObject::invokeMethod(
+        m_worker, "runCalibrationStep", Qt::QueuedConnection, Q_ARG(int, step),
+        Q_ARG(double, m_measure->fStartGhz()), Q_ARG(double, m_measure->fStopGhz()),
+        Q_ARG(int, m_measure->points()), Q_ARG(int, m_measure->ifbwHz()),
+        Q_ARG(double, m_measure->powerDbm()), Q_ARG(int, m_measure->averages()));
+}
+
+void MainWindow::onCalibrationFinished(bool ok, int step, const QString& message)
+{
+    m_measure->setCalibrationStatus(
+        QStringLiteral("Калибровка, шаг %1: %2").arg(step + 1).arg(message));
+    if (!ok) {
+        QMessageBox::warning(this, QStringLiteral("Двухпортовая калибровка"), message);
     }
 }
 

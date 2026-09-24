@@ -4,6 +4,7 @@
 #include <QWidget>
 
 class QDoubleSpinBox;
+class QComboBox;
 class QLabel;
 class QListWidget;
 class QProgressBar;
@@ -31,6 +32,9 @@ public:
     void setSweepCurves(const QVector<double>& freqGhz,
                         const QVector<double>& magDb,
                         const QVector<double>& phaseUnwrapDeg);
+    void setFilterMetrics(const QString& text);
+    void setCalibrationStatus(const QString& text);
+    void setCsvAvailable(bool available);
     void setStandCheck(bool connectionsOk,
                        bool idnOk,
                        bool calOk,
@@ -52,13 +56,19 @@ public:
     [[nodiscard]] int ifbwHz() const;
     [[nodiscard]] double powerDbm() const;
     [[nodiscard]] int averages() const;
+    [[nodiscard]] QString sParameter() const;
 
 signals:
     void openWizardRequested();
     void resumeSeriesRequested();
+    void singleSweepRequested();
+    void saveCsvRequested();
+    void calibrationConnectionRequested();
+    void calibrationStepRequested(int step);
 
 private slots:
     void onStageClicked(int row);
+    void onFrequencyUnitChanged(int index);
 
 private:
     QWidget* makeConnectionsPage();
@@ -74,6 +84,8 @@ private:
 
     QDoubleSpinBox* m_fStart = nullptr;
     QDoubleSpinBox* m_fStop = nullptr;
+    QComboBox* m_frequencyUnit = nullptr;
+    QComboBox* m_sParameter = nullptr;
     QSpinBox* m_points = nullptr;
     QSpinBox* m_ifbw = nullptr;
     QDoubleSpinBox* m_power = nullptr;
@@ -83,10 +95,14 @@ private:
     QProgressBar* m_progress = nullptr;
     QLabel* m_eta = nullptr;
     QLabel* m_counter = nullptr;
+    QLabel* m_filterMetrics = nullptr;
+    QPushButton* m_saveCsv = nullptr;
+    double m_frequencyScale = 1.0e9;
 
     QLabel* m_connectHow = nullptr;
     QLabel* m_unfinished = nullptr;
     QLabel* m_calText = nullptr;
+    QLabel* m_calibrationStatus = nullptr;
     QLabel* m_linText = nullptr;
     QLabel* m_directText = nullptr;
     QLabel* m_inverseText = nullptr;

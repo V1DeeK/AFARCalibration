@@ -28,7 +28,7 @@ public:
     /// Копия конфигурации + коды аттенюатора до железа.
     void setConfig(RunConfig config, AttenuatorCodes att_codes);
 
-    /// Создаёт серию, store, log; Idle→…→Ready. Проверяет IDN содержит C2220.
+    /// Создаёт серию, store, log; Idle→…→Ready. Проверяет IDN C1220/C2220.
     bool prepare(const std::filesystem::path& data_root,
                  const std::filesystem::path& run_config_src,
                  const std::filesystem::path& attenuator_csv_src,

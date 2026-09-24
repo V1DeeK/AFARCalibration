@@ -14,6 +14,7 @@
 
 using Catch::Matchers::WithinAbs;
 using afar::cal::attenuation_db;
+using afar::cal::analyze_filter;
 using afar::cal::build_direct_lut_entry;
 using afar::cal::DirectLutBuildInput;
 using afar::cal::inverse_cost;
@@ -105,6 +106,29 @@ TEST_CASE("unwrap phase along axis", "[lut_math][AT-09]")
     REQUIRE_THAT(deg[1], WithinAbs(90.0, kTol));
     REQUIRE_THAT(deg[2], WithinAbs(180.0, kTol));
     REQUIRE_THAT(deg[3], WithinAbs(270.0, kTol));
+}
+
+TEST_CASE("filter metrics find peak and interpolated 3 dB band", "[filter]")
+{
+    const std::vector<std::uint64_t> frequency{
+        1'000'000'000ULL, 2'000'000'000ULL, 3'000'000'000ULL,
+        4'000'000'000ULL, 5'000'000'000ULL};
+    const std::vector<double> db{-20.0, -6.0, 0.0, -6.0, -30.0};
+    std::vector<std::complex<double>> s21;
+    for (const double value : db) {
+        s21.emplace_back(std::pow(10.0, value / 20.0), 0.0);
+    }
+
+    const auto metrics = analyze_filter(frequency, s21);
+    REQUIRE(metrics.valid);
+    REQUIRE(metrics.has_3db_band);
+    REQUIRE(metrics.peak_frequency_hz == 3'000'000'000ULL);
+    REQUIRE_THAT(metrics.peak_db, WithinAbs(0.0, kTol));
+    REQUIRE_THAT(metrics.lower_3db_hz, WithinAbs(2.5e9, 1.0));
+    REQUIRE_THAT(metrics.upper_3db_hz, WithinAbs(3.5e9, 1.0));
+    REQUIRE_THAT(metrics.center_hz, WithinAbs(3.0e9, 1.0));
+    REQUIRE_THAT(metrics.bandwidth_3db_hz, WithinAbs(1.0e9, 1.0));
+    REQUIRE_THAT(metrics.max_stopband_rejection_db, WithinAbs(30.0, kTol));
 }
 
 TEST_CASE("direct LUT fields from normalized sample", "[lut_math][AT-09]")

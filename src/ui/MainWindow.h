@@ -61,6 +61,12 @@ private slots:
     void onApplyVnaSettings();
     void onProbeVna();
     void onProbeFinished(bool ok, const QString& idnOrError);
+    void onSingleSweep();
+    void onSingleSweepFinished(bool ok, const QString& message);
+    void onSaveCsv();
+    void onCsvSaveFinished(bool ok, const QString& message, const QString& csvPath);
+    void onCalibrationStep(int step);
+    void onCalibrationFinished(bool ok, int step, const QString& message);
     void onEtaChanged(const QString& text);
     void onSweepPreview(const QVector<double>& freqGhz,
                         const QVector<double>& magDb,
@@ -74,6 +80,7 @@ private:
     [[nodiscard]] QString defaultDataRoot() const;
 
     QString m_unfinishedSeries;
+    QString m_lastMeasuredParameter{QStringLiteral("S21")};
 
     ConnectionBar* m_connections = nullptr;
     MeasureTab* m_measure = nullptr;
