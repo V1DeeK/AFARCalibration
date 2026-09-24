@@ -37,8 +37,8 @@ public slots:
     /// connect + *IDN? через оркестратор (Idle), не напрямую IVna.
     void probeVna();
     /// GAP-WIZ-001: короткий пробный съём кодов через оркестратор (Idle).
-    void runProbeCodes(double fStartGhz,
-                       double fStopGhz,
+    void runProbeCodes(double fStartHz,
+                       double fStopHz,
                        int points,
                        int ifbwHz,
                        double powerDbm,

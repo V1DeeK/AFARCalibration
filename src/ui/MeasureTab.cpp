@@ -4,17 +4,21 @@
 
 #include "../measure/RunStateMachine.h"
 
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QVBoxLayout>
+#include <cmath>
 
 MeasureTab::MeasureTab(QWidget* parent)
     : QWidget(parent)

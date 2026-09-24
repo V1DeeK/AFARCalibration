@@ -279,8 +279,8 @@ void MeasureWorker::probeVna()
     }
 }
 
-void MeasureWorker::runProbeCodes(double fStartGhz,
-                                  double fStopGhz,
+void MeasureWorker::runProbeCodes(double fStartHz,
+                                  double fStopHz,
                                   int points,
                                   int ifbwHz,
                                   double powerDbm,
@@ -309,8 +309,8 @@ void MeasureWorker::runProbeCodes(double fStartGhz,
     }
 
     SweepConfig sweep{};
-    sweep.f_start_hz = static_cast<std::uint64_t>(fStartGhz * 1e9 + 0.5);
-    sweep.f_stop_hz = static_cast<std::uint64_t>(fStopGhz * 1e9 + 0.5);
+    sweep.f_start_hz = static_cast<std::uint64_t>(fStartHz + 0.5);
+    sweep.f_stop_hz = static_cast<std::uint64_t>(fStopHz + 0.5);
     sweep.points = static_cast<std::uint32_t>(points > 1 ? points : 11);
     sweep.ifbw_hz = static_cast<std::uint32_t>(ifbwHz > 0 ? ifbwHz : 1000);
     sweep.power_dbm = powerDbm;
