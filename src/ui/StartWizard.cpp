@@ -68,15 +68,15 @@ void StartWizard::onHelpRequested()
             "• Затем закройте мастер и нажмите зелёную «Старт»."));
 }
 
-void StartWizard::setSweepPreset(double fStartGhz,
-                                 double fStopGhz,
+void StartWizard::setSweepPreset(double fStartHz,
+                                 double fStopHz,
                                  int points,
                                  int ifbwHz,
                                  double powerDbm,
                                  int averages)
 {
-    m_fStartGhz = fStartGhz;
-    m_fStopGhz = fStopGhz;
+    m_fStartHz = fStartHz;
+    m_fStopHz = fStopHz;
     m_points = points;
     m_ifbwHz = ifbwHz;
     m_averages = averages;
@@ -424,7 +424,7 @@ void StartWizard::onProbeCheckToggled(bool checked)
         m_probeOk->setEnabled(false);
     }
     const double power = m_power ? m_power->value() : -30.0;
-    emit probeCodesRequested(m_fStartGhz, m_fStopGhz, m_points, m_ifbwHz, power, m_averages);
+    emit probeCodesRequested(m_fStartHz, m_fStopHz, m_points, m_ifbwHz, power, m_averages);
 }
 
 void StartWizard::onProbeCodesFinished(bool ok, const QString& message)
@@ -565,8 +565,8 @@ bool StartWizard::materializeSimFixtures(QString& diagnostics)
     m_csvPath = fixtures.filePath(QStringLiteral("attenuator-codes.csv"));
 
     const double power = m_power->value();
-    const qint64 fStart = static_cast<qint64>(m_fStartGhz * 1e9 + 0.5);
-    const qint64 fStop = static_cast<qint64>(m_fStopGhz * 1e9 + 0.5);
+    const qint64 fStart = static_cast<qint64>(m_fStartHz + 0.5);
+    const qint64 fStop = static_cast<qint64>(m_fStopHz + 0.5);
     const QString runId =
         QStringLiteral("SIM-UI-%1").arg(QDateTime::currentDateTimeUtc().toString(
             QStringLiteral("yyyyMMdd-hhmmss")));
