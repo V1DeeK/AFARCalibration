@@ -1,6 +1,7 @@
 #pragma once
 
 #include <complex>
+#include <optional>
 #include <vector>
 
 namespace afar::cal {
@@ -22,5 +23,22 @@ std::vector<double> unwrap_phase_deg(const std::vector<std::complex<double>>& s_
 
 /// Развёртка уже угловых (градусных) отсчётов.
 std::vector<double> unwrap_degrees(const std::vector<double>& wrapped_deg);
+
+/// Дрейф фазы между соседними опорами, градусы:
+/// \(\mathrm{wrap180}(\arg r_{\mathrm{curr}} - \arg r_{\mathrm{prev}})\).
+/// Ноль или неконечный комплекс — не измерение (пусто, не 0°).
+std::optional<double> reference_drift_phase_deg(
+    std::complex<double> r_prev,
+    std::complex<double> r_curr);
+
+struct RepeatabilityEstimate {
+    double db{};
+    double deg{};
+};
+
+/// Разброс повторных отсчётов одного слота: пик |Δ| модуля (дБ) и фазы (°).
+/// Меньше двух измерений — пусто, не нулевая «идеальная» повторяемость.
+std::optional<RepeatabilityEstimate> repeatability_from_attempts(
+    const std::vector<std::complex<double>>& attempts);
 
 }  // namespace afar::cal

@@ -61,10 +61,44 @@ private slots:
     void onApplyVnaSettings();
     void onProbeVna();
     void onProbeFinished(bool ok, const QString& idnOrError);
+    void refreshDataSourceBadge(bool probeOk = false, const QString& idnOrError = {});
     void onEtaChanged(const QString& text);
     void onSweepPreview(const QVector<double>& freqGhz,
                         const QVector<double>& magDb,
                         const QVector<double>& phaseUnwrapDeg);
+    void onSparamsPreview(const QVector<double>& freqGhz,
+                          const QVector<double>& s11mag,
+                          const QVector<double>& s11ph,
+                          const QVector<double>& s21mag,
+                          const QVector<double>& s21ph,
+                          const QVector<double>& s12mag,
+                          const QVector<double>& s12ph,
+                          const QVector<double>& s22mag,
+                          const QVector<double>& s22ph);
+    void onSeriesArtifactsPreview(const QString& runId,
+                                  qint64 completedStates,
+                                  const QString& directPath,
+                                  qint64 directValid,
+                                  qint64 directTotal,
+                                  bool directFlat,
+                                  const QString& directFragment,
+                                  const QString& inversePath,
+                                  qint64 inverseValid,
+                                  qint64 inverseTotal,
+                                  bool inverseFlat,
+                                  const QString& inverseFragment,
+                                  const QString& reportPath,
+                                  qint64 reportValid,
+                                  const QString& reportFragment,
+                                  const QString& manifestPath,
+                                  qint64 manifestLines,
+                                  const QString& manifestFragment);
+    void onDirectLutCurvePreview(const QVector<double>& freqGhz,
+                                 const QVector<double>& magDb,
+                                 const QVector<double>& phaseErrorDeg,
+                                 int channel,
+                                 int attCode,
+                                 int phaseCode);
     void updateCycleButtons(int state);
 
 private:

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <optional>
 
 namespace afar::cal {
 
@@ -54,6 +55,63 @@ std::vector<double> unwrap_degrees(const std::vector<double>& wrapped_deg)
         out[i] = out[i - 1] + step;
     }
     return out;
+}
+
+namespace {
+
+bool is_reference_measurement(std::complex<double> z)
+{
+    if (!std::isfinite(z.real()) || !std::isfinite(z.imag())) {
+        return false;
+    }
+    const double mag2 = z.real() * z.real() + z.imag() * z.imag();
+    return mag2 > 0.0 && std::isfinite(mag2);
+}
+
+}  // namespace
+
+std::optional<double> reference_drift_phase_deg(
+    std::complex<double> r_prev,
+    std::complex<double> r_curr)
+{
+    if (!is_reference_measurement(r_prev) || !is_reference_measurement(r_curr)) {
+        return std::nullopt;
+    }
+    return wrap180(arg_deg(r_curr) - arg_deg(r_prev));
+}
+
+std::optional<RepeatabilityEstimate> repeatability_from_attempts(
+    const std::vector<std::complex<double>>& attempts)
+{
+    std::vector<std::complex<double>> measured;
+    measured.reserve(attempts.size());
+    for (const auto& z : attempts) {
+        if (is_reference_measurement(z)) {
+            measured.push_back(z);
+        }
+    }
+    if (measured.size() < 2) {
+        return std::nullopt;
+    }
+
+    const double mag0 = magnitude_db(measured.front());
+    double db_span = 0.0;
+    double deg_span = 0.0;
+    const double arg0 = arg_deg(measured.front());
+    for (std::size_t i = 1; i < measured.size(); ++i) {
+        const double db = std::fabs(magnitude_db(measured[i]) - mag0);
+        const double deg = std::fabs(wrap180(arg_deg(measured[i]) - arg0));
+        if (db > db_span) {
+            db_span = db;
+        }
+        if (deg > deg_span) {
+            deg_span = deg;
+        }
+    }
+    if (!std::isfinite(db_span) || !std::isfinite(deg_span)) {
+        return std::nullopt;
+    }
+    return RepeatabilityEstimate{db_span, deg_span};
 }
 
 std::vector<double> unwrap_phase_deg(const std::vector<std::complex<double>>& s_tilde)

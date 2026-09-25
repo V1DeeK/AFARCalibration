@@ -111,6 +111,31 @@ bool requireBool(const json& v, std::string_view path, bool& out, std::string& d
     return true;
 }
 
+}  // namespace
+
+bool parseSParameter(std::string_view text, SParameter& out) noexcept
+{
+    if (text == "S11") {
+        out = SParameter::S11;
+        return true;
+    }
+    if (text == "S12") {
+        out = SParameter::S12;
+        return true;
+    }
+    if (text == "S21") {
+        out = SParameter::S21;
+        return true;
+    }
+    if (text == "S22") {
+        out = SParameter::S22;
+        return true;
+    }
+    return false;
+}
+
+namespace {
+
 bool parseVna(const json& j, VnaConfig& out, std::string& diagnostics)
 {
     static const std::set<std::string> allowed = {
@@ -141,9 +166,12 @@ bool parseVna(const json& j, VnaConfig& out, std::string& diagnostics)
     if (!requireString(j.at("s_parameter"), "vna.s_parameter", out.s_parameter, diagnostics)) {
         return false;
     }
-    if (out.s_parameter != "S21") {
-        diagnostics = "vna.s_parameter: must be 'S21' for stage 1";
-        return false;
+    {
+        SParameter parsed{};
+        if (!parseSParameter(out.s_parameter, parsed)) {
+            diagnostics = "vna.s_parameter: must be one of S11|S12|S21|S22";
+            return false;
+        }
     }
 
     std::int64_t f_start = 0;
@@ -203,8 +231,8 @@ bool parseVna(const json& j, VnaConfig& out, std::string& diagnostics)
     if (!requireInt(j.at("averages"), "vna.averages", averages, diagnostics)) {
         return false;
     }
-    if (averages < 1) {
-        diagnostics = "vna.averages: must be >= 1";
+    if (averages < 1 || averages > 999) {
+        diagnostics = "vna.averages: out of instrument range 1..999";
         return false;
     }
     out.averages = static_cast<int>(averages);

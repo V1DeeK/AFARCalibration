@@ -1,7 +1,11 @@
 #pragma once
 
+#include <QString>
 #include <QVector>
 #include <QWidget>
+
+class QMouseEvent;
+class QWheelEvent;
 
 /// Мини-графики |S21| (дБ) и unwrap фазы (без Qt Charts, QPainter).
 class S21PlotWidget final : public QWidget {
@@ -15,17 +19,49 @@ public:
                    const QVector<double>& phaseUnwrapDeg);
     void clearCurves();
 
+    void setPanelTitles(const QString& magTitle, const QString& phaseTitle);
+    void setEmptyHint(const QString& hint);
+    void setSubtitle(const QString& subtitle);
+
+    /// Вторая линия (например residual) на нижней панели; пустой y — не рисуется.
+    void setOverlayCurves(const QVector<double>& freqGhz, const QVector<double>& y);
+
+    [[nodiscard]] double visibleStartFraction() const noexcept { return m_viewLeft; }
+    [[nodiscard]] double visibleSpanFraction() const noexcept { return m_viewRight - m_viewLeft; }
+
+public slots:
+    void resetView();
+
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
 
 private:
     void paintPanel(QPainter& p,
                     const QRect& area,
                     const QString& title,
-                    const QString& yUnit,
-                    const QVector<double>& y) const;
+                    const QVector<double>& y,
+                    const QVector<double>& overlayFreq,
+                    const QVector<double>& overlayY) const;
 
     QVector<double> m_freqGhz;
     QVector<double> m_magDb;
     QVector<double> m_phaseDeg;
+    QVector<double> m_overlayFreqGhz;
+    QVector<double> m_overlayY;
+
+    QString m_magTitle = QStringLiteral("|S21| (модуль, дБ)");
+    QString m_phaseTitle = QStringLiteral("фаза unwrap (°)");
+    QString m_emptyHint =
+        QStringLiteral("Нет данных свипа — нажмите Старт или выберите ячейку матрицы");
+    QString m_subtitle;
+
+    double m_viewLeft = 0.0;
+    double m_viewRight = 1.0;
+    bool m_dragging = false;
+    double m_lastDragX = 0.0;
 };

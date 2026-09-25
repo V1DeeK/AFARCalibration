@@ -34,12 +34,20 @@ public slots:
                       int port,
                       const QString& comPort,
                       bool allowDirectAccess);
-    /// connect + *IDN? (и disconnect для имитатора не обязателен).
+    /// connect + *IDN? через оркестратор (Idle), не напрямую IVna.
     void probeVna();
+    /// GAP-WIZ-001: короткий пробный съём кодов через оркестратор (Idle).
+    void runProbeCodes(double fStartHz,
+                       double fStopHz,
+                       int points,
+                       int ifbwHz,
+                       double powerDbm,
+                       int averages);
     void prepare(const QString& dataRoot,
                  const QString& runConfigPath,
                  const QString& attenuatorCsvPath,
-                 bool forceSafeState);
+                 bool forceSafeState,
+                 const QString& vnaCalibrationId = QString());
     void prepareRecovery(const QString& seriesDir);
     void start();
     void pause();
@@ -61,6 +69,7 @@ signals:
     void stateChanged(int state, const QString& russianText, const QString& colorName);
     void prepareFinished(bool ok, const QString& diagnostics);
     void probeFinished(bool ok, const QString& idnOrError);
+    void probeCodesFinished(bool ok, const QString& message);
     void progressChanged(qint64 completed,
                          qint64 total,
                          int channel,
@@ -70,9 +79,21 @@ signals:
     void sweepPreview(const QVector<double>& freqGhz,
                       const QVector<double>& magDb,
                       const QVector<double>& phaseUnwrapDeg);
+    /// Полный свип S11/S21/S12/S22 (mag + unwrap phase) из lastMeasuredSweep.
+    void sparamsPreview(const QVector<double>& freqGhz,
+                        const QVector<double>& s11mag,
+                        const QVector<double>& s11ph,
+                        const QVector<double>& s21mag,
+                        const QVector<double>& s21ph,
+                        const QVector<double>& s12mag,
+                        const QVector<double>& s12ph,
+                        const QVector<double>& s22mag,
+                        const QVector<double>& s22ph);
     void cellSweepPreview(const QVector<double>& freqGhz,
                           const QVector<double>& magDb,
                           const QVector<double>& phaseUnwrapDeg);
+    /// UTC последнего STATE_OK слота. Пустая строка — события нет.
+    void cellSlotRecordedUtc(int channel, int attCode, int phase, const QString& timestampUtc);
     void pathsChanged(const QString& seriesRoot,
                       const QString& runConfig,
                       const QString& attenuatorCsv,
@@ -82,6 +103,34 @@ signals:
                       const QString& report,
                       const QString& manifest,
                       const QString& runEvents);
+    /// Путь, число valid/total и фрагмент с диска после Complete.
+    /// valid/total < 0 — файл не прочитан. Для манифеста счётчик — число строк.
+    /// *Flat — mag≈0 / s21_re≈1 (типичный SIM).
+    void seriesArtifactsPreview(const QString& runId,
+                                qint64 completedStates,
+                                const QString& directPath,
+                                qint64 directValid,
+                                qint64 directTotal,
+                                bool directFlat,
+                                const QString& directFragment,
+                                const QString& inversePath,
+                                qint64 inverseValid,
+                                qint64 inverseTotal,
+                                bool inverseFlat,
+                                const QString& inverseFragment,
+                                const QString& reportPath,
+                                qint64 reportValid,
+                                const QString& reportFragment,
+                                const QString& manifestPath,
+                                qint64 manifestLines,
+                                const QString& manifestFragment);
+    /// PLOT-010: mag + phase_error первой valid-строки прямой LUT (парсинг в worker).
+    void directLutCurvePreview(const QVector<double>& freqGhz,
+                               const QVector<double>& magDb,
+                               const QVector<double>& phaseErrorDeg,
+                               int channel,
+                               int attCode,
+                               int phaseCode);
     void matrixSnapshot(int channel,
                         int attCode,
                         int measuringPhase,
@@ -102,6 +151,7 @@ private:
     void emitState();
     void emitProgress();
     void emitPaths();
+    void emitArtifactPreviews();
     void emitMatrix(int channel, int attCode);
     void maybeEmitSweepPreview();
     void updateEta(qint64 completed, qint64 total);
@@ -134,4 +184,5 @@ private:
     QElapsedTimer m_etaTimer;
     qint64 m_etaBaseCompleted = -1;
     bool m_etaActive = false;
+    bool m_artifactPreviewSent = false;
 };

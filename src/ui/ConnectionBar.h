@@ -8,7 +8,7 @@ class QLineEdit;
 class QPushButton;
 class QSpinBox;
 
-/// Полоса соединений (UI-01): C2220, контроллер, температура, статус, выбор транспорта VNA.
+/// Полоса соединений (UI-01): VNA, контроллер, температура, статус, выбор транспорта VNA.
 class ConnectionBar final : public QFrame {
     Q_OBJECT
 
@@ -21,6 +21,8 @@ public:
     void setRunStatus(const QString& text, const QString& colorName);
     void setDiagnostic(const QString& text);
     void setThemeButtonText(const QString& text);
+    /// UI-202: постоянная метка «имитатор» / «живой VNA».
+    void setDataSourceText(const QString& text);
 
     void loadSettings();
     void saveSettings() const;
@@ -44,8 +46,10 @@ private:
 
     QLabel* m_vna = nullptr;
     QLabel* m_controller = nullptr;
+    QLabel* m_filterReady = nullptr;
     QLabel* m_temperature = nullptr;
     QLabel* m_status = nullptr;
+    QLabel* m_source = nullptr;
     QLabel* m_diagnostic = nullptr;
     QPushButton* m_theme = nullptr;
     QComboBox* m_backend = nullptr;

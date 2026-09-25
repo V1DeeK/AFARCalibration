@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.22)
 
 project(AfarRxCalibrationStudio VERSION 0.1.0 LANGUAGES CXX)
 
@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Целевой стенд: Qt 6.8.3 (mingw_64) и MinGW 13.
+# Целевой стенд: Qt 6 и MinGW/UCRT64.
 # Префикс Qt и прочие CMAKE_PREFIX_PATH задаются снаружи, например:
 #   cmake -S . -B build -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/mingw_64
 # Здесь CMAKE_PREFIX_PATH не фиксируется и не обязателен.

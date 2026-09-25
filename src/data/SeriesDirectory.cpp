@@ -153,6 +153,10 @@ std::filesystem::path SeriesDirectory::rawS21Path() const
 {
     return joinChecked(kRawS21);
 }
+std::filesystem::path SeriesDirectory::rawS21CsvPath() const
+{
+    return joinChecked(kRawS21Csv);
+}
 std::filesystem::path SeriesDirectory::runEventsPath() const
 {
     return joinChecked(kRunEvents);

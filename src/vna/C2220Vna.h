@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-/// Драйвер ПЛАНАР C2220 / S2VNA поверх IScpiTransport.
+/// Драйвер двухпортовых ПЛАНАР C1220/C2220 / S2VNA поверх IScpiTransport.
 /// Только SCPI из docs/contracts/vna-c2220-scpi.md.
 class C2220Vna final : public IVna {
 public:
@@ -28,7 +28,9 @@ public:
     void connect() override;
     std::string identify() override;
     void configure(const SweepConfig& config) override;
+    ComplexSweep measure_trace() override;
     ComplexSweep measure_s21() override;
+    void calibrate_two_port(TwoPortCalibrationStep step) override;
     std::vector<std::string> drain_errors() override;
     void abort() noexcept override;
 

@@ -73,7 +73,7 @@
 | `model` | string | модель прибора, для этапа 1 — ПЛАНАР C2220 |
 | `host` | string | адрес Socket |
 | `port` | integer | порт Socket из профиля S2VNA |
-| `s_parameter` | string | для этапа 1 — `S21` |
+| `s_parameter` | string | `S11` \| `S12` \| `S21` \| `S22` → `SweepConfig::s_parameter`. Пример серии AFAR и профиль @1296 — обычно `S21`; съём всех 4 трасс делает оркестратор (не отдельное поле схемы). |
 | `f_start_hz` | integer (Гц) | начало полосы |
 | `f_stop_hz` | integer (Гц) | конец полосы, строго больше старта |
 | `points` | integer | число точек свипа `N_F` |
@@ -114,7 +114,7 @@
 
 Стартовые пороги ТЗ (FR-17) — настройки ПО, не аттестованная метрология изделия. В обязательный JSON т. 6.1 входят только поля таблицы выше.
 
-Машиночитаемая JSON Schema: `schemas/afar.stage1.run-config.v1.json`. Пример, валидный по схеме: `examples/run-config.example.json` (хост `127.0.0.1`, порт 5025 и `COM7` — иллюстрация профиля, не боевой стенд).
+Машиночитаемая JSON Schema: `schemas/afar.stage1.run-config.v1.json`. Примеры: `examples/run-config.example.json` (4.9–6.0 ГГц); `examples/run-config.c2220-1296.example.json` (проверка C2220 @1296 МГц, 101 точка). Хост `127.0.0.1`, порт 5025 и `COM7` — иллюстрация профиля, не боевой стенд.
 
 ## 6. `attenuator-codes.csv` (т. 6.2)
 
@@ -295,6 +295,9 @@ att_code,att_cmd_db,enabled,settle_ms
 | att_codes[] | uint16 | ось включённых кодов аттенюатора (`N_A`) |
 | phase_codes[] | uint8 | ось фаз |
 | frequency_hz[] | uint64 | ось частот, Гц |
+| meta: run_config_json | uint32 len + UTF-8 | `/meta/run_config_json` — применённый JSON |
+| meta: vna_idn | uint32 len + UTF-8 | `/meta/vna_idn` — ответ `identify()` |
+| meta: vna_calibration_id | uint32 len + UTF-8 | `/meta/vna_calibration_id`; до RMD-004 — пустая строка, серия не падает |
 | слоты состояний | см. ниже | порядок: channel × att × phase |
 | reference_s21 | re/im float64 × n_freq + флаг | форма `[n_channel, n_att+1]` |
 

@@ -46,7 +46,7 @@
         "model": {
           "type": "string",
           "minLength": 1,
-          "description": "Модель прибора. Для этапа 1 — PLANAR C2220."
+          "description": "Модель прибора. Поддерживаются PLANAR C1220 и C2220."
         },
         "host": {
           "type": "string",
@@ -61,14 +61,14 @@
         },
         "s_parameter": {
           "type": "string",
-          "const": "S21",
-          "description": "Измеряемый параметр. Этап 1 — только S21."
+          "enum": ["S11", "S12", "S21", "S22"],
+          "description": "Параметр для CALC:PAR:DEF / SweepConfig. Серия @1296: в JSON обычно S21; оркестратор может снимать все 4 трассы (S11…S22) отдельно от этого поля."
         },
         "f_start_hz": {
           "type": "integer",
           "minimum": 100000,
           "maximum": 20000000000,
-          "description": "Начало полосы, Гц (целое). Предел C2220: 100 кГц…20 ГГц. f_stop_hz строго больше f_start_hz."
+          "description": "Начало полосы, Гц (целое). Предел C1220/C2220: 100 кГц…20 ГГц. f_stop_hz строго больше f_start_hz."
         },
         "f_stop_hz": {
           "type": "integer",
@@ -80,23 +80,24 @@
           "type": "integer",
           "minimum": 2,
           "maximum": 500001,
-          "description": "Число точек свипа N_F. Предел C2220: 2…500001."
+          "description": "Число точек свипа N_F. Предел C1220/C2220: 2…500001."
         },
         "ifbw_hz": {
           "type": "integer",
           "minimum": 1,
           "maximum": 1000000,
-          "description": "Полоса ПЧ, Гц. Предел C2220: 1 Гц…1 МГц."
+          "description": "Полоса ПЧ, Гц. Предел C1220/C2220: 1 Гц…1 МГц."
         },
         "power_dbm": {
           "type": "number",
           "minimum": -60,
           "maximum": 10,
-          "description": "Мощность порта, дБм. Предел C2220: −60…+10 дБм."
+          "description": "Мощность порта, дБм. Предел C1220/C2220: −60…+10 дБм."
         },
         "averages": {
           "type": "integer",
           "minimum": 1,
+          "maximum": 999,
           "description": "Число усреднений свипа."
         }
       }

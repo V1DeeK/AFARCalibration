@@ -231,3 +231,93 @@ TEST_CASE("AT-02: invalid run_id fails", "[run_config][AT-02]")
     REQUIRE_FALSE(afar::RunConfig::parse(bad, cfg, diag));
     REQUIRE_THAT(diag, ContainsSubstring("run_id"));
 }
+
+TEST_CASE("DATA-101: s_parameter accepts S11..S22", "[run_config][DATA-101]")
+{
+    SParameter p{};
+    CHECK(afar::parseSParameter("S11", p));
+    CHECK(p == SParameter::S11);
+    CHECK(afar::parseSParameter("S12", p));
+    CHECK(p == SParameter::S12);
+    CHECK(afar::parseSParameter("S21", p));
+    CHECK(p == SParameter::S21);
+    CHECK(afar::parseSParameter("S22", p));
+    CHECK(p == SParameter::S22);
+    CHECK_FALSE(afar::parseSParameter("S33", p));
+    CHECK_FALSE(afar::parseSParameter("s21", p));
+
+    constexpr std::string_view with_s11 = R"({
+  "schema": "afar.stage1.run-config/v1",
+  "run_id": "RX16-20260924-011",
+  "vna": {
+    "model": "PLANAR C2220",
+    "host": "127.0.0.1",
+    "port": 5025,
+    "s_parameter": "S11",
+    "f_start_hz": 1246000000,
+    "f_stop_hz": 1346000000,
+    "points": 101,
+    "ifbw_hz": 1000,
+    "power_dbm": -30.0,
+    "averages": 8
+  },
+  "controller": { "driver": "serial-v1", "endpoint": "COM7" },
+  "dut": {
+    "serial": "EXAMPLE",
+    "channels": { "first": 1, "last": 16 },
+    "phase_codes": { "first": 0, "last": 63, "lsb_deg": 5.625 },
+    "attenuator_codes_file": "attenuator-codes.csv",
+    "reference": { "att_code": 0, "phase_code": 0 }
+  },
+  "timing": { "settle_ms": 20, "reference_after_phase_row": true },
+  "limits": { "max_drift_phase_deg": 1.0, "max_phase_residual_deg": 2.8125 }
+})";
+
+    afar::RunConfig cfg;
+    std::string diag;
+    REQUIRE(afar::RunConfig::parse(with_s11, cfg, diag));
+    CHECK(cfg.vna.s_parameter == "S11");
+
+    constexpr std::string_view bad_sp = R"({
+  "schema": "afar.stage1.run-config/v1",
+  "run_id": "RX16-20260924-012",
+  "vna": {
+    "model": "PLANAR C2220",
+    "host": "127.0.0.1",
+    "port": 5025,
+    "s_parameter": "S33",
+    "f_start_hz": 1246000000,
+    "f_stop_hz": 1346000000,
+    "points": 101,
+    "ifbw_hz": 1000,
+    "power_dbm": -30.0,
+    "averages": 8
+  },
+  "controller": { "driver": "serial-v1", "endpoint": "COM7" },
+  "dut": {
+    "serial": "EXAMPLE",
+    "channels": { "first": 1, "last": 16 },
+    "phase_codes": { "first": 0, "last": 63, "lsb_deg": 5.625 },
+    "attenuator_codes_file": "attenuator-codes.csv",
+    "reference": { "att_code": 0, "phase_code": 0 }
+  },
+  "timing": { "settle_ms": 20, "reference_after_phase_row": true },
+  "limits": { "max_drift_phase_deg": 1.0, "max_phase_residual_deg": 2.8125 }
+})";
+    REQUIRE_FALSE(afar::RunConfig::parse(bad_sp, cfg, diag));
+    REQUIRE_THAT(diag, ContainsSubstring("s_parameter"));
+}
+
+TEST_CASE("DATA-101: c2220-1296 example loads", "[run_config][DATA-101]")
+{
+    afar::RunConfig cfg;
+    std::string diag;
+    const auto path = examplesDir() / "run-config.c2220-1296.example.json";
+    REQUIRE(afar::RunConfig::loadFromFile(path, cfg, diag));
+    CHECK(cfg.vna.f_start_hz == 1246000000ULL);
+    CHECK(cfg.vna.f_stop_hz == 1346000000ULL);
+    CHECK(cfg.vna.points == 101);
+    CHECK(cfg.vna.ifbw_hz == 1000);
+    CHECK(cfg.vna.s_parameter == "S21");
+}
+
