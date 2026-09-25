@@ -24,7 +24,11 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     title->setStyleSheet(QStringLiteral("font-weight: 600;"));
 
     m_vna = new QLabel(QStringLiteral("C2220: нет связи"), this);
-    m_controller = new QLabel(QStringLiteral("Контроллер: нет связи"), this);
+    m_controller = new QLabel(
+        QStringLiteral("Контроллер серии: ИМИТАТОР (для S-параметров не нужен)"), this);
+    m_controller->setObjectName(QStringLiteral("controllerStatus"));
+    m_filterReady = new QLabel(QStringLiteral("S-параметры: нужна связь VNA"), this);
+    m_filterReady->setObjectName(QStringLiteral("filterReadyStatus"));
     m_temperature = new QLabel(QStringLiteral("Температура: —"), this);
     m_status = new QLabel(QStringLiteral("Статус: простой"), this);
     m_source = new QLabel(QStringLiteral("Источник: имитатор (не метрология стенда)"), this);
@@ -35,6 +39,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     row->addWidget(title);
     row->addStretch(1);
     row->addWidget(m_source);
+    row->addWidget(m_filterReady);
     row->addWidget(m_vna);
     row->addWidget(m_controller);
     row->addWidget(m_temperature);
@@ -167,14 +172,26 @@ void ConnectionBar::setVnaInfo(const QString& model, const QString& address, boo
     if (connected) {
         m_vna->setText(QStringLiteral("C2220: %1 @ %2").arg(model, address));
         m_vna->setStyleSheet(QStringLiteral("color:#0a7a2f;"));
+        m_filterReady->setText(QStringLiteral("S-параметры: ГОТОВО"));
+        m_filterReady->setStyleSheet(QStringLiteral("color:#0a7a2f; font-weight:700;"));
     } else {
         m_vna->setText(QStringLiteral("C2220: нет связи (%1 @ %2)").arg(model, address));
         m_vna->setStyleSheet(QStringLiteral("color:#8a1f11;"));
+        m_filterReady->setText(QStringLiteral("S-параметры: нужна связь VNA"));
+        m_filterReady->setStyleSheet(QStringLiteral("color:#8a1f11; font-weight:700;"));
     }
 }
 
 void ConnectionBar::setControllerInfo(const QString& iface, bool connected)
 {
+    const bool simulator = iface.contains(QStringLiteral("sim"), Qt::CaseInsensitive)
+        || iface.contains(QStringLiteral("имитатор"), Qt::CaseInsensitive);
+    if (simulator) {
+        m_controller->setText(
+            QStringLiteral("Контроллер серии: ИМИТАТОР (для S-параметров не нужен)"));
+        m_controller->setStyleSheet(QStringLiteral("color:#9a6700;"));
+        return;
+    }
     if (connected) {
         m_controller->setText(QStringLiteral("Контроллер: %1").arg(iface));
         m_controller->setStyleSheet(QStringLiteral("color:#0a7a2f;"));

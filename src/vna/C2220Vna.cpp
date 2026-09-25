@@ -295,6 +295,46 @@ ComplexSweep C2220Vna::measure_s21()
     return measure_trace();
 }
 
+void C2220Vna::calibrate_two_port(TwoPortCalibrationStep step)
+{
+    require_connected("calibrate_two_port");
+    const char* command = nullptr;
+    switch (step) {
+    case TwoPortCalibrationStep::Begin:
+        command = "SENS:CORR:COLL:METH:SOLT2 1,2";
+        break;
+    case TwoPortCalibrationStep::OpenPort1:
+        command = "SENS:CORR:COLL:OPEN 1";
+        break;
+    case TwoPortCalibrationStep::ShortPort1:
+        command = "SENS:CORR:COLL:SHOR 1";
+        break;
+    case TwoPortCalibrationStep::LoadPort1:
+        command = "SENS:CORR:COLL:LOAD 1";
+        break;
+    case TwoPortCalibrationStep::OpenPort2:
+        command = "SENS:CORR:COLL:OPEN 2";
+        break;
+    case TwoPortCalibrationStep::ShortPort2:
+        command = "SENS:CORR:COLL:SHOR 2";
+        break;
+    case TwoPortCalibrationStep::LoadPort2:
+        command = "SENS:CORR:COLL:LOAD 2";
+        break;
+    case TwoPortCalibrationStep::Thru12:
+        command = "SENS:CORR:COLL:THRU 2,1";
+        break;
+    case TwoPortCalibrationStep::Apply:
+        command = "SENS:CORR:COLL:SAVE";
+        break;
+    }
+    write_cmd(command);
+    const std::string opc = query("*OPC?");
+    if (opc.find('1') == std::string::npos) {
+        throw std::runtime_error("C2220Vna: calibration did not complete: " + opc);
+    }
+}
+
 std::vector<std::string> C2220Vna::drain_errors()
 {
     require_connected("drain_errors");

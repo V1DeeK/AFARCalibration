@@ -15,8 +15,8 @@ public:
     struct Profile {
         /// Явное подтверждение режима прямого доступа в профиле стенда (HW-VNA-05).
         bool allow_direct_access{false};
-        /// Необязательная единственная модель. Пусто = разрешены C1220 и C2220.
-        std::string required_model;
+        /// Подстрока модели в ответе *IDN? (по умолчанию C2220).
+        std::string required_model{"C2220"};
         std::uint32_t connect_timeout_ms{3000};
         std::uint32_t sweep_timeout_ms{30000};
         int measure_retries{2};

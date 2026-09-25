@@ -159,6 +159,15 @@ ComplexSweep VnaSimulator::measure_s21()
     return measure_trace();
 }
 
+void VnaSimulator::calibrate_two_port(TwoPortCalibrationStep step)
+{
+    throw_if_failure_on_io("calibrate_two_port");
+    if (!connected_) {
+        throw std::runtime_error("VnaSimulator: calibrate_two_port without connect");
+    }
+    calibrationStep_ = step;
+}
+
 std::vector<std::string> VnaSimulator::drain_errors()
 {
     // Режим drain_errors: отдаём накопленную очередь SYST:ERR?-подобных строк.
