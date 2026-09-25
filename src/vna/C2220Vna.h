@@ -33,6 +33,8 @@ public:
     void configure(const SweepConfig& config) override;
     ComplexSweep measure_trace() override;
     ComplexSweep measure_s21() override;
+    /// Считать уже отображаемую в S2VNA трассу без изменения диапазона и нового trigger.
+    ComplexSweep read_current_trace(SweepConfig* instrument_config = nullptr);
     void calibrate_one_port(OnePortCalibrationStep step, int port) override;
     void calibrate_two_port(TwoPortCalibrationStep step) override;
     std::vector<std::string> drain_errors() override;
@@ -48,6 +50,7 @@ private:
     void check_direct_access();
     void reject_if_foreign_model(const std::string& idn) const;
     ComplexSweep measure_once();
+    ComplexSweep read_trace_data(SParameter parameter, std::uint32_t expected_points);
 
     IScpiTransport& transport_;
     Profile profile_;

@@ -27,6 +27,7 @@ using afar::cal::reference_drift_phase_deg;
 using afar::cal::repeatability_from_attempts;
 using afar::cal::unwrap_degrees;
 using afar::cal::unwrap_phase_deg;
+using afar::cal::vswr_from_reflection_db;
 using afar::cal::wrap180;
 
 namespace {
@@ -68,6 +69,15 @@ TEST_CASE("attenuation and magnitude dB", "[lut_math][AT-09]")
     REQUIRE_THAT(attenuation_db(z), WithinAbs(6.020599913279624, kTol));
     REQUIRE_THAT(magnitude_db(z), WithinAbs(-6.020599913279624, kTol));
     REQUIRE_THAT(attenuation_db(z) + magnitude_db(z), WithinAbs(0.0, kTol));
+}
+
+TEST_CASE("VSWR from reflection magnitude in dB", "[lut_math][vswr]")
+{
+    REQUIRE_THAT(vswr_from_reflection_db(-6.020599913279624), WithinAbs(3.0, kTol));
+    REQUIRE_THAT(vswr_from_reflection_db(-20.0), WithinAbs(11.0 / 9.0, kTol));
+    REQUIRE_THAT(vswr_from_reflection_db(-std::numeric_limits<double>::infinity()),
+                 WithinAbs(1.0, kTol));
+    REQUIRE(std::isinf(vswr_from_reflection_db(0.0)));
 }
 
 TEST_CASE("wrap180 matches formula (6)", "[lut_math][AT-09]")

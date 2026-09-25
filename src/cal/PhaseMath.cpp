@@ -25,6 +25,15 @@ double attenuation_db(std::complex<double> s_tilde)
     return -20.0 * std::log10(mag);
 }
 
+double vswr_from_reflection_db(double reflection_db)
+{
+    const double gamma = std::pow(10.0, reflection_db / 20.0);
+    if (!std::isfinite(gamma) || gamma >= 1.0) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return (1.0 + gamma) / (1.0 - gamma);
+}
+
 double arg_deg(std::complex<double> s_tilde)
 {
     return std::atan2(s_tilde.imag(), s_tilde.real()) * (180.0 / std::numbers::pi_v<double>);

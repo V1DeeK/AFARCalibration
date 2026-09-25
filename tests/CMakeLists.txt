@@ -142,9 +142,11 @@ add_executable(test_ui_interactions
     ${PROJECT_SOURCE_DIR}/src/ui/ConnectionBar.h
     ${PROJECT_SOURCE_DIR}/src/ui/S21PlotWidget.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/S21PlotWidget.h
+    ${PROJECT_SOURCE_DIR}/src/ui/MeasureTab.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/MeasureTab.h
 )
 target_include_directories(test_ui_interactions PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
-target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain Qt6::Widgets)
+target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_cal)
 set_target_properties(test_ui_interactions PROPERTIES AUTOMOC ON)
 afar_enable_warnings(test_ui_interactions)
 add_test(NAME ui_interactions COMMAND test_ui_interactions)

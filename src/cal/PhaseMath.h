@@ -12,6 +12,11 @@ double attenuation_db(std::complex<double> s_tilde);
 /// \(20\log_{10}|\tilde S|\) — модуль в дБ.
 double magnitude_db(std::complex<double> s_tilde);
 
+/// КСВН по модулю коэффициента отражения в дБ:
+/// \(|\Gamma| = 10^{S_{ii}/20}\), КСВН = \((1+|\Gamma|)/(1-|\Gamma|)\).
+/// При |Гамма| >= 1 или неконечном значении возвращает +Inf.
+double vswr_from_reflection_db(double reflection_db);
+
 /// \(\arg(\tilde S)\) в градусах, без развёртки, диапазон (−180, 180].
 double arg_deg(std::complex<double> s_tilde);
 

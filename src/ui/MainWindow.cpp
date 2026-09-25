@@ -107,6 +107,13 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_worker, &MeasureWorker::etaChanged, this, &MainWindow::onEtaChanged);
     connect(m_worker, &MeasureWorker::sweepPreview, this, &MainWindow::onSweepPreview);
     connect(m_worker, &MeasureWorker::sparamsPreview, this, &MainWindow::onSparamsPreview);
+    connect(m_worker, &MeasureWorker::instrumentTraceDetected, this,
+            [this](double fStartHz, double fStopHz, int points, int ifbwHz,
+                   double powerDbm, int sParameter) {
+                m_measure->applyRunConfigDefaults(fStartHz, fStopHz, points, ifbwHz,
+                                                  powerDbm, m_measure->averages());
+                m_measure->showInstrumentTrace(sParameter);
+            });
     connect(m_worker, &MeasureWorker::pathsChanged, this, &MainWindow::onPaths);
     connect(m_worker, &MeasureWorker::matrixSnapshot, this, &MainWindow::onMatrixSnapshot);
     connect(m_worker, &MeasureWorker::axesChanged, this,
@@ -139,6 +146,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_measure, &MeasureTab::openWizardRequested, this, &MainWindow::onOpenWizard);
     connect(m_measure, &MeasureTab::resumeSeriesRequested, this, &MainWindow::onResumeSeries);
     connect(m_measure, &MeasureTab::measureNowRequested, this, &MainWindow::onMeasureNow);
+    connect(m_measure, &MeasureTab::refreshLiveTraceRequested, this, &MainWindow::onProbeVna);
     connect(m_measure, &MeasureTab::calibrateStepRequested, this, &MainWindow::onCalibrateStep);
     connect(m_worker, &MeasureWorker::calibrateTwoPortFinished, m_measure,
             &MeasureTab::onCalibrateStepFinished, Qt::QueuedConnection);
@@ -151,7 +159,7 @@ MainWindow::MainWindow(QWidget* parent)
                         message.isEmpty() ? QStringLiteral("Измерить сейчас: отказ") : message);
                 } else {
                     m_connections->setDiagnostic(QStringLiteral("Измерить сейчас: OK"));
-                    m_measure->setStageHighlight(3);
+                    m_measure->setStageHighlight(7);
                 }
             });
 
@@ -338,6 +346,12 @@ void MainWindow::onMeasureNow()
         || st == RunState::Finalizing) {
         m_connections->setDiagnostic(
             QStringLiteral("«Измерить сейчас» недоступно во время серии"));
+        return;
+    }
+    if (!(m_measure->fStartHz() < m_measure->fStopHz())) {
+        m_connections->setDiagnostic(QStringLiteral(
+            "Диапазон не применён: f нач. должна быть меньше f кон.; прежний график сохранён. "
+            "Для 1,160 ГГц введите 1160 МГц или 1,160 ГГц."));
         return;
     }
     onApplyVnaSettings();

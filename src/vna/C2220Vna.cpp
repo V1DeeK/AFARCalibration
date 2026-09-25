@@ -1,6 +1,7 @@
 #include "C2220Vna.h"
 
 #include <charconv>
+#include <cmath>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -106,6 +107,33 @@ const char* s_parameter_scpi(SParameter p)
         return "S22";
     }
     return "S21";
+}
+
+double parse_single_double(const std::string& reply, const char* command)
+{
+    const auto values = parse_ascii_doubles(reply);
+    if (values.size() != 1 || !std::isfinite(values.front())) {
+        throw std::runtime_error(std::string("C2220Vna: unexpected ") + command
+                                 + " reply: " + reply);
+    }
+    return values.front();
+}
+
+SParameter parse_s_parameter(const std::string& reply)
+{
+    if (reply.find("S11") != std::string::npos) {
+        return SParameter::S11;
+    }
+    if (reply.find("S21") != std::string::npos) {
+        return SParameter::S21;
+    }
+    if (reply.find("S12") != std::string::npos) {
+        return SParameter::S12;
+    }
+    if (reply.find("S22") != std::string::npos) {
+        return SParameter::S22;
+    }
+    throw std::runtime_error("C2220Vna: unknown CALC:PAR:DEF? reply: " + reply);
 }
 
 }  // namespace
@@ -218,28 +246,33 @@ ComplexSweep C2220Vna::measure_once()
         throw std::runtime_error("C2220Vna: unexpected *OPC? reply: " + opc);
     }
 
-    const std::string sdat = query("CALC:DATA:SDAT?");
-    const auto values = parse_ascii_doubles(sdat);
-    if (values.size() != static_cast<std::size_t>(config_.points) * 2u) {
-        throw std::runtime_error("C2220Vna: SDAT length mismatch: got "
-                                 + std::to_string(values.size()) + " scalars, expected "
-                                 + std::to_string(static_cast<std::size_t>(config_.points) * 2u));
-    }
+    return read_trace_data(config_.s_parameter, config_.points);
+}
 
+ComplexSweep C2220Vna::read_trace_data(SParameter parameter, std::uint32_t expected_points)
+{
     const std::string xax = query("CALC:DATA:XAX?");
     const auto axis = parse_ascii_doubles(xax);
-    if (axis.size() != config_.points) {
+    if (axis.size() < 2 || (expected_points > 0 && axis.size() != expected_points)) {
         throw std::runtime_error("C2220Vna: XAX length mismatch: got "
                                  + std::to_string(axis.size()) + ", expected "
-                                 + std::to_string(config_.points));
+                                 + std::to_string(expected_points));
+    }
+
+    const std::string sdat = query("CALC:DATA:SDAT?");
+    const auto values = parse_ascii_doubles(sdat);
+    if (values.size() != axis.size() * 2u) {
+        throw std::runtime_error("C2220Vna: SDAT length mismatch: got "
+                                 + std::to_string(values.size()) + " scalars, expected "
+                                 + std::to_string(axis.size() * 2u));
     }
 
     ComplexSweep sweep;
-    sweep.frequency_hz.resize(config_.points);
+    sweep.frequency_hz.resize(axis.size());
     sweep.overload = false;
 
     std::vector<std::complex<double>>* trace = nullptr;
-    switch (config_.s_parameter) {
+    switch (parameter) {
     case SParameter::S11:
         trace = &sweep.s11;
         break;
@@ -253,12 +286,14 @@ ComplexSweep C2220Vna::measure_once()
         trace = &sweep.s22;
         break;
     }
-    trace->resize(config_.points);
+    trace->resize(axis.size());
 
-    for (std::uint32_t i = 0; i < config_.points; ++i) {
-        sweep.frequency_hz[i] = static_cast<std::uint64_t>(axis[i] + 0.5);
-        (*trace)[i] = {values[static_cast<std::size_t>(i) * 2u],
-                       values[static_cast<std::size_t>(i) * 2u + 1u]};
+    for (std::size_t i = 0; i < axis.size(); ++i) {
+        if (!std::isfinite(axis[i]) || axis[i] < 0.0) {
+            throw std::runtime_error("C2220Vna: invalid frequency axis value");
+        }
+        sweep.frequency_hz[i] = static_cast<std::uint64_t>(std::llround(axis[i]));
+        (*trace)[i] = {values[i * 2u], values[i * 2u + 1u]};
     }
     return sweep;
 }
@@ -294,6 +329,34 @@ ComplexSweep C2220Vna::measure_s21()
         throw std::runtime_error("C2220Vna: measure_s21 requires s_parameter == S21");
     }
     return measure_trace();
+}
+
+ComplexSweep C2220Vna::read_current_trace(SweepConfig* instrument_config)
+{
+    require_connected("read_current_trace");
+    transport_.set_io_timeout_ms(profile_.sweep_timeout_ms);
+
+    SweepConfig observed{};
+    observed.f_start_hz = static_cast<std::uint64_t>(
+        std::llround(parse_single_double(query("SENS:FREQ:STAR?"), "SENS:FREQ:STAR?")));
+    observed.f_stop_hz = static_cast<std::uint64_t>(
+        std::llround(parse_single_double(query("SENS:FREQ:STOP?"), "SENS:FREQ:STOP?")));
+    observed.points = static_cast<std::uint32_t>(
+        std::llround(parse_single_double(query("SENS:SWE:POIN?"), "SENS:SWE:POIN?")));
+    observed.ifbw_hz = static_cast<std::uint32_t>(
+        std::llround(parse_single_double(query("SENS:BAND?"), "SENS:BAND?")));
+    observed.power_dbm = parse_single_double(query("SOUR:POW?"), "SOUR:POW?");
+    observed.averages = 1;
+    observed.s_parameter = parse_s_parameter(query("CALC:PAR:DEF?"));
+    if (observed.points < 2 || observed.f_stop_hz < observed.f_start_hz) {
+        throw std::runtime_error("C2220Vna: invalid current sweep settings");
+    }
+
+    ComplexSweep sweep = read_trace_data(observed.s_parameter, observed.points);
+    if (instrument_config != nullptr) {
+        *instrument_config = observed;
+    }
+    return sweep;
 }
 
 void C2220Vna::calibrate_one_port(OnePortCalibrationStep step, int port)

@@ -2,13 +2,16 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "ConnectionBar.h"
+#include "MeasureTab.h"
 #include "S21PlotWidget.h"
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QImage>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPointF>
+#include <QPushButton>
 #include <QWheelEvent>
 
 namespace {
@@ -71,4 +74,76 @@ TEST_CASE("plot wheel zooms and reset restores the full range", "[ui]")
     plot.resetView();
     REQUIRE(plot.visibleStartFraction() == Catch::Approx(0.0));
     REQUIRE(plot.visibleSpanFraction() == Catch::Approx(1.0));
+}
+
+TEST_CASE("plot overlays traces and requests multiple markers", "[ui]")
+{
+    (void)application();
+    S21PlotWidget plot;
+    plot.resize(800, 500);
+    const QVector<double> frequency = {1.0, 1.1, 1.2};
+    plot.setTraces({
+        {QStringLiteral("S11"), frequency, {-10, -11, -12}, {0, 10, 20}, QColor(Qt::blue)},
+        {QStringLiteral("S21"), frequency, {-1, -2, -3}, {30, 40, 50}, QColor(Qt::green)},
+    });
+    REQUIRE(plot.traceCount() == 2);
+
+    QVector<double> requested;
+    QObject::connect(&plot, &S21PlotWidget::markerRequested,
+                     [&requested](double value) { requested.push_back(value); });
+    plot.setMarkerPlacementEnabled(true);
+    QMouseEvent first(QEvent::MouseButtonPress, QPointF(300, 100), QPointF(300, 100),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent second(QEvent::MouseButtonPress, QPointF(500, 100), QPointF(500, 100),
+                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&plot, &first);
+    QCoreApplication::sendEvent(&plot, &second);
+    REQUIRE(requested.size() == 2);
+    REQUIRE(requested[0] < requested[1]);
+
+    plot.setMarkerFrequencies({1.1});
+    QImage rendered(plot.size(), QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(Qt::transparent);
+    plot.render(&rendered);
+    REQUIRE(rendered.pixelColor(10, 300) != QColor(Qt::green));
+}
+
+TEST_CASE("partial instrument trace does not erase other S-parameters", "[ui]")
+{
+    (void)application();
+    MeasureTab tab;
+    const QVector<double> oldAxis{1.0, 1.1, 1.2};
+    const QVector<double> oldMag{-10.0, -11.0, -12.0};
+    const QVector<double> oldPhase{0.0, 1.0, 2.0};
+    tab.setSparamsCurves(oldAxis,
+                         oldMag, oldPhase,
+                         oldMag, oldPhase,
+                         oldMag, oldPhase,
+                         oldMag, oldPhase);
+
+    const QVector<double> newAxis{2.0, 2.1, 2.2, 2.3};
+    const QVector<double> newMag{-20.0, -21.0, -22.0, -23.0};
+    const QVector<double> newPhase{3.0, 4.0, 5.0, 6.0};
+    tab.setSparamsCurves(newAxis,
+                         {}, {},
+                         {}, {},
+                         newMag, newPhase,
+                         {}, {});
+
+    auto* s11 = tab.findChild<QPushButton*>(QStringLiteral("graphTraceS11"));
+    auto* s21 = tab.findChild<QPushButton*>(QStringLiteral("graphTraceS21"));
+    auto* s12 = tab.findChild<QPushButton*>(QStringLiteral("graphTraceS12"));
+    auto* plot = tab.findChild<S21PlotWidget*>(QStringLiteral("graphPlot0"));
+    REQUIRE(s11 != nullptr);
+    REQUIRE(s21 != nullptr);
+    REQUIRE(s12 != nullptr);
+    REQUIRE(plot != nullptr);
+
+    s21->setChecked(false);
+    s11->setChecked(true);
+    REQUIRE(plot->primaryPointCount() == oldAxis.size());
+
+    s11->setChecked(false);
+    s12->setChecked(true);
+    REQUIRE(plot->primaryPointCount() == newAxis.size());
 }

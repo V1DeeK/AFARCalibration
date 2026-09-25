@@ -1,14 +1,19 @@
 #pragma once
 
+#include <QStringList>
 #include <QVector>
 #include <QWidget>
+#include <array>
 
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
+class QGridLayout;
 class QLabel;
+class QLineEdit;
 class QListWidget;
+class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
 class QSpinBox;
@@ -46,6 +51,8 @@ public:
                           const QVector<double>& s12ph,
                           const QVector<double>& s22mag,
                           const QVector<double>& s22ph);
+    /// Выбрать фактически активный параметр S2VNA и открыть страницу графика.
+    void showInstrumentTrace(int sParameter);
     void setStandCheck(bool connectionsOk,
                        bool idnOk,
                        bool calOk,
@@ -103,6 +110,7 @@ signals:
     void resumeSeriesRequested();
     /// UI-MEAS-001: разовый съём без серии.
     void measureNowRequested();
+    void refreshLiveTraceRequested();
     /// CAL-UI: 0 = one-port OSL, 1 = two-port SOLT; step — enum как int; port 1|2 (для two-port игнор).
     void calibrateStepRequested(int kind, int step, int port);
 
@@ -124,6 +132,13 @@ private:
     QWidget* makeDirectPage();
     QWidget* makeInversePage();
     QWidget* makeValidationPage();
+    QWidget* makeGraphsPage();
+    void refreshGraphsPage();
+    void refreshMarkerTerminal();
+    void addGraphMarker(double freqGhz);
+    void calculateGraphExpression();
+    void markSweepSettingsChanged();
+    [[nodiscard]] double graphOperandValue(const QString& token, bool* ok) const;
     void refreshCalPageText();
     void refreshSoltUi();
     void syncFreqSpinsFromHz();
@@ -156,12 +171,7 @@ private:
 
     QLabel* m_plotState = nullptr;
     QLabel* m_current = nullptr;
-    QLabel* m_plotLegend = nullptr;
     QLabel* m_nextHint = nullptr;
-    S21PlotWidget* m_plotS11 = nullptr;
-    S21PlotWidget* m_plotS21 = nullptr;
-    S21PlotWidget* m_plotS12 = nullptr;
-    S21PlotWidget* m_plotS22 = nullptr;
     QProgressBar* m_progress = nullptr;
     QLabel* m_eta = nullptr;
     QLabel* m_counter = nullptr;
@@ -192,6 +202,21 @@ private:
     QLabel* m_validFragment = nullptr;
     S21PlotWidget* m_lutPlot = nullptr;
     QLabel* m_lutPlotCaption = nullptr;
+
+    std::array<QVector<double>, 6> m_graphFreqGhz;
+    std::array<QVector<double>, 6> m_graphMag;
+    std::array<QVector<double>, 6> m_graphPhase;
+    std::array<QPushButton*, 6> m_graphTraceButtons{};
+    std::array<S21PlotWidget*, 4> m_graphPlots{};
+    QGridLayout* m_graphGrid = nullptr;
+    QPushButton* m_graphMode = nullptr;
+    QPushButton* m_graphMarkerMode = nullptr;
+    QLabel* m_graphDataStatus = nullptr;
+    QPlainTextEdit* m_graphTerminal = nullptr;
+    QLineEdit* m_graphExpression = nullptr;
+    QVector<double> m_graphMarkers;
+    QStringList m_graphCalculations;
+    bool m_graphSeparate = false;
 
     QString m_vnaCalId;
     bool m_calOk = false;

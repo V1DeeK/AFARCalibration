@@ -235,6 +235,30 @@ private:
             reply(s, "1000000000,1500000000,2000000000");
             return;
         }
+        if (cmd == "SENS:FREQ:STAR?") {
+            reply(s, "1000000000");
+            return;
+        }
+        if (cmd == "SENS:FREQ:STOP?") {
+            reply(s, "2000000000");
+            return;
+        }
+        if (cmd == "SENS:SWE:POIN?") {
+            reply(s, "3");
+            return;
+        }
+        if (cmd == "SENS:BAND?") {
+            reply(s, "10000");
+            return;
+        }
+        if (cmd == "SOUR:POW?") {
+            reply(s, "-10");
+            return;
+        }
+        if (cmd == "CALC:PAR:DEF?") {
+            reply(s, "S12");
+            return;
+        }
         // Команды без ответа (configure / TRIG:SING) — молча OK.
         if (cmd.rfind("SENS:", 0) == 0 || cmd.rfind("SOUR:", 0) == 0
             || cmd.rfind("CALC:PAR:DEF", 0) == 0 || cmd == "TRIG:SING") {
@@ -435,6 +459,32 @@ TEST_CASE("C2220Vna configure S11 fills s11 via measure_trace", "[c2220]")
     REQUIRE_FALSE(sweep.overload);
 
     REQUIRE_THROWS_AS(vna.measure_s21(), std::runtime_error);
+}
+
+TEST_CASE("C2220Vna reads current S2VNA trace without reconfiguring it", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    SweepConfig instrument{};
+    const auto sweep = vna.read_current_trace(&instrument);
+    REQUIRE(instrument.f_start_hz == 1'000'000'000ULL);
+    REQUIRE(instrument.f_stop_hz == 2'000'000'000ULL);
+    REQUIRE(instrument.points == 3);
+    REQUIRE(instrument.ifbw_hz == 10'000);
+    REQUIRE(instrument.power_dbm == Approx(-10.0));
+    REQUIRE(instrument.s_parameter == SParameter::S12);
+    REQUIRE(sweep.s12.size() == 3);
+    REQUIRE(sweep.s11.empty());
+    REQUIRE(sweep.s21.empty());
+    REQUIRE(sweep.s22.empty());
+    REQUIRE_FALSE(stub.saw_exact("TRIG:SING"));
+    REQUIRE_FALSE(stub.saw_command_prefix("SENS:FREQ:STAR "));
+    REQUIRE(stub.saw_exact("CALC:PAR:DEF?"));
 }
 
 TEST_CASE("C2220Vna calibrate_one_port SOLT1 sequence against stub", "[c2220]")
