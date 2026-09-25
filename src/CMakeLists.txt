@@ -100,7 +100,7 @@ target_include_directories(afar_report PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/report
     ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(afar_report PUBLIC afar_cal afar_data)
+target_link_libraries(afar_report PUBLIC afar_cal afar_data afar_qc)
 afar_enable_warnings(afar_report)
 
 # Версии и хеш коммита вшиваются при конфигурации. Из GUI git не вызывается.
@@ -196,6 +196,8 @@ add_executable(AfarRxCalibrationStudio WIN32
     ui/CodeMatrixTab.h
     ui/DataFormatsTab.cpp
     ui/DataFormatsTab.h
+    ui/AcceptanceAtTab.cpp
+    ui/AcceptanceAtTab.h
     ui/StartWizard.cpp
     ui/StartWizard.h
     ui/MeasureWorker.cpp
@@ -207,17 +209,23 @@ target_include_directories(AfarRxCalibrationStudio PRIVATE
 )
 file(TO_CMAKE_PATH "${PROJECT_SOURCE_DIR}/examples" _afar_examples_dir)
 target_compile_definitions(AfarRxCalibrationStudio PRIVATE
-    AFAR_EXAMPLES_DIR="${_afar_examples_dir}"
+    "AFAR_EXAMPLES_DIR=\"${_afar_examples_dir}\""
 )
 unset(_afar_examples_dir)
+# MinGW + AUTOMOC: вложенные кавычки в -D ломают генерацию moc_predefs.h.
+set_target_properties(AfarRxCalibrationStudio PROPERTIES AUTOMOC_COMPILER_PREDEFINES OFF)
 target_link_libraries(AfarRxCalibrationStudio PRIVATE
     Qt6::Widgets
     afar_measure
     afar_vna
     afar_sim
+    afar_dut
     afar_report
     afar_data
     afar_cal
     afar_qc
 )
+if(WIN32)
+    target_link_libraries(AfarRxCalibrationStudio PRIVATE Psapi)
+endif()
 afar_enable_warnings(AfarRxCalibrationStudio)

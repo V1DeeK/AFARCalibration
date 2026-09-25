@@ -65,6 +65,8 @@ public:
     [[nodiscard]] SeriesDirectory& series() { return series_; }
     [[nodiscard]] const SeriesDirectory& series() const { return series_; }
     [[nodiscard]] RunEventLog& eventLog() { return log_; }
+    /// HW-VNA-03 / UI-ERR-001: ошибки после последнего drain_errors (для GUI).
+    [[nodiscard]] std::vector<std::string> takeLastScpiErrors();
     [[nodiscard]] const std::string& lastError() const noexcept { return last_error_; }
     [[nodiscard]] const ScanOrder& scanOrder() const noexcept { return scan_; }
     [[nodiscard]] std::size_t cursor() const noexcept { return cursor_; }
@@ -85,6 +87,17 @@ public:
                        std::uint8_t phase_last,
                        std::string& diagnostics);
 
+    /// UI-MEAS-001: один цикл configure+measureAllFour без DUT/серии.
+    /// Только Idle или Ready; Running — отказ. Пишет lastMeasuredSweep.
+    bool measurePreview(const SweepConfig& sweep, std::string& diagnostics);
+
+    /// CAL-UI: один шаг SOLT через IVna::calibrate_two_port. Idle или Ready.
+    bool calibrateTwoPortStep(TwoPortCalibrationStep step, std::string& diagnostics);
+
+    /// CAL-UI: один шаг OSL/SOLT1 через IVna::calibrate_one_port. Idle или Ready.
+    /// `port` = 1 или 2.
+    bool calibrateOnePortStep(OnePortCalibrationStep step, int port, std::string& diagnostics);
+
 private:
     IVna* vna_{nullptr};
     IDutController* dut_{nullptr};
@@ -100,6 +113,7 @@ private:
     bool stop_requested_{false};
     bool sleep_enabled_{true};
     std::string last_error_;
+    std::vector<std::string> last_scpi_errors_;
     std::vector<std::uint64_t> frequency_axis_;
     ComplexSweep last_sweep_{};
     bool has_last_sweep_{false};

@@ -3,8 +3,10 @@
 #include <QVector>
 #include <QWidget>
 
+class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QGroupBox;
 class QLabel;
 class QListWidget;
 class QProgressBar;
@@ -86,6 +88,8 @@ public:
     void setRunStateGuide(int runState);
     void setUnfinishedSeriesHint(const QString& path);
     void setVnaCalibrationIdHint(const QString& id);
+    void setMeasureNowEnabled(bool enabled);
+    void onCalibrateStepFinished(bool ok, int step, const QString& message);
 
     [[nodiscard]] double fStartHz() const;
     [[nodiscard]] double fStopHz() const;
@@ -97,6 +101,10 @@ public:
 signals:
     void openWizardRequested();
     void resumeSeriesRequested();
+    /// UI-MEAS-001: разовый съём без серии.
+    void measureNowRequested();
+    /// CAL-UI: 0 = one-port OSL, 1 = two-port SOLT; step — enum как int; port 1|2 (для two-port игнор).
+    void calibrateStepRequested(int kind, int step, int port);
 
 private slots:
     void onStageClicked(int row);
@@ -104,6 +112,9 @@ private slots:
     void onFreqUnitChanged();
     void onIfbwSpinChanged();
     void onIfbwUnitChanged();
+    void onSoltConfirmClicked();
+    void onSoltResetClicked();
+    void onCalKindChanged(int index);
 
 private:
     QWidget* makeConnectionsPage();
@@ -114,11 +125,16 @@ private:
     QWidget* makeInversePage();
     QWidget* makeValidationPage();
     void refreshCalPageText();
+    void refreshSoltUi();
     void syncFreqSpinsFromHz();
     void syncIfbwSpinFromHz();
     void applyFreqSpinLimits(QDoubleSpinBox* spin, int unitIndex) const;
     [[nodiscard]] static double freqUnitScale(int unitIndex);
     [[nodiscard]] static double ifbwUnitScale(int unitIndex);
+    [[nodiscard]] QString calStepTitle(int step) const;
+    [[nodiscard]] int calApplyStep() const;
+    [[nodiscard]] int calStepCount() const;
+    [[nodiscard]] bool isOnePortCal() const;
 
     QListWidget* m_stages = nullptr;
     QStackedWidget* m_stack = nullptr;
@@ -153,6 +169,20 @@ private:
     QLabel* m_connectHow = nullptr;
     QLabel* m_unfinished = nullptr;
     QLabel* m_calText = nullptr;
+    QLabel* m_calKindHint = nullptr;
+    QComboBox* m_calKind = nullptr;
+    QComboBox* m_calPort = nullptr;
+    QLabel* m_calPortLabel = nullptr;
+    QLabel* m_soltStepLabel = nullptr;
+    QLabel* m_soltHint = nullptr;
+    QPushButton* m_soltConfirm = nullptr;
+    QPushButton* m_soltReset = nullptr;
+    QCheckBox* m_calStepResponse = nullptr;
+    QCheckBox* m_calStepThru = nullptr;
+    QGroupBox* m_calExtraGroup = nullptr;
+    int m_soltStep = 0;
+    bool m_soltBusy = false;
+    QPushButton* m_measureNow = nullptr;
     QLabel* m_linText = nullptr;
     QLabel* m_directSummary = nullptr;
     QLabel* m_directFragment = nullptr;

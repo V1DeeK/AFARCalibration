@@ -6,6 +6,8 @@
 #include "RawS21TableExport.h"
 #include "RunReportPdf.h"
 
+#include "afar/ScpiIdn.h"
+
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -527,6 +529,13 @@ void MeasurementOrchestrator::doSleep(int ms) const
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
+std::vector<std::string> MeasurementOrchestrator::takeLastScpiErrors()
+{
+    std::vector<std::string> out;
+    out.swap(last_scpi_errors_);
+    return out;
+}
+
 void MeasurementOrchestrator::drainAndLogVnaErrors(const DutState* st)
 {
     if (!vna_) {
@@ -538,11 +547,13 @@ void MeasurementOrchestrator::drainAndLogVnaErrors(const DutState* st)
             if (text.empty()) {
                 continue;
             }
+            last_scpi_errors_.push_back(text);
             logEvent(EventLevel::Warning, "VNA_SCPI_ERR", text, st);
         }
     } catch (const std::exception& ex) {
-        logEvent(EventLevel::Warning, "VNA_SCPI_ERR",
-                 std::string("drain_errors failed: ") + ex.what(), st);
+        const std::string msg = std::string("drain_errors failed: ") + ex.what();
+        last_scpi_errors_.push_back(msg);
+        logEvent(EventLevel::Warning, "VNA_SCPI_ERR", msg, st);
     }
 }
 
@@ -814,6 +825,13 @@ bool MeasurementOrchestrator::stepOnce()
             (void)transitionLogged(RunState::Error, export_diag);
             return false;
         }
+        // DATA-03 / AT-11: SHA-256 и размеры — гейт Complete, не только unit-тест.
+        if (!report::verifyManifest(series_, export_diag)) {
+            last_error_ = export_diag;
+            logEvent(EventLevel::Error, "EXPORT_FAIL", export_diag);
+            (void)transitionLogged(RunState::Error, export_diag);
+            return false;
+        }
         if (!sm_.tryTransition(RunState::Complete)) {
             logEvent(EventLevel::Warning, "STATE_REJECT",
                      "rejected Finalizing -> Complete after manifest");
@@ -896,8 +914,20 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
     pdf_info.completed_states = store_.completedCount();
     pdf_info.valid_direct_count = report::countValidDirect(direct);
     pdf_info.series_path = series_.root().string();
+    pdf_info.vna_idn = store_.vnaIdn();
+    {
+        // parse_scpi_idn — afar/ScpiIdn.h; полный IDN уже в meta.
+        const auto fields = parse_scpi_idn(pdf_info.vna_idn);
+        pdf_info.vna_model = fields.model;
+        pdf_info.vna_serial = fields.serial;
+        pdf_info.vna_firmware = fields.firmware;
+    }
     pdf_info.max_drift_phase_deg = config_.limits.max_drift_phase_deg;
     pdf_info.max_phase_residual_deg = config_.limits.max_phase_residual_deg;
+    {
+        const auto thru_path = series_.root() / SeriesDirectory::kThruApproval;
+        (void)report::loadThruApprovalJson(thru_path, pdf_info);
+    }
     if (!report::writeRunReportPdf(series_.reportPath(), pdf_info, diagnostics)) {
         return false;
     }
@@ -905,6 +935,27 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
     // GAP-RAW-001: табличное сырьё т. 7.3 (до манифеста — файл попадёт в SHA-256).
     if (!report::exportRawS21Csv(series_.rawS21CsvPath(), store_, config_.run_id,
                                  series_.runEventsPath(), diagnostics)) {
+        return false;
+    }
+
+    // DATA-03 / AT-11: reopen LUT до Complete; совпадение числа valid с PDF.
+    std::vector<cal::DirectLutEntry> direct_reopen;
+    if (!report::readDirectLut(series_.directLutPath(), direct_reopen, diagnostics)) {
+        return false;
+    }
+    if (report::countValidDirect(direct_reopen) != pdf_info.valid_direct_count) {
+        diagnostics = "valid_direct_count mismatch after reopen";
+        return false;
+    }
+    std::vector<report::InverseLutEntry> inverse_reopen;
+    if (!report::readInverseLut(series_.inverseLutPath(), inverse_reopen, diagnostics)) {
+        return false;
+    }
+    if (report::countValidInverse(inverse_reopen) != report::countValidInverse(inverse)) {
+        diagnostics = "valid_inverse_count mismatch after reopen";
+        return false;
+    }
+    if (!report::isValidPdfSmoke(series_.reportPath(), diagnostics)) {
         return false;
     }
 
@@ -938,10 +989,12 @@ bool MeasurementOrchestrator::probeIdentify(std::string& idn_or_diagnostics)
         }
         idn_or_diagnostics = idn;
         logEvent(EventLevel::Info, "HW_PROBE_OK", idn);
+        drainAndLogVnaErrors();
         return true;
     } catch (const std::exception& ex) {
         idn_or_diagnostics = ex.what();
         last_error_ = idn_or_diagnostics;
+        drainAndLogVnaErrors();
         vna_->abort();
         logEvent(EventLevel::Error, "HW_PROBE_FAIL", idn_or_diagnostics);
         return false;
@@ -1020,6 +1073,109 @@ bool MeasurementOrchestrator::runProbeCodes(const SweepConfig& sweep,
         return true;
     } catch (const std::exception& ex) {
         return fail(ex.what());
+    }
+}
+
+bool MeasurementOrchestrator::measurePreview(const SweepConfig& sweep, std::string& diagnostics)
+{
+    diagnostics.clear();
+    last_error_.clear();
+    if (!vna_) {
+        diagnostics = "VNA pointer is null";
+        last_error_ = diagnostics;
+        return false;
+    }
+    const auto st = sm_.state();
+    if (st != RunState::Idle && st != RunState::Ready) {
+        diagnostics = "measurePreview: только Idle или Ready (серия не должна идти)";
+        last_error_ = diagnostics;
+        return false;
+    }
+    try {
+        if (st == RunState::Idle) {
+            vna_->connect();
+        }
+        last_sweep_ = measureAllFour(*vna_, sweep);
+        has_last_sweep_ = true;
+        drainAndLogVnaErrors();
+        diagnostics = "measurePreview: S11/S21/S12/S22 OK";
+        logEvent(EventLevel::Info, "MEASURE_PREVIEW_OK", diagnostics);
+        return true;
+    } catch (const std::exception& ex) {
+        diagnostics = ex.what();
+        last_error_ = diagnostics;
+        drainAndLogVnaErrors();
+        logEvent(EventLevel::Error, "MEASURE_PREVIEW_FAIL", diagnostics);
+        return false;
+    }
+}
+
+bool MeasurementOrchestrator::calibrateTwoPortStep(TwoPortCalibrationStep step,
+                                                   std::string& diagnostics)
+{
+    diagnostics.clear();
+    last_error_.clear();
+    if (!vna_) {
+        diagnostics = "VNA pointer is null";
+        last_error_ = diagnostics;
+        return false;
+    }
+    const auto st = sm_.state();
+    if (st != RunState::Idle && st != RunState::Ready) {
+        diagnostics = "calibrateTwoPortStep: только Idle или Ready";
+        last_error_ = diagnostics;
+        return false;
+    }
+    try {
+        if (st == RunState::Idle) {
+            vna_->connect();
+        }
+        vna_->calibrate_two_port(step);
+        drainAndLogVnaErrors();
+        diagnostics = "calibrate_two_port step OK";
+        logEvent(EventLevel::Info, "CAL_STEP_OK", diagnostics);
+        return true;
+    } catch (const std::exception& ex) {
+        diagnostics = ex.what();
+        last_error_ = diagnostics;
+        drainAndLogVnaErrors();
+        logEvent(EventLevel::Error, "CAL_STEP_FAIL", diagnostics);
+        return false;
+    }
+}
+
+bool MeasurementOrchestrator::calibrateOnePortStep(OnePortCalibrationStep step,
+                                                   int port,
+                                                   std::string& diagnostics)
+{
+    diagnostics.clear();
+    last_error_.clear();
+    if (!vna_) {
+        diagnostics = "VNA pointer is null";
+        last_error_ = diagnostics;
+        return false;
+    }
+    const auto st = sm_.state();
+    if (st != RunState::Idle && st != RunState::Ready) {
+        diagnostics = "calibrateOnePortStep: только Idle или Ready";
+        last_error_ = diagnostics;
+        return false;
+    }
+    try {
+        if (st == RunState::Idle) {
+            vna_->connect();
+        }
+        vna_->calibrate_one_port(step, port);
+        drainAndLogVnaErrors();
+        diagnostics = "calibrate_one_port step OK";
+        logEvent(EventLevel::Info, "CAL_ONE_PORT_OK", diagnostics);
+        return true;
+    } catch (const std::exception& ex) {
+        diagnostics = ex.what();
+        last_error_ = diagnostics;
+        drainAndLogVnaErrors();
+        logEvent(EventLevel::Error, "CAL_ONE_PORT_FAIL", diagnostics);
+        return false;
     }
 }
 

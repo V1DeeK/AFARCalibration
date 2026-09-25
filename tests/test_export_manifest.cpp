@@ -119,11 +119,22 @@ TEST_CASE("AT-11 export: parquet reopen, sha256, valid count",
         REQUIRE(body.find(std::string("compiler: ") + AFAR_CXX_COMPILER_ID) != std::string::npos);
         REQUIRE(body.find("max_drift_phase_deg: 1") != std::string::npos);
         REQUIRE(body.find("max_phase_residual_deg: 2.8125") != std::string::npos);
+        REQUIRE(body.find("vna_model_sn_fw: C2220 / SIM0001 / 1.0") != std::string::npos);
+        REQUIRE(body.find("vna_idn: PLANAR,C2220,SIM0001,1.0") != std::string::npos);
         const std::string thru =
             "THRU: \xD0\xBD\xD0\xB5 \xD0\xB8\xD0\xB7\xD0\xBC\xD0\xB5\xD1\x80\xD0\xB5\xD0\xBD / "
             "\xD0\xB7\xD0\xBD\xD0\xB0\xD1\x87\xD0\xB5\xD0\xBD\xD0\xB8\xD1\x8F "
             "\xD0\xBC\xD0\xB0\xD1\x81\xD1\x82\xD0\xB5\xD1\x80\xD0\xB0";
         REQUIRE(body.find(thru) != std::string::npos);
+        REQUIRE(body.find("thru_limit_mag_db: 0.2") != std::string::npos);
+        REQUIRE(body.find("thru_limit_phase_deg: 2") != std::string::npos);
+        REQUIRE(body.find("\xD1\x83\xD1\x82\xD0\xB2\xD0\xB5\xD1\x80\xD0\xB6\xD0\xB4\xD0\xB5\xD0\xBD\xD0"
+                          "\xBE \xD0\xBC\xD0\xB5\xD1\x82\xD1\x80\xD0\xBE\xD0\xBB\xD0\xBE\xD0\xB3\xD0"
+                          "\xBE\xD0\xBC: \xD0\xBD\xD0\xB5\xD1\x82")
+                != std::string::npos);
+        REQUIRE(body.find("\xD0\xBD\xD0\xB5 \xD0\xB0\xD1\x82\xD1\x82\xD0\xB5\xD1\x81\xD1\x82\xD0\xB0"
+                          "\xD1\x86\xD0\xB8\xD1\x8F")
+                != std::string::npos);
         const std::string hash_missing =
             "\xD1\x85\xD0\xB5\xD1\x88 \xD0\xBD\xD0\xB5 \xD0\xB2\xD1\x88\xD0\xB8\xD1\x82";
         if (std::string(AFAR_GIT_COMMIT).empty()) {

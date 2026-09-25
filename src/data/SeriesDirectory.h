@@ -10,6 +10,7 @@ class SeriesDirectory {
 public:
     static constexpr const char* kRunConfig = "run-config.json";
     static constexpr const char* kAttenuatorCodes = "attenuator-codes.csv";
+    static constexpr const char* kThruApproval = "thru-approval.json";
     static constexpr const char* kRawS21 = "raw-s21.h5";
     /// Табличный экспорт т. 7.3; не подменяет kRawS21.
     static constexpr const char* kRawS21Csv = "raw-s21.csv";

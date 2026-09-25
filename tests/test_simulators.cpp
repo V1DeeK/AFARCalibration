@@ -19,6 +19,8 @@ TEST_CASE("AT-01 identify contains C2220", "[simulators]")
     const auto idn = vna.identify();
     REQUIRE_THAT(idn, ContainsSubstring("C2220"));
     REQUIRE_THAT(idn, ContainsSubstring("PLANAR"));
+    // Типичный CSV *IDN?: manufacturer,model,serial,firmware
+    REQUIRE(idn == "PLANAR,C2220,SIM0001,1.0");
 }
 
 TEST_CASE("foreign model IDN is configurable", "[simulators]")
@@ -88,6 +90,25 @@ TEST_CASE("measure_trace S11 fills s11 and measure_s21 rejects", "[simulators]")
     }
 
     REQUIRE_THROWS_AS(vna.measure_s21(), std::runtime_error);
+}
+
+TEST_CASE("VnaSimulator calibrate_one_port stores step and port", "[simulators]")
+{
+    VnaSimulator vna;
+    REQUIRE_THROWS_AS(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 1),
+                      std::runtime_error);
+    vna.connect();
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 2));
+    REQUIRE(vna.last_one_port_step() == OnePortCalibrationStep::Begin);
+    REQUIRE(vna.last_one_port() == 2);
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Open, 2));
+    REQUIRE(vna.last_one_port_step() == OnePortCalibrationStep::Open);
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Short, 2));
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Load, 2));
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Apply, 2));
+    REQUIRE(vna.last_one_port_step() == OnePortCalibrationStep::Apply);
+    REQUIRE_THROWS_AS(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 0),
+                      std::runtime_error);
 }
 
 TEST_CASE("dut apply/readback roundtrip", "[simulators]")

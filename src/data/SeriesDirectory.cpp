@@ -84,6 +84,15 @@ bool SeriesDirectory::create(const std::filesystem::path& data_root,
         return false;
     }
 
+    // FR-05: копия утверждения THRU рядом с серией (если мастер записал рядом с run-config).
+    const auto thru_src = run_config_src.parent_path() / kThruApproval;
+    if (std::filesystem::exists(thru_src, ec) && !ec) {
+        std::filesystem::copy_file(thru_src, series_abs / kThruApproval,
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+        // Не фейлим серию, если копия THRU не удалась — PDF возьмёт дефолты.
+        ec.clear();
+    }
+
     out.root_ = series_abs;
     out.run_id_ = run_id;
     return true;

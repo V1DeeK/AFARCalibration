@@ -112,3 +112,12 @@ TEST_CASE("other FR-16 gates", "[quality_gates][AT-10]")
     REQUIRE_FALSE(evaluate_valid(QualityInputs{.vna_timeout_or_error = true}));
     REQUIRE_FALSE(evaluate_valid(QualityInputs{.length_mismatch = true}));
 }
+
+TEST_CASE("FR-17 phase residual gate for inverse LUT", "[quality_gates][AT-10]")
+{
+    using afar::qc::phase_residual_within_limit;
+    QualityThresholds t;  // 2.8125°
+    REQUIRE(phase_residual_within_limit(2.8125, t));
+    REQUIRE_FALSE(phase_residual_within_limit(2.8125001, t));
+    REQUIRE_FALSE(phase_residual_within_limit(-3.0, t));
+}

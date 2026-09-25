@@ -3,6 +3,7 @@
 #include "InverseLut.h"
 #include "Normalize.h"
 #include "PhaseMath.h"
+#include "QualityGates.h"
 
 #include <cmath>
 #include <complex>
@@ -459,7 +460,11 @@ bool buildInverseLutFromDirect(const std::vector<cal::DirectLutEntry>& direct,
                     e.measured_phase_deg = sel.measured_phase_deg;
                     e.atten_residual_db = sel.atten_residual_db;
                     e.phase_residual_deg = sel.phase_residual_deg;
-                    e.valid = sel.valid;
+                    // FR-17 / AT-10: остаток фазы выше порога → valid=false в отчёте.
+                    qc::QualityThresholds th;
+                    th.max_phase_residual_deg = config.limits.max_phase_residual_deg;
+                    e.valid = sel.valid
+                        && qc::phase_residual_within_limit(sel.phase_residual_deg, th);
                 } else {
                     e.valid = false;
                 }

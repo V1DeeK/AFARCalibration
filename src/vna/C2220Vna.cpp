@@ -185,7 +185,8 @@ std::string C2220Vna::identify()
     require_connected("identify");
     const std::string idn = query("*IDN?");
     reject_if_foreign_model(idn);
-    return idn;
+    last_idn_ = parse_scpi_idn(idn);
+    return last_idn_.raw;
 }
 
 void C2220Vna::configure(const SweepConfig& config)
@@ -293,6 +294,37 @@ ComplexSweep C2220Vna::measure_s21()
         throw std::runtime_error("C2220Vna: measure_s21 requires s_parameter == S21");
     }
     return measure_trace();
+}
+
+void C2220Vna::calibrate_one_port(OnePortCalibrationStep step, int port)
+{
+    require_connected("calibrate_one_port");
+    if (port != 1 && port != 2) {
+        throw std::runtime_error("C2220Vna: calibrate_one_port port must be 1 or 2");
+    }
+    std::string command;
+    switch (step) {
+    case OnePortCalibrationStep::Begin:
+        command = "SENS:CORR:COLL:METH:SOLT1 " + std::to_string(port);
+        break;
+    case OnePortCalibrationStep::Open:
+        command = "SENS:CORR:COLL:OPEN " + std::to_string(port);
+        break;
+    case OnePortCalibrationStep::Short:
+        command = "SENS:CORR:COLL:SHOR " + std::to_string(port);
+        break;
+    case OnePortCalibrationStep::Load:
+        command = "SENS:CORR:COLL:LOAD " + std::to_string(port);
+        break;
+    case OnePortCalibrationStep::Apply:
+        command = "SENS:CORR:COLL:SAVE";
+        break;
+    }
+    write_cmd(command);
+    const std::string opc = query("*OPC?");
+    if (opc.find('1') == std::string::npos) {
+        throw std::runtime_error("C2220Vna: one-port calibration did not complete: " + opc);
+    }
 }
 
 void C2220Vna::calibrate_two_port(TwoPortCalibrationStep step)

@@ -4,6 +4,7 @@
 
 #include "../measure/RunStateMachine.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -12,6 +13,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -29,7 +31,7 @@ MeasureTab::MeasureTab(QWidget* parent)
     m_stages = new QListWidget(this);
     const QStringList stages = {
         QStringLiteral("1 Подключения"),
-        QStringLiteral("2 Калибровка ВАЦ (S2VNA)"),
+        QStringLiteral("2 Калибровка ВАЦ (OSL/SOLT)"),
         QStringLiteral("3 Линейность"),
         QStringLiteral("4 Перебор кодов"),
         QStringLiteral("5 Прямая LUT"),
@@ -107,14 +109,83 @@ QWidget* MeasureTab::makeCalPage()
 {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
-    auto* title = new QLabel(QStringLiteral("Этап 2. Калибровка ВАЦ (в S2VNA)"), page);
+    auto* title = new QLabel(QStringLiteral("Этап 2. Калибровка ВАЦ из AFAR"), page);
     title->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700;"));
+
+    auto* transportNote = new QLabel(
+        QStringLiteral(
+            "SCPI через текущий VNA-транспорт (Socket/COM); отдельный UI S2VNA для "
+            "калибровки не требуется. На имитаторе шаги проходят без стендовой "
+            "метрологии. Перед каждым шагом — подтверждение оператора."),
+        page);
+    transportNote->setWordWrap(true);
+    transportNote->setObjectName(QStringLiteral("hintLabel"));
+
+    auto* kindRow = new QHBoxLayout();
+    auto* kindLabel = new QLabel(QStringLiteral("Тип калибровки:"), page);
+    m_calKind = new QComboBox(page);
+    m_calKind->addItem(QStringLiteral("1-портовая (OSL)"), 0);
+    m_calKind->addItem(QStringLiteral("2-портовая (SOLT)"), 1);
+    m_calKind->setCurrentIndex(1); // прежнее поведение по умолчанию
+    connect(m_calKind, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &MeasureTab::onCalKindChanged);
+    kindRow->addWidget(kindLabel);
+    kindRow->addWidget(m_calKind, 1);
+
+    m_calKindHint = new QLabel(
+        QStringLiteral(
+            "1-порт — для S11/S22-трактов; 2-порт — для полного S-параметрического комплекта."),
+        page);
+    m_calKindHint->setWordWrap(true);
+    m_calKindHint->setObjectName(QStringLiteral("hintLabel"));
+
+    auto* portRow = new QHBoxLayout();
+    m_calPortLabel = new QLabel(QStringLiteral("Порт ВАЦ:"), page);
+    m_calPort = new QComboBox(page);
+    m_calPort->addItem(QStringLiteral("Порт 1"), 1);
+    m_calPort->addItem(QStringLiteral("Порт 2"), 2);
+    portRow->addWidget(m_calPortLabel);
+    portRow->addWidget(m_calPort, 1);
+
+    m_soltStepLabel = new QLabel(page);
+    m_soltStepLabel->setStyleSheet(QStringLiteral("font-weight: 600;"));
+    m_soltHint = new QLabel(page);
+    m_soltHint->setWordWrap(true);
+    m_soltHint->setObjectName(QStringLiteral("hintLabel"));
+
+    auto* btnRow = new QHBoxLayout();
+    m_soltConfirm = new QPushButton(QStringLiteral("Подтверждаю — выполнить шаг"), page);
+    m_soltConfirm->setObjectName(QStringLiteral("btnPrimary"));
+    m_soltReset = new QPushButton(QStringLiteral("Сначала"), page);
+    connect(m_soltConfirm, &QPushButton::clicked, this, &MeasureTab::onSoltConfirmClicked);
+    connect(m_soltReset, &QPushButton::clicked, this, &MeasureTab::onSoltResetClicked);
+    btnRow->addWidget(m_soltConfirm);
+    btnRow->addWidget(m_soltReset);
+    btnRow->addStretch(1);
+
+    m_calExtraGroup = new QGroupBox(QStringLiteral("Доп. чеклист Response / Thru (опционально)"), page);
+    auto* extraLay = new QVBoxLayout(m_calExtraGroup);
+    m_calStepResponse = new QCheckBox(QStringLiteral("Response (нормализация) выполнен"), m_calExtraGroup);
+    m_calStepThru = new QCheckBox(QStringLiteral("Thru выполнен"), m_calExtraGroup);
+    extraLay->addWidget(m_calStepResponse);
+    extraLay->addWidget(m_calStepThru);
+
     m_calText = new QLabel(page);
     m_calText->setWordWrap(true);
     m_calText->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
     layout->addWidget(title);
+    layout->addWidget(transportNote);
+    layout->addLayout(kindRow);
+    layout->addWidget(m_calKindHint);
+    layout->addLayout(portRow);
+    layout->addWidget(m_soltStepLabel);
+    layout->addWidget(m_soltHint);
+    layout->addLayout(btnRow);
+    layout->addWidget(m_calExtraGroup);
     layout->addWidget(m_calText);
     layout->addStretch(1);
+    onCalKindChanged(m_calKind->currentIndex());
     return page;
 }
 
@@ -229,7 +300,7 @@ QWidget* MeasureTab::makeSweepPage()
         w->setMinimumHeight(110);
         w->setPanelTitles(magTitle, phaseTitle);
         w->setEmptyHint(
-            QStringLiteral("Нет данных свипа — нажмите Старт или выберите ячейку матрицы"));
+            QStringLiteral("Нет данных — «Измерить сейчас», Старт серии или ячейка матрицы"));
         return w;
     };
     m_plotS11 = makePlot(QStringLiteral("|S11| (дБ)"), QStringLiteral("фаза unwrap (°)"));
@@ -250,6 +321,12 @@ QWidget* MeasureTab::makeSweepPage()
     grid->setColumnStretch(0, 1);
     grid->setColumnStretch(1, 1);
 
+    m_measureNow = new QPushButton(QStringLiteral("Измерить сейчас"), page);
+    m_measureNow->setObjectName(QStringLiteral("btnPrimary"));
+    m_measureNow->setToolTip(
+        QStringLiteral("Один свип S11…S22 без перебора DUT. Idle/Ready; во время серии — нет."));
+    connect(m_measureNow, &QPushButton::clicked, this, &MeasureTab::measureNowRequested);
+
     m_progress = new QProgressBar(page);
     m_progress->setRange(0, 100);
     m_progress->setValue(0);
@@ -257,6 +334,7 @@ QWidget* MeasureTab::makeSweepPage()
     m_eta = new QLabel(QStringLiteral("ETA: —"), page);
 
     center->addWidget(params);
+    center->addWidget(m_measureNow);
     center->addWidget(m_plotState);
     center->addWidget(m_current);
     center->addWidget(m_plotLegend);
@@ -462,22 +540,189 @@ void MeasureTab::refreshCalPageText()
         : QStringLiteral("vna_calibration_id: %1").arg(m_vnaCalId);
     m_calText->setText(
         QStringLiteral(
-            "Полная калибровка ВАЦ (SOLT / Response / Thru) выполняется в программе "
-            "S2VNA до серии. Здесь — только подтверждение оператора и пороги FR-05 "
-            "как настройки ПО. См. docs/S2VNA-setup.md. AFAR не шлёт SCPI калибровки.\n\n"
+            "Статус стенда (мастер / SOLT):\n"
             "Подключения: %1\n"
             "IDN C2220 / контроллер: %2\n"
             "Калибровка ВАЦ: %3\n"
             "THRU: %4\n"
-            "%5\n\n"
-            "Пороги FR-05 по умолчанию: 0,20 дБ / 2,0° — в мастере.")
+            "%5")
             .arg(m_connectionsOk ? QStringLiteral("подтверждены")
                                  : QStringLiteral("ожидают мастера"),
                  m_idnOk ? QStringLiteral("подтверждены") : QStringLiteral("ожидают мастера"),
-                 m_calOk ? QStringLiteral("подтверждена оператором (в S2VNA)")
+                 m_calOk ? QStringLiteral("подтверждена (Apply / мастер)")
                          : QStringLiteral("не подтверждена"),
                  m_thruText,
                  idLine));
+}
+
+QString MeasureTab::calStepTitle(int step) const
+{
+    if (isOnePortCal()) {
+        const int port = m_calPort ? m_calPort->currentData().toInt() : 1;
+        switch (step) {
+        case 0:
+            return QStringLiteral("Begin — начать однопортовую калибровку (порт %1)").arg(port);
+        case 1:
+            return QStringLiteral("OPEN — подключите OPEN к порту %1").arg(port);
+        case 2:
+            return QStringLiteral("SHORT — подключите SHORT к порту %1").arg(port);
+        case 3:
+            return QStringLiteral("LOAD — подключите LOAD к порту %1").arg(port);
+        case 4:
+            return QStringLiteral("Apply — применить калибровку");
+        default:
+            return QStringLiteral("Готово");
+        }
+    }
+    switch (step) {
+    case 0:
+        return QStringLiteral("Begin — начать двухпортовую калибровку");
+    case 1:
+        return QStringLiteral("OPEN порт 1 — подключите OPEN к порту 1");
+    case 2:
+        return QStringLiteral("SHORT порт 1 — подключите SHORT к порту 1");
+    case 3:
+        return QStringLiteral("LOAD порт 1 — подключите LOAD к порту 1");
+    case 4:
+        return QStringLiteral("OPEN порт 2 — подключите OPEN к порту 2");
+    case 5:
+        return QStringLiteral("SHORT порт 2 — подключите SHORT к порту 2");
+    case 6:
+        return QStringLiteral("LOAD порт 2 — подключите LOAD к порту 2");
+    case 7:
+        return QStringLiteral("THRU — соедините порты 1–2");
+    case 8:
+        return QStringLiteral("Apply — применить калибровку");
+    default:
+        return QStringLiteral("Готово");
+    }
+}
+
+bool MeasureTab::isOnePortCal() const
+{
+    return m_calKind && m_calKind->currentData().toInt() == 0;
+}
+
+int MeasureTab::calApplyStep() const
+{
+    return isOnePortCal() ? 4 : 8;
+}
+
+int MeasureTab::calStepCount() const
+{
+    return calApplyStep() + 1;
+}
+
+void MeasureTab::onCalKindChanged(int /*index*/)
+{
+    const bool one = isOnePortCal();
+    if (m_calPortLabel) {
+        m_calPortLabel->setVisible(one);
+    }
+    if (m_calPort) {
+        m_calPort->setVisible(one);
+        m_calPort->setEnabled(one && !m_soltBusy);
+    }
+    if (m_calExtraGroup) {
+        m_calExtraGroup->setVisible(!one);
+    }
+    m_soltStep = 0;
+    m_soltBusy = false;
+    m_calOk = false;
+    refreshSoltUi();
+    refreshCalPageText();
+}
+
+void MeasureTab::refreshSoltUi()
+{
+    const int apply = calApplyStep();
+    if (!m_soltStepLabel || !m_soltConfirm) {
+        return;
+    }
+    const bool one = isOnePortCal();
+    const QString kindName = one ? QStringLiteral("OSL") : QStringLiteral("SOLT");
+    if (m_calPort) {
+        m_calPort->setEnabled(one && !m_soltBusy && m_soltStep == 0);
+    }
+    if (m_calKind) {
+        m_calKind->setEnabled(!m_soltBusy && m_soltStep == 0);
+    }
+    if (m_soltStep > apply) {
+        m_soltStepLabel->setText(
+            QStringLiteral("%1: все шаги выполнены (Apply OK)").arg(kindName));
+        m_soltHint->setText(
+            QStringLiteral("Калибровка применена через текущий VNA-транспорт. "
+                           "Доп. чеклист Response/Thru — по желанию (только 2-порт)."));
+        m_soltConfirm->setEnabled(false);
+        return;
+    }
+    m_soltStepLabel->setText(QStringLiteral("Шаг %1 / %2: %3")
+                                 .arg(m_soltStep + 1)
+                                 .arg(calStepCount())
+                                 .arg(calStepTitle(m_soltStep)));
+    m_soltHint->setText(
+        one ? QStringLiteral(
+                  "Установите стандарт на выбранный порт, затем нажмите подтверждение. "
+                  "Команда уйдёт в MeasureWorker → IVna::calibrate_one_port (SOLT1).")
+            : QStringLiteral(
+                  "Установите стандарт / соединение, затем нажмите подтверждение. "
+                  "Команда уйдёт в MeasureWorker → IVna::calibrate_two_port (SOLT2)."));
+    m_soltConfirm->setEnabled(!m_soltBusy);
+}
+
+void MeasureTab::onSoltConfirmClicked()
+{
+    const int apply = calApplyStep();
+    if (m_soltBusy || m_soltStep > apply) {
+        return;
+    }
+    const auto answer = QMessageBox::question(
+        this, QStringLiteral("Подтверждение шага калибровки"),
+        QStringLiteral("Выполнить шаг:\n%1?").arg(calStepTitle(m_soltStep)),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    m_soltBusy = true;
+    refreshSoltUi();
+    const int kind = isOnePortCal() ? 0 : 1;
+    const int port = m_calPort ? m_calPort->currentData().toInt() : 1;
+    emit calibrateStepRequested(kind, m_soltStep, port);
+}
+
+void MeasureTab::onSoltResetClicked()
+{
+    m_soltStep = 0;
+    m_soltBusy = false;
+    m_calOk = false;
+    refreshSoltUi();
+    refreshCalPageText();
+}
+
+void MeasureTab::setMeasureNowEnabled(bool enabled)
+{
+    if (m_measureNow) {
+        m_measureNow->setEnabled(enabled);
+    }
+}
+
+void MeasureTab::onCalibrateStepFinished(bool ok, int step, const QString& message)
+{
+    m_soltBusy = false;
+    const int apply = calApplyStep();
+    if (ok && step == m_soltStep) {
+        if (step == apply) {
+            m_calOk = true;
+            m_soltStep = apply + 1;
+        } else {
+            ++m_soltStep;
+        }
+    } else if (!ok) {
+        QMessageBox::warning(this, QStringLiteral("Калибровка ВАЦ"),
+                             message.isEmpty() ? QStringLiteral("Шаг не выполнен") : message);
+    }
+    refreshSoltUi();
+    refreshCalPageText();
 }
 
 void MeasureTab::setStandCheck(bool connectionsOk,
