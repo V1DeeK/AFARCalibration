@@ -108,6 +108,25 @@ TEST_CASE("plot overlays traces and requests multiple markers", "[ui]")
     REQUIRE(rendered.pixelColor(10, 300) != QColor(Qt::green));
 }
 
+TEST_CASE("automatic plot markers calculate minimum maximum and average", "[ui]")
+{
+    const S21PlotTrace trace{
+        QStringLiteral("S11"),
+        {1.0, 1.1, 1.2},
+        {-3.0, 1.0, 2.0},
+        {},
+        QColor(Qt::blue),
+    };
+    const auto statistics = plotTraceStatistics(trace);
+    REQUIRE(statistics.valid);
+    REQUIRE(statistics.minValue == Catch::Approx(-3.0));
+    REQUIRE(statistics.minFrequencyGhz == Catch::Approx(1.0));
+    REQUIRE(statistics.maxValue == Catch::Approx(2.0));
+    REQUIRE(statistics.maxFrequencyGhz == Catch::Approx(1.2));
+    REQUIRE(statistics.averageValue == Catch::Approx(0.0));
+    REQUIRE(statistics.averageFrequencyGhz == Catch::Approx(1.075));
+}
+
 TEST_CASE("partial instrument trace does not erase other S-parameters", "[ui]")
 {
     (void)application();

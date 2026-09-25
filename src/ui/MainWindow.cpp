@@ -107,13 +107,6 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_worker, &MeasureWorker::etaChanged, this, &MainWindow::onEtaChanged);
     connect(m_worker, &MeasureWorker::sweepPreview, this, &MainWindow::onSweepPreview);
     connect(m_worker, &MeasureWorker::sparamsPreview, this, &MainWindow::onSparamsPreview);
-    connect(m_worker, &MeasureWorker::instrumentTraceDetected, this,
-            [this](double fStartHz, double fStopHz, int points, int ifbwHz,
-                   double powerDbm, int sParameter) {
-                m_measure->applyRunConfigDefaults(fStartHz, fStopHz, points, ifbwHz,
-                                                  powerDbm, m_measure->averages());
-                m_measure->showInstrumentTrace(sParameter);
-            });
     connect(m_worker, &MeasureWorker::pathsChanged, this, &MainWindow::onPaths);
     connect(m_worker, &MeasureWorker::matrixSnapshot, this, &MainWindow::onMatrixSnapshot);
     connect(m_worker, &MeasureWorker::axesChanged, this,
@@ -146,7 +139,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_measure, &MeasureTab::openWizardRequested, this, &MainWindow::onOpenWizard);
     connect(m_measure, &MeasureTab::resumeSeriesRequested, this, &MainWindow::onResumeSeries);
     connect(m_measure, &MeasureTab::measureNowRequested, this, &MainWindow::onMeasureNow);
-    connect(m_measure, &MeasureTab::refreshLiveTraceRequested, this, &MainWindow::onProbeVna);
+    connect(m_measure, &MeasureTab::connectAndMeasureRequested, this, &MainWindow::onProbeVna);
     connect(m_measure, &MeasureTab::calibrateStepRequested, this, &MainWindow::onCalibrateStep);
     connect(m_worker, &MeasureWorker::calibrateTwoPortFinished, m_measure,
             &MeasureTab::onCalibrateStepFinished, Qt::QueuedConnection);
@@ -622,6 +615,7 @@ void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
     if (ok) {
         m_connections->setDiagnostic(QStringLiteral("Связь OK: %1").arg(idnOrError));
         statusBar()->showMessage(QStringLiteral("VNA IDN: %1").arg(idnOrError), 8000);
+        onMeasureNow();
     } else {
         m_connections->setDiagnostic(QStringLiteral("Нет связи: %1").arg(idnOrError));
         QMessageBox::warning(

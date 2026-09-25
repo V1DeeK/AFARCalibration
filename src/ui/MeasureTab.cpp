@@ -344,7 +344,7 @@ QWidget* MeasureTab::makeSweepPage()
     m_nextHint->setWordWrap(true);
     m_nextHint->setObjectName(QStringLiteral("hintLabel"));
 
-    m_measureNow = new QPushButton(QStringLiteral("Измерить сейчас"), page);
+    m_measureNow = new QPushButton(QStringLiteral("Применить и измерить S11/S21/S12/S22"), page);
     m_measureNow->setObjectName(QStringLiteral("btnPrimary"));
     m_measureNow->setToolTip(
         QStringLiteral("Один свип S11…S22 без перебора DUT. Idle/Ready; во время серии — нет."));
@@ -473,16 +473,21 @@ QWidget* MeasureTab::makeGraphsPage()
     auto* sideLayout = new QVBoxLayout(side);
     sideLayout->setContentsMargins(8, 0, 0, 0);
 
-    auto* readLive = new QPushButton(QStringLiteral("Получить текущую трассу S2VNA"), side);
+    auto* readLive = new QPushButton(QStringLiteral("Подключить C2220 и измерить всё"), side);
     readLive->setObjectName(QStringLiteral("btnPrimary"));
     readLive->setToolTip(QStringLiteral(
-        "Проверить связь и считать активный S-параметр, диапазон и точки без изменения S2VNA"));
-    connect(readLive, &QPushButton::clicked, this, &MeasureTab::refreshLiveTraceRequested);
+        "Проверить связь и измерить S11/S21/S12/S22 по настройкам нашей программы"));
+    connect(readLive, &QPushButton::clicked, this, &MeasureTab::connectAndMeasureRequested);
 
-    auto* measureAll = new QPushButton(QStringLiteral("Измерить все S-параметры и КСВН"), side);
+    auto* measureAll = new QPushButton(QStringLiteral("Применить настройки и измерить всё"), side);
     measureAll->setToolTip(QStringLiteral(
         "Считать S11, S21, S12 и S22; КСВН-1 вычисляется из S11, КСВН-2 — из S22"));
     connect(measureAll, &QPushButton::clicked, this, &MeasureTab::measureNowRequested);
+
+    auto* openSweepSettings = new QPushButton(
+        QStringLiteral("Настройки частоты, точек и ПЧ"), side);
+    connect(openSweepSettings, &QPushButton::clicked, this,
+            [this] { setStageHighlight(3); });
 
     m_graphDataStatus = new QLabel(QStringLiteral("Реальные данные прибора ещё не получены"), side);
     m_graphDataStatus->setWordWrap(true);
@@ -584,6 +589,7 @@ QWidget* MeasureTab::makeGraphsPage()
 
     sideLayout->addWidget(readLive);
     sideLayout->addWidget(measureAll);
+    sideLayout->addWidget(openSweepSettings);
     sideLayout->addWidget(m_graphDataStatus);
     sideLayout->addWidget(traces);
     sideLayout->addWidget(markers);
@@ -689,6 +695,37 @@ void MeasureTab::addGraphMarker(double freqGhz)
 void MeasureTab::refreshMarkerTerminal()
 {
     QStringList lines;
+    QStringList automatic;
+    for (int trace = 0; trace < static_cast<int>(m_graphTraceButtons.size()); ++trace) {
+        if (!m_graphTraceButtons[trace]->isChecked()) {
+            continue;
+        }
+        const auto statistics = plotTraceStatistics({
+            kGraphNames[trace], m_graphFreqGhz[trace], m_graphMag[trace],
+            m_graphPhase[trace], kGraphColors[trace]});
+        if (!statistics.valid) {
+            continue;
+        }
+        const QString unit = trace >= 4 ? QString() : QStringLiteral(" дБ");
+        automatic << QStringLiteral("%1 MIN: %2%3 @ %4 ГГц")
+                         .arg(kGraphNames[trace])
+                         .arg(statistics.minValue, 0, 'f', 4)
+                         .arg(unit)
+                         .arg(statistics.minFrequencyGhz, 0, 'f', 6)
+                  << QStringLiteral("%1 MAX: %2%3 @ %4 ГГц")
+                         .arg(kGraphNames[trace])
+                         .arg(statistics.maxValue, 0, 'f', 4)
+                         .arg(unit)
+                         .arg(statistics.maxFrequencyGhz, 0, 'f', 6)
+                  << QStringLiteral("%1 СРЕДНЕЕ: %2%3 @ %4 ГГц")
+                         .arg(kGraphNames[trace])
+                         .arg(statistics.averageValue, 0, 'f', 4)
+                         .arg(unit)
+                         .arg(statistics.averageFrequencyGhz, 0, 'f', 6);
+    }
+    if (!automatic.isEmpty()) {
+        lines << QStringLiteral("Автоматические маркеры:") << automatic << QString();
+    }
     if (m_graphMarkers.isEmpty()) {
         lines << QStringLiteral("Включите «Ставить маркеры» и щёлкните по графику.");
     }
@@ -995,20 +1032,6 @@ void MeasureTab::setSparamsCurves(const QVector<double>& freqGhz,
             .arg(freqGhz.first(), 0, 'f', 6)
             .arg(freqGhz.last(), 0, 'f', 6));
     refreshGraphsPage();
-}
-
-void MeasureTab::showInstrumentTrace(int sParameter)
-{
-    if (sParameter < 0 || sParameter >= 4) {
-        return;
-    }
-    for (int i = 0; i < static_cast<int>(m_graphTraceButtons.size()); ++i) {
-        const QSignalBlocker blocker(m_graphTraceButtons[i]);
-        m_graphTraceButtons[i]->setChecked(i == sParameter);
-    }
-    m_graphSeparate = false;
-    refreshGraphsPage();
-    setStageHighlight(7);
 }
 
 void MeasureTab::setVnaCalibrationIdHint(const QString& id)

@@ -51,8 +51,6 @@ public:
                           const QVector<double>& s12ph,
                           const QVector<double>& s22mag,
                           const QVector<double>& s22ph);
-    /// Выбрать фактически активный параметр S2VNA и открыть страницу графика.
-    void showInstrumentTrace(int sParameter);
     void setStandCheck(bool connectionsOk,
                        bool idnOk,
                        bool calOk,
@@ -110,7 +108,7 @@ signals:
     void resumeSeriesRequested();
     /// UI-MEAS-001: разовый съём без серии.
     void measureNowRequested();
-    void refreshLiveTraceRequested();
+    void connectAndMeasureRequested();
     /// CAL-UI: 0 = one-port OSL, 1 = two-port SOLT; step — enum как int; port 1|2 (для two-port игнор).
     void calibrateStepRequested(int kind, int step, int port);
 

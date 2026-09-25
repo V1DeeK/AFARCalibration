@@ -343,27 +343,7 @@ void MeasureWorker::probeVna()
     emitConnection();
     emitState();
     emit probeFinished(ok, QString::fromStdString(idn));
-    if (ok && m_c2220) {
-        try {
-            SweepConfig instrument{};
-            const ComplexSweep sweep = m_c2220->read_current_trace(&instrument);
-            emit instrumentTraceDetected(static_cast<double>(instrument.f_start_hz),
-                                         static_cast<double>(instrument.f_stop_hz),
-                                         static_cast<int>(instrument.points),
-                                         static_cast<int>(instrument.ifbw_hz),
-                                         instrument.power_dbm,
-                                         static_cast<int>(instrument.s_parameter));
-            emitSweepPreview(sweep);
-            emit diagnostic(
-                QStringLiteral("Живая трасса S2VNA получена: %1 точек, %2…%3 ГГц")
-                    .arg(instrument.points)
-                    .arg(static_cast<double>(instrument.f_start_hz) / 1e9, 0, 'f', 6)
-                    .arg(static_cast<double>(instrument.f_stop_hz) / 1e9, 0, 'f', 6));
-        } catch (const std::exception& ex) {
-            emit diagnostic(QStringLiteral("Связь установлена, но трасса S2VNA не прочитана: %1")
-                                .arg(QString::fromUtf8(ex.what())));
-        }
-    } else if (ok) {
+    if (ok) {
         emit diagnostic(QStringLiteral("IDN: %1").arg(QString::fromStdString(idn)));
     } else {
         emit diagnostic(QString::fromStdString(idn));

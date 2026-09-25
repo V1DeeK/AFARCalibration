@@ -118,13 +118,6 @@ signals:
                         const QVector<double>& s12ph,
                         const QVector<double>& s22mag,
                         const QVector<double>& s22ph);
-    /// Текущие настройки и активный S-параметр, прочитанные из живой S2VNA.
-    void instrumentTraceDetected(double fStartHz,
-                                 double fStopHz,
-                                 int points,
-                                 int ifbwHz,
-                                 double powerDbm,
-                                 int sParameter);
     void cellSweepPreview(const QVector<double>& freqGhz,
                           const QVector<double>& magDb,
                           const QVector<double>& phaseUnwrapDeg);

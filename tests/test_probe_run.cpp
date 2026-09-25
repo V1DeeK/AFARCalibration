@@ -7,6 +7,29 @@
 
 #include <filesystem>
 
+TEST_CASE("preview measurement returns all four S-parameters", "[probe_run][sparams]")
+{
+    VnaSimulator vna;
+    DutSimulator dut;
+    afar::MeasurementOrchestrator orch(&vna, &dut);
+    SweepConfig sweep{};
+    sweep.f_start_hz = 1'260'000'000ULL;
+    sweep.f_stop_hz = 1'350'000'000ULL;
+    sweep.points = 11;
+    sweep.ifbw_hz = 10'000;
+    sweep.power_dbm = 0.0;
+    sweep.averages = 1;
+
+    std::string diagnostics;
+    REQUIRE(orch.measurePreview(sweep, diagnostics));
+    const auto& result = orch.lastMeasuredSweep();
+    REQUIRE(result.frequency_hz.size() == sweep.points);
+    REQUIRE(result.s11.size() == sweep.points);
+    REQUIRE(result.s21.size() == sweep.points);
+    REQUIRE(result.s12.size() == sweep.points);
+    REQUIRE(result.s22.size() == sweep.points);
+}
+
 TEST_CASE("AT-03 probe run: 1ch x 2att x 4phase x 201 pts", "[probe_run][AT-03][TEST-006]")
 {
     const auto root = std::filesystem::temp_directory_path() / "afar_probe_run";
