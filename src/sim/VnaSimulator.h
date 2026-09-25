@@ -24,6 +24,7 @@ public:
     void configure(const SweepConfig& config) override;
     ComplexSweep measure_trace() override;
     ComplexSweep measure_s21() override;
+    void calibrate_one_port(OnePortCalibrationStep step, int port) override;
     void calibrate_two_port(TwoPortCalibrationStep step) override;
     std::vector<std::string> drain_errors() override;
     void abort() noexcept override;
@@ -40,6 +41,8 @@ public:
     bool connected() const noexcept { return connected_; }
     const SweepConfig& last_config() const noexcept { return config_; }
     TwoPortCalibrationStep last_calibration_step() const noexcept { return calibrationStep_; }
+    OnePortCalibrationStep last_one_port_step() const noexcept { return onePortStep_; }
+    int last_one_port() const noexcept { return onePort_; }
 
 private:
     void throw_if_failure_on_io(const char* op);
@@ -52,5 +55,7 @@ private:
         "PLANAR,C2220,SIM0001,1.0"};
     SweepConfig config_{};
     TwoPortCalibrationStep calibrationStep_{TwoPortCalibrationStep::Begin};
+    OnePortCalibrationStep onePortStep_{OnePortCalibrationStep::Begin};
+    int onePort_{1};
     std::vector<std::string> errorQueue_;
 };

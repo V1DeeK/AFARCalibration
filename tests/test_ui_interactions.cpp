@@ -37,6 +37,7 @@ TEST_CASE("filter readiness is separate from the series controller", "[ui]")
     REQUIRE(controller != nullptr);
     REQUIRE(ready->text().contains(QStringLiteral("ГОТОВО")));
     REQUIRE(controller->text().contains(QStringLiteral("для S-параметров не нужен")));
+    REQUIRE(controller->text().contains(QStringLiteral("CTRL:")));
     REQUIRE_FALSE(controller->text().contains(QStringLiteral("нет связи")));
 }
 

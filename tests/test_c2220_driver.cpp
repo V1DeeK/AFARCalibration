@@ -290,6 +290,31 @@ TEST_CASE("AT-01 C2220Vna identify via TCP stub", "[c2220]")
     REQUIRE(stub.saw_exact("*IDN?"));
     REQUIRE(stub.saw_exact("SYST:REC:DIR:ACC?"));
     REQUIRE_FALSE(stub.saw_command_prefix("SYST:REC:DIR:ACC "));
+
+    const auto& fields = vna.last_idn();
+    REQUIRE(fields.manufacturer == "PLANAR");
+    REQUIRE(fields.model == "C2220");
+    REQUIRE(fields.serial == "STUB001");
+    REQUIRE(fields.firmware == "1.0");
+}
+
+TEST_CASE("parse_scpi_idn splits manufacturer,model,serial,firmware", "[c2220]")
+{
+    const auto f = parse_scpi_idn(" PLANAR , C2220 , SN-42 , 26.3.1 \r\n");
+    REQUIRE(f.manufacturer == "PLANAR");
+    REQUIRE(f.model == "C2220");
+    REQUIRE(f.serial == "SN-42");
+    REQUIRE(f.firmware == "26.3.1");
+    REQUIRE(f.raw == "PLANAR , C2220 , SN-42 , 26.3.1");
+
+    const auto short_idn = parse_scpi_idn("ONLY");
+    REQUIRE(short_idn.manufacturer == "ONLY");
+    REQUIRE(short_idn.model.empty());
+    REQUIRE(short_idn.serial.empty());
+    REQUIRE(short_idn.firmware.empty());
+
+    const auto extra = parse_scpi_idn("A,B,C,D,E");
+    REQUIRE(extra.firmware == "D,E");
 }
 
 TEST_CASE("C2220Vna rejects foreign model", "[c2220]")
@@ -410,6 +435,38 @@ TEST_CASE("C2220Vna configure S11 fills s11 via measure_trace", "[c2220]")
     REQUIRE_FALSE(sweep.overload);
 
     REQUIRE_THROWS_AS(vna.measure_s21(), std::runtime_error);
+}
+
+TEST_CASE("C2220Vna calibrate_one_port SOLT1 sequence against stub", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna::Profile profile;
+    profile.allow_direct_access = false;
+    C2220Vna vna(transport, profile);
+    vna.connect();
+    (void)vna.identify();
+
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 1));
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:METH:SOLT1 1"));
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Open, 1));
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:OPEN 1"));
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Short, 1));
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:SHOR 1"));
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Load, 1));
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:LOAD 1"));
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Apply, 1));
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:SAVE"));
+
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 2));
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:METH:SOLT1 2"));
+
+    REQUIRE_THROWS_AS(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 0),
+                      std::runtime_error);
+    REQUIRE_THROWS_AS(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 3),
+                      std::runtime_error);
 }
 
 TEST_CASE("ScpiComTransport compiles and rejects missing port", "[c2220][com]")

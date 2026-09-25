@@ -4,6 +4,8 @@
 #include "AfarBuildInfo.h"
 #endif
 
+#include <nlohmann/json.hpp>
+
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -88,15 +90,38 @@ std::string buildCommitLine()
     return std::string(hash);
 }
 
+std::string makeThruSummary(const RunReportInfo& info)
+{
+    if (info.thru_measured_mag_db >= 0.0 && info.thru_measured_phase_deg >= 0.0) {
+        return formatNumber(info.thru_measured_mag_db) + " dB / "
+            + formatNumber(info.thru_measured_phase_deg) + " deg (limit "
+            + formatNumber(info.thru_limit_mag_db) + "/"
+            + formatNumber(info.thru_limit_phase_deg) + ")";
+    }
+    return fromUtf8(
+        u8"\u043d\u0435 \u0438\u0437\u043c\u0435\u0440\u0435\u043d / "
+        u8"\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f \u043c\u0430\u0441\u0442\u0435\u0440\u0430");
+}
+
 std::string makeContentStream(const RunReportInfo& info)
 {
     const std::string limits_note = fromUtf8(
         u8"\u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u041f\u041e, "
         u8"\u043d\u0435 \u0430\u0442\u0442\u0435\u0441\u0442\u043e\u0432\u0430\u043d\u043d\u0430\u044f "
         u8"\u043c\u0435\u0442\u0440\u043e\u043b\u043e\u0433\u0438\u044f");
-    const std::string thru = fromUtf8(
-        u8"\u043d\u0435 \u0438\u0437\u043c\u0435\u0440\u0435\u043d / "
-        u8"\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f \u043c\u0430\u0441\u0442\u0435\u0440\u0430");
+    const std::string thru = makeThruSummary(info);
+    const std::string metro_yes = fromUtf8(u8"\u0434\u0430");
+    const std::string metro_no = fromUtf8(u8"\u043d\u0435\u0442");
+    const std::string metro_approved =
+        info.metrologist_approved ? metro_yes : metro_no;
+    const std::string metro_name =
+        info.metrologist_name.empty() ? std::string("-") : info.metrologist_name;
+    const std::string metro_date =
+        info.metrologist_date.empty() ? std::string("-") : info.metrologist_date;
+    const std::string not_accreditation = fromUtf8(
+        u8"\u043d\u0435 \u0430\u0442\u0442\u0435\u0441\u0442\u0430\u0446\u0438\u044f: "
+        u8"\u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u041f\u041e / "
+        u8"\u0443\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u0435 \u043c\u0435\u0442\u0440\u043e\u043b\u043e\u0433\u0430");
 
     std::ostringstream body;
     body << "BT\n/F1 12 Tf\n50 760 Td\n"
@@ -112,17 +137,74 @@ std::string makeContentStream(const RunReportInfo& info)
          << "0 -16 Td\n(completed_states: " << info.completed_states << ") Tj\n"
          << "0 -16 Td\n(valid_direct_count: " << info.valid_direct_count << ") Tj\n"
          << "0 -16 Td\n(series_path: " << pdfEscape(info.series_path) << ") Tj\n"
+         << "0 -16 Td\n(vna_idn: " << pdfEscape(info.vna_idn) << ") Tj\n"
+         << "0 -16 Td\n(vna_model_sn_fw: " << pdfEscape(info.vna_model) << " / "
+         << pdfEscape(info.vna_serial) << " / " << pdfEscape(info.vna_firmware) << ") Tj\n"
          << "0 -16 Td\n(limits: " << pdfEscape(limits_note) << ") Tj\n"
          << "0 -16 Td\n(max_drift_phase_deg: " << formatNumber(info.max_drift_phase_deg)
          << ") Tj\n"
          << "0 -16 Td\n(max_phase_residual_deg: " << formatNumber(info.max_phase_residual_deg)
          << ") Tj\n"
          << "0 -16 Td\n(THRU: " << pdfEscape(thru) << ") Tj\n"
+         << "0 -16 Td\n(thru_limit_mag_db: " << formatNumber(info.thru_limit_mag_db) << ") Tj\n"
+         << "0 -16 Td\n(thru_limit_phase_deg: " << formatNumber(info.thru_limit_phase_deg)
+         << ") Tj\n"
+         << "0 -16 Td\n("
+         << pdfEscape(fromUtf8(u8"\u0443\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e "
+                               u8"\u043c\u0435\u0442\u0440\u043e\u043b\u043e\u0433\u043e\u043c: ")
+                      + metro_approved)
+         << ") Tj\n"
+         << "0 -16 Td\n("
+         << pdfEscape(fromUtf8(u8"\u043c\u0435\u0442\u0440\u043e\u043b\u043e\u0433 \u0424\u0418\u041e: ")
+                      + metro_name)
+         << ") Tj\n"
+         << "0 -16 Td\n("
+         << pdfEscape(fromUtf8(u8"\u043c\u0435\u0442\u0440\u043e\u043b\u043e\u0433 \u0434\u0430\u0442\u0430: ")
+                      + metro_date)
+         << ") Tj\n"
+         << "0 -16 Td\n(" << pdfEscape(not_accreditation) << ") Tj\n"
          << "ET\n";
     return body.str();
 }
 
 }  // namespace
+
+bool loadThruApprovalJson(const std::filesystem::path& path, RunReportInfo& info)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    try {
+        nlohmann::json j;
+        in >> j;
+        if (j.contains("thru_limit_mag_db") && j["thru_limit_mag_db"].is_number()) {
+            info.thru_limit_mag_db = j["thru_limit_mag_db"].get<double>();
+        }
+        if (j.contains("thru_limit_phase_deg") && j["thru_limit_phase_deg"].is_number()) {
+            info.thru_limit_phase_deg = j["thru_limit_phase_deg"].get<double>();
+        }
+        if (j.contains("thru_measured_mag_db") && j["thru_measured_mag_db"].is_number()) {
+            info.thru_measured_mag_db = j["thru_measured_mag_db"].get<double>();
+        }
+        if (j.contains("thru_measured_phase_deg") && j["thru_measured_phase_deg"].is_number()) {
+            info.thru_measured_phase_deg = j["thru_measured_phase_deg"].get<double>();
+        }
+        if (j.contains("metrologist_approved") && j["metrologist_approved"].is_boolean()) {
+            info.metrologist_approved = j["metrologist_approved"].get<bool>();
+        }
+        if (j.contains("metrologist_name") && j["metrologist_name"].is_string()) {
+            info.metrologist_name = j["metrologist_name"].get<std::string>();
+        }
+        if (j.contains("metrologist_date") && j["metrologist_date"].is_string()) {
+            info.metrologist_date = j["metrologist_date"].get<std::string>();
+        }
+        info.thru_meta_loaded = true;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 
 bool writeRunReportPdf(const std::filesystem::path& path,
                        const RunReportInfo& info,

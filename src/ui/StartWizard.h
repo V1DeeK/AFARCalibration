@@ -3,9 +3,11 @@
 #include <QWizard>
 
 class QCheckBox;
+class QDateEdit;
 class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
+class QRadioButton;
 
 /// Мастер FR-04 / UI-007 до READY на имитаторах.
 class StartWizard final : public QWizard {
@@ -37,6 +39,10 @@ public:
     [[nodiscard]] QString thruSummary() const;
     /// Ручной идентификатор калибровки ВАЦ (RMD-004 / CAL-001); может быть пустым.
     [[nodiscard]] QString vnaCalibrationId() const;
+    [[nodiscard]] bool fullSeriesVolume() const;
+    [[nodiscard]] bool metrologistApproved() const;
+    [[nodiscard]] double thruMagLimitDb() const;
+    [[nodiscard]] double thruPhaseLimitDeg() const;
 
     /// Пишет probe-фикстуры; частоты/точки из пресета вкладки измерения.
     bool materializeSimFixtures(QString& diagnostics);
@@ -63,16 +69,21 @@ private slots:
     void onProbeCheckToggled(bool checked);
     void refreshCalStatusLabel();
     void persistVnaCalibrationId();
+    void persistThruMeta();
 
 private:
     void buildPages();
     bool confirmDangerousSettings();
+    bool confirmMetrologistGate();
     void applyEngineerGate();
     [[nodiscard]] bool calChecklistComplete() const;
+    void writeThruApprovalJson(const QString& fixturesDir) const;
 
     QLineEdit* m_dataRoot = nullptr;
     QCheckBox* m_powerOk = nullptr;
     QCheckBox* m_engineer = nullptr;
+    QRadioButton* m_seriesCompact = nullptr;
+    QRadioButton* m_seriesFull = nullptr;
     QCheckBox* m_idnOk = nullptr;
     QLabel* m_calStatus = nullptr;
     QLineEdit* m_vnaCalId = nullptr;
@@ -82,6 +93,11 @@ private:
     QCheckBox* m_calOk = nullptr;
     QDoubleSpinBox* m_thruMag = nullptr;
     QDoubleSpinBox* m_thruPhase = nullptr;
+    QDoubleSpinBox* m_thruMagLimit = nullptr;
+    QDoubleSpinBox* m_thruPhaseLimit = nullptr;
+    QCheckBox* m_metroApproved = nullptr;
+    QLineEdit* m_metroName = nullptr;
+    QDateEdit* m_metroDate = nullptr;
     QCheckBox* m_noOverload = nullptr;
     QCheckBox* m_probeOk = nullptr;
     QLabel* m_probeStatus = nullptr;

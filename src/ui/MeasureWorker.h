@@ -7,6 +7,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <memory>
 
@@ -24,6 +25,8 @@ class MeasureWorker final : public QObject {
 public:
     /// 0 = имитатор, 1 = TCP Socket (S2VNA), 2 = COM.
     enum VnaBackend : int { BackendSimulator = 0, BackendSocket = 1, BackendCom = 2 };
+    /// 0 = DutSimulator (серия), 1 = Stub (диагностика т.14), 2 = боевой (не реализован).
+    enum CtrlBackend : int { CtrlSimulator = 0, CtrlStub = 1, CtrlCombat = 2 };
 
     explicit MeasureWorker(QObject* parent = nullptr);
     ~MeasureWorker() override;
@@ -33,9 +36,19 @@ public slots:
                       const QString& host,
                       int port,
                       const QString& comPort,
-                      bool allowDirectAccess);
+                      bool allowDirectAccess,
+                      int connectTimeoutMs = 3000,
+                      int sweepTimeoutMs = 30000,
+                      int measureRetries = 2);
+    /// DUT-UI-001: 0=DutSimulator, 1=Stub. Серия всегда на DutSimulator; Stub — только диагностика.
+    void configureController(int backend,
+                             const QString& host,
+                             int port,
+                             const QString& comPort);
     /// connect + *IDN? через оркестратор (Idle), не напрямую IVna.
     void probeVna();
+    /// UI-ERR-001: имитатор — push_instrument_error + drain в GUI-очередь.
+    void simulateScpiError();
     /// GAP-WIZ-001: короткий пробный съём кодов через оркестратор (Idle).
     void runProbeCodes(double fStartHz,
                        double fStopHz,
@@ -56,6 +69,17 @@ public slots:
     void requestMatrixSnapshot(int channel, int attCode);
     void requestRemeasure(int channel, int attCode, const QVector<int>& phases);
     void requestCellPreview(int channel, int attCode, int phase);
+    /// UI-MEAS-001: один свип S11…S22 без DUT/серии (Idle/Ready).
+    void measureNow(double fStartHz,
+                    double fStopHz,
+                    int points,
+                    int ifbwHz,
+                    double powerDbm,
+                    int averages);
+    /// CAL-UI: шаг TwoPortCalibrationStep как int (Begin…Apply).
+    void calibrateTwoPort(int step);
+    /// CAL-UI: шаг OnePortCalibrationStep как int + порт 1|2.
+    void calibrateOnePort(int step, int port);
     void shutdown();
 
 signals:
@@ -65,11 +89,16 @@ signals:
                            const QString& controllerIface,
                            bool dutConnected,
                            double temperatureC,
-                           bool temperatureValid);
+                           bool temperatureValid,
+                           const QString& vnaSerial,
+                           const QString& vnaFirmware);
     void stateChanged(int state, const QString& russianText, const QString& colorName);
     void prepareFinished(bool ok, const QString& diagnostics);
     void probeFinished(bool ok, const QString& idnOrError);
     void probeCodesFinished(bool ok, const QString& message);
+    void measureNowFinished(bool ok, const QString& message);
+    void calibrateTwoPortFinished(bool ok, int step, const QString& message);
+    void calibrateOnePortFinished(bool ok, int step, const QString& message);
     void progressChanged(qint64 completed,
                          qint64 total,
                          int channel,
@@ -139,6 +168,8 @@ signals:
                         const QVector<int>& overloadFlags);
     void axesChanged(const QVector<int>& channels, const QVector<int>& attCodes);
     void diagnostic(const QString& text);
+    /// UI-ERR-001: строки SYST:ERR? после probe/measure/drain (код, текст; команда если есть).
+    void scpiErrorsReceived(const QStringList& entries);
     void finishedClean();
 
 private slots:
@@ -147,6 +178,7 @@ private slots:
 private:
     void rebuildVna();
     [[nodiscard]] IVna* activeVna();
+    void emitPendingScpiErrors();
     void emitConnection();
     void emitState();
     void emitProgress();
@@ -165,6 +197,17 @@ private:
     int m_port{5025};
     QString m_comPort{QStringLiteral("COM3")};
     bool m_allowDirect{false};
+    int m_connectTimeoutMs{3000};
+    int m_sweepTimeoutMs{30000};
+    int m_measureRetries{2};
+
+    int m_ctrlBackend{CtrlSimulator};
+    QString m_dutHost{QStringLiteral("192.168.0.10")};
+    int m_dutPort{4001};
+    QString m_dutComPort{QStringLiteral("COM4")};
+
+    /// Полный *IDN? после успешного probe (для полосы: model/SN/FW).
+    QString m_lastIdn;
 
     std::unique_ptr<VnaSimulator> m_simVna;
     std::unique_ptr<ScpiSocketTransport> m_socket;

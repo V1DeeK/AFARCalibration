@@ -11,6 +11,15 @@ enum class SParameter : std::uint8_t {
     S22,
 };
 
+/// Однопортовая OSL/SOLT1 (без THRU). Порт задаётся отдельно (1|2).
+enum class OnePortCalibrationStep : std::uint8_t {
+    Begin,
+    Open,
+    Short,
+    Load,
+    Apply,
+};
+
 enum class TwoPortCalibrationStep : std::uint8_t {
     Begin,
     OpenPort1,

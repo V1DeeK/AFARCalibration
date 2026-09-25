@@ -3,6 +3,7 @@
 #include "IScpiTransport.h"
 
 #include "afar/IVna.h"
+#include "afar/ScpiIdn.h"
 
 #include <cstdint>
 #include <string>
@@ -27,9 +28,12 @@ public:
 
     void connect() override;
     std::string identify() override;
+    /// Последний успешный `identify()` (пустая строка до первого вызова).
+    const ScpiIdnFields& last_idn() const noexcept { return last_idn_; }
     void configure(const SweepConfig& config) override;
     ComplexSweep measure_trace() override;
     ComplexSweep measure_s21() override;
+    void calibrate_one_port(OnePortCalibrationStep step, int port) override;
     void calibrate_two_port(TwoPortCalibrationStep step) override;
     std::vector<std::string> drain_errors() override;
     void abort() noexcept override;
@@ -50,4 +54,5 @@ private:
     bool connected_{false};
     SweepConfig config_{};
     bool configured_{false};
+    ScpiIdnFields last_idn_{};
 };

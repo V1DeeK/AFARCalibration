@@ -104,6 +104,8 @@
 | `configure` | `void configure(const SweepConfig&)` | применить диапазон, точки, ПЧ, мощность, усреднение и `CALC:PAR:DEF` по `s_parameter` |
 | `measure_trace` | `ComplexSweep measure_trace()` | одиночный свип **текущего** DEF; заполняет `frequency_hz` и ровно один из `s11`/`s21`/`s12`/`s22` |
 | `measure_s21` | `ComplexSweep measure_s21()` | **только S21**: после `configure` с `s_parameter == S21`; иначе ошибка. Заполняет `s21` (остальные S-векторы пусты) |
+| `calibrate_one_port` | `void calibrate_one_port(OnePortCalibrationStep, int port)` | однопортовая OSL/SOLT1 на порту `1\|2`; SCPI — `vna-c2220-scpi.md` |
+| `calibrate_two_port` | `void calibrate_two_port(TwoPortCalibrationStep)` | двухпортовая SOLT2; SCPI — `vna-c2220-scpi.md` |
 | `drain_errors` | `std::vector<std::string> drain_errors()` | выбрать очередь ошибок прибора после группы команд (HW-VNA-03) |
 | `abort` | `void abort() noexcept` | прервать текущую операцию прибора; **только этот метод `IVna` помечен `noexcept`** |
 

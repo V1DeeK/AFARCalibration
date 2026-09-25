@@ -4,6 +4,7 @@
 #include <QString>
 #include <QVector>
 
+class AcceptanceAtTab;
 class CodeMatrixTab;
 class ConnectionBar;
 class DataFormatsTab;
@@ -32,7 +33,9 @@ private slots:
                              const QString& controllerIface,
                              bool dutConnected,
                              double temperatureC,
-                             bool temperatureValid);
+                             bool temperatureValid,
+                             const QString& vnaSerial,
+                             const QString& vnaFirmware);
     void onProgress(qint64 completed, qint64 total, int channel, int attCode, int phaseCode);
     void onPaths(const QString& seriesRoot,
                  const QString& runConfig,
@@ -59,6 +62,7 @@ private slots:
     void onToggleTheme();
     void onResumeSeries();
     void onApplyVnaSettings();
+    void onApplyControllerSettings();
     void onProbeVna();
     void onProbeFinished(bool ok, const QString& idnOrError);
     void refreshDataSourceBadge(bool probeOk = false, const QString& idnOrError = {});
@@ -100,6 +104,8 @@ private slots:
                                  int attCode,
                                  int phaseCode);
     void updateCycleButtons(int state);
+    void onMeasureNow();
+    void onCalibrateStep(int kind, int step, int port);
 
 private:
     void loadExampleDefaults();
@@ -113,6 +119,7 @@ private:
     MeasureTab* m_measure = nullptr;
     CodeMatrixTab* m_matrix = nullptr;
     DataFormatsTab* m_formats = nullptr;
+    AcceptanceAtTab* m_acceptance = nullptr;
     QPushButton* m_wizardBtn = nullptr;
     QPushButton* m_start = nullptr;
     QPushButton* m_pause = nullptr;
