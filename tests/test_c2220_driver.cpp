@@ -67,7 +67,7 @@ void stub_close(StubSocket s)
 }
 #endif
 
-/// Минимальный SCPI TCP-стаб C1220/C2220 для AT-01 / драйвера.
+/// Минимальный SCPI TCP-стаб C2220 для AT-01 / драйвера.
 class ScpiTcpStub {
 public:
     std::string idn{"PLANAR,C2220,STUB001,1.0"};
@@ -235,10 +235,53 @@ private:
             reply(s, "1000000000,1500000000,2000000000");
             return;
         }
+        if (cmd == "SENS:FREQ:STAR?") {
+            reply(s, "1000000000");
+            return;
+        }
+        if (cmd == "SENS:FREQ:STOP?") {
+            reply(s, "2000000000");
+            return;
+        }
+        if (cmd == "SENS:SWE:POIN?") {
+            reply(s, "3");
+            return;
+        }
+        if (cmd == "SENS:BAND?") {
+            reply(s, "10000");
+            return;
+        }
+        if (cmd == "SOUR:POW?") {
+            reply(s, "-10");
+            return;
+        }
+        if (cmd == "SENS:AVER?") {
+            reply(s, "1");
+            return;
+        }
+        if (cmd == "SENS:AVER:COUN?") {
+            reply(s, "10");
+            return;
+        }
+        if (cmd == "SENS:CORR:COLL:CKIT?") {
+            reply(s, "1");
+            return;
+        }
+        if (cmd == "SENS:CORR:COLL:CKIT:LAB?") {
+            reply(s, "\"85032F\"");
+            return;
+        }
+        if (cmd == "SENS:CORR:STAT?") {
+            reply(s, "1");
+            return;
+        }
+        if (cmd == "CALC:PAR:DEF?") {
+            reply(s, "S12");
+            return;
+        }
         // Команды без ответа (configure / TRIG:SING) — молча OK.
         if (cmd.rfind("SENS:", 0) == 0 || cmd.rfind("SOUR:", 0) == 0
-            || cmd.rfind("CALC:PAR:DEF", 0) == 0 || cmd.rfind("TRIG:", 0) == 0
-            || cmd.rfind("FORM:", 0) == 0) {
+            || cmd.rfind("CALC:PAR:DEF", 0) == 0 || cmd == "TRIG:SING") {
             return;
         }
         // Неизвестный запрос с '?' — пустой ответ, чтобы не зависнуть.
@@ -291,6 +334,31 @@ TEST_CASE("AT-01 C2220Vna identify via TCP stub", "[c2220]")
     REQUIRE(stub.saw_exact("*IDN?"));
     REQUIRE(stub.saw_exact("SYST:REC:DIR:ACC?"));
     REQUIRE_FALSE(stub.saw_command_prefix("SYST:REC:DIR:ACC "));
+
+    const auto& fields = vna.last_idn();
+    REQUIRE(fields.manufacturer == "PLANAR");
+    REQUIRE(fields.model == "C2220");
+    REQUIRE(fields.serial == "STUB001");
+    REQUIRE(fields.firmware == "1.0");
+}
+
+TEST_CASE("parse_scpi_idn splits manufacturer,model,serial,firmware", "[c2220]")
+{
+    const auto f = parse_scpi_idn(" PLANAR , C2220 , SN-42 , 26.3.1 \r\n");
+    REQUIRE(f.manufacturer == "PLANAR");
+    REQUIRE(f.model == "C2220");
+    REQUIRE(f.serial == "SN-42");
+    REQUIRE(f.firmware == "26.3.1");
+    REQUIRE(f.raw == "PLANAR , C2220 , SN-42 , 26.3.1");
+
+    const auto short_idn = parse_scpi_idn("ONLY");
+    REQUIRE(short_idn.manufacturer == "ONLY");
+    REQUIRE(short_idn.model.empty());
+    REQUIRE(short_idn.serial.empty());
+    REQUIRE(short_idn.firmware.empty());
+
+    const auto extra = parse_scpi_idn("A,B,C,D,E");
+    REQUIRE(extra.firmware == "D,E");
 }
 
 TEST_CASE("C2220Vna rejects foreign model", "[c2220]")
@@ -305,20 +373,6 @@ TEST_CASE("C2220Vna rejects foreign model", "[c2220]")
     REQUIRE_THROWS_AS(vna.identify(), std::runtime_error);
 }
 
-TEST_CASE("C1220 is accepted without C2220-only direct access query", "[c1220]")
-{
-    ScpiTcpStub stub;
-    stub.idn = "PLANAR,C1220,STUB1220,26.2";
-    stub.start();
-
-    ScpiSocketTransport transport("127.0.0.1", stub.port());
-    C2220Vna vna(transport);
-    REQUIRE_NOTHROW(vna.connect());
-    REQUIRE_THAT(vna.identify(), ContainsSubstring("C1220"));
-    REQUIRE(stub.saw_exact("*IDN?"));
-    REQUIRE_FALSE(stub.saw_exact("SYST:REC:DIR:ACC?"));
-}
-
 TEST_CASE("direct access ON without allow flag is error and never sends ON", "[c2220]")
 {
     ScpiTcpStub stub;
@@ -330,8 +384,7 @@ TEST_CASE("direct access ON without allow flag is error and never sends ON", "[c
     profile.allow_direct_access = false;
     C2220Vna vna(transport, profile);
 
-    REQUIRE_NOTHROW(vna.connect());
-    REQUIRE_THROWS_AS(vna.identify(), std::runtime_error);
+    REQUIRE_THROWS_AS(vna.connect(), std::runtime_error);
     REQUIRE(stub.saw_exact("SYST:REC:DIR:ACC?"));
     REQUIRE_FALSE(stub.saw_exact("SYST:REC:DIR:ACC ON"));
     REQUIRE_FALSE(stub.saw_exact("SYST:REC:DIR:ACC 1"));
@@ -370,26 +423,27 @@ TEST_CASE("C2220Vna configure and measure_s21 against stub", "[c2220]")
     cfg.points = 3;
     cfg.power_dbm = -20.0;
     cfg.ifbw_hz = 1000;
-    cfg.averages = 8;
-    cfg.parameter = SParameter::S12;
+    cfg.averages = 4;
+    cfg.s_parameter = SParameter::S21;
     REQUIRE_NOTHROW(vna.configure(cfg));
 
     const auto sweep = vna.measure_s21();
     REQUIRE(sweep.frequency_hz.size() == 3);
     REQUIRE(sweep.s21.size() == 3);
+    REQUIRE(sweep.s11.empty());
+    REQUIRE(sweep.s12.empty());
+    REQUIRE(sweep.s22.empty());
     REQUIRE(sweep.frequency_hz[0] == 1'000'000'000ULL);
     REQUIRE(sweep.frequency_hz[2] == 2'000'000'000ULL);
     REQUIRE(sweep.s21[0].real() == Approx(1.0));
     REQUIRE(sweep.s21[2].imag() == Approx(1.0));
 
     REQUIRE(stub.saw_command_prefix("SENS:FREQ:STAR "));
-    REQUIRE(stub.saw_exact("CALC:PAR:DEF S12"));
-    REQUIRE(stub.saw_exact("FORM:DATA ASC"));
-    REQUIRE(stub.saw_exact("TRIG:SOUR BUS"));
-    REQUIRE(stub.saw_exact("SENS:AVER:COUN 8"));
+    REQUIRE(stub.saw_exact("SENS:AVER:COUN 4"));
     REQUIRE(stub.saw_exact("SENS:AVER ON"));
     REQUIRE(stub.saw_exact("TRIG:AVER ON"));
     REQUIRE(stub.saw_exact("SENS:AVER:CLE"));
+    REQUIRE(stub.saw_exact("CALC:PAR:DEF S21"));
     REQUIRE(stub.saw_exact("TRIG:SING"));
     REQUIRE(stub.saw_exact("*OPC?"));
     REQUIRE(stub.saw_exact("CALC:DATA:SDAT?"));
@@ -399,7 +453,7 @@ TEST_CASE("C2220Vna configure and measure_s21 against stub", "[c2220]")
     REQUIRE(errs.empty());
 }
 
-TEST_CASE("C2220Vna performs complete two-port SOLT command sequence", "[c2220][calibration]")
+TEST_CASE("C2220Vna configure S11 fills s11 via measure_trace", "[c2220]")
 {
     ScpiTcpStub stub;
     stub.start();
@@ -407,28 +461,116 @@ TEST_CASE("C2220Vna performs complete two-port SOLT command sequence", "[c2220][
     ScpiSocketTransport transport("127.0.0.1", stub.port());
     C2220Vna vna(transport);
     vna.connect();
-    REQUIRE_THAT(vna.identify(), ContainsSubstring("C2220"));
 
-    const std::vector<TwoPortCalibrationStep> steps = {
-        TwoPortCalibrationStep::Begin,     TwoPortCalibrationStep::OpenPort1,
-        TwoPortCalibrationStep::ShortPort1, TwoPortCalibrationStep::LoadPort1,
-        TwoPortCalibrationStep::OpenPort2, TwoPortCalibrationStep::ShortPort2,
-        TwoPortCalibrationStep::LoadPort2, TwoPortCalibrationStep::Thru12,
-        TwoPortCalibrationStep::Apply,
-    };
-    for (const auto step : steps) {
-        REQUIRE_NOTHROW(vna.calibrate_two_port(step));
-    }
+    SweepConfig cfg{};
+    cfg.f_start_hz = 1'000'000'000ULL;
+    cfg.f_stop_hz = 2'000'000'000ULL;
+    cfg.points = 3;
+    cfg.power_dbm = -20.0;
+    cfg.ifbw_hz = 1000;
+    cfg.averages = 1;
+    cfg.s_parameter = SParameter::S11;
+    REQUIRE_NOTHROW(vna.configure(cfg));
 
-    REQUIRE(stub.saw_exact("SENS:CORR:COLL:METH:SOLT2 1,2"));
+    const auto sweep = vna.measure_trace();
+    REQUIRE(stub.saw_exact("CALC:PAR:DEF S11"));
+    REQUIRE(sweep.frequency_hz.size() == 3);
+    REQUIRE(sweep.s11.size() == 3);
+    REQUIRE(sweep.s21.empty());
+    REQUIRE(sweep.s12.empty());
+    REQUIRE(sweep.s22.empty());
+    REQUIRE(sweep.s11[0].real() == Approx(1.0));
+    REQUIRE_FALSE(sweep.overload);
+
+    REQUIRE_THROWS_AS(vna.measure_s21(), std::runtime_error);
+}
+
+TEST_CASE("C2220Vna reads current S2VNA trace without reconfiguring it", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    SweepConfig instrument{};
+    const auto sweep = vna.read_current_trace(&instrument);
+    REQUIRE(instrument.f_start_hz == 1'000'000'000ULL);
+    REQUIRE(instrument.f_stop_hz == 2'000'000'000ULL);
+    REQUIRE(instrument.points == 3);
+    REQUIRE(instrument.ifbw_hz == 10'000);
+    REQUIRE(instrument.power_dbm == Approx(-10.0));
+    REQUIRE(instrument.averages == 10);
+    REQUIRE(instrument.s_parameter == SParameter::S12);
+    REQUIRE(sweep.s12.size() == 3);
+    REQUIRE(sweep.s11.empty());
+    REQUIRE(sweep.s21.empty());
+    REQUIRE(sweep.s22.empty());
+    REQUIRE_FALSE(stub.saw_exact("TRIG:SING"));
+    REQUIRE_FALSE(stub.saw_command_prefix("SENS:FREQ:STAR "));
+    REQUIRE(stub.saw_exact("CALC:PAR:DEF?"));
+}
+
+TEST_CASE("C2220Vna reads the active S2VNA calibration kit", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    REQUIRE(vna.current_calibration_kit_id() == "CKIT 1 (85032F)");
+    REQUIRE(vna.correction_enabled());
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:CKIT?"));
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:CKIT:LAB?"));
+    REQUIRE(stub.saw_exact("SENS:CORR:STAT?"));
+}
+
+TEST_CASE("C2220Vna selects a documented S2VNA calibration kit", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    REQUIRE(vna.select_calibration_kit(1) == "CKIT 1 (85032F)");
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:CKIT 1"));
+    REQUIRE_THROWS_AS(vna.select_calibration_kit(0), std::runtime_error);
+    REQUIRE_THROWS_AS(vna.select_calibration_kit(65), std::runtime_error);
+}
+
+TEST_CASE("C2220Vna calibrate_one_port SOLT1 sequence against stub", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna::Profile profile;
+    profile.allow_direct_access = false;
+    C2220Vna vna(transport, profile);
+    vna.connect();
+    (void)vna.identify();
+
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 1));
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:METH:SOLT1 1"));
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Open, 1));
     REQUIRE(stub.saw_exact("SENS:CORR:COLL:OPEN 1"));
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Short, 1));
     REQUIRE(stub.saw_exact("SENS:CORR:COLL:SHOR 1"));
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Load, 1));
     REQUIRE(stub.saw_exact("SENS:CORR:COLL:LOAD 1"));
-    REQUIRE(stub.saw_exact("SENS:CORR:COLL:OPEN 2"));
-    REQUIRE(stub.saw_exact("SENS:CORR:COLL:SHOR 2"));
-    REQUIRE(stub.saw_exact("SENS:CORR:COLL:LOAD 2"));
-    REQUIRE(stub.saw_exact("SENS:CORR:COLL:THRU 2,1"));
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Apply, 1));
     REQUIRE(stub.saw_exact("SENS:CORR:COLL:SAVE"));
+
+    REQUIRE_NOTHROW(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 2));
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:METH:SOLT1 2"));
+
+    REQUIRE_THROWS_AS(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 0),
+                      std::runtime_error);
+    REQUIRE_THROWS_AS(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 3),
+                      std::runtime_error);
 }
 
 TEST_CASE("ScpiComTransport compiles and rejects missing port", "[c2220][com]")

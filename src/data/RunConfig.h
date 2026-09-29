@@ -1,5 +1,7 @@
 #pragma once
 
+#include "afar/SweepTypes.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -7,10 +9,14 @@
 
 namespace afar {
 
+/// Разбор "S11"|"S12"|"S21"|"S22". false — неизвестное значение.
+bool parseSParameter(std::string_view text, SParameter& out) noexcept;
+
 struct VnaConfig {
     std::string model;
     std::string host;
     int port{};
+    /// Один из S11|S12|S21|S22 (строка из JSON; в SweepConfig — через parseSParameter).
     std::string s_parameter;
     std::uint64_t f_start_hz{};
     std::uint64_t f_stop_hz{};

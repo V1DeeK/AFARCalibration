@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QString>
 #include <QVector>
 #include <QWidget>
 
@@ -30,6 +31,8 @@ public:
     void setCellSweepCurves(const QVector<double>& freqGhz,
                             const QVector<double>& magDb,
                             const QVector<double>& phaseUnwrapDeg);
+    /// Пустой timestampUtc — в журнале нет STATE_OK этого слота.
+    void setSlotRecordedUtc(int channel, int attCode, int phase, const QString& timestampUtc);
     void refreshTheme();
 
 signals:
@@ -57,4 +60,7 @@ private:
     QPushButton* m_retrySelected = nullptr;
     QPushButton* m_retryRow = nullptr;
     int m_selectedPhase = 0;
+    /// Последний UTC из журнала для выбранной ячейки; пусто — «время не записано».
+    QString m_slotUtc;
+    void updateDetailLabel(int status, int attempt, int overload);
 };

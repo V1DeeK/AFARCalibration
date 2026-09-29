@@ -3,8 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
-#include <algorithm>
-#include <iterator>
+#include <optional>
 
 namespace afar::cal {
 
@@ -24,6 +23,15 @@ double attenuation_db(std::complex<double> s_tilde)
         return std::numeric_limits<double>::infinity();
     }
     return -20.0 * std::log10(mag);
+}
+
+double vswr_from_reflection_db(double reflection_db)
+{
+    const double gamma = std::pow(10.0, reflection_db / 20.0);
+    if (!std::isfinite(gamma) || gamma >= 1.0) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return (1.0 + gamma) / (1.0 - gamma);
 }
 
 double arg_deg(std::complex<double> s_tilde)
@@ -58,6 +66,63 @@ std::vector<double> unwrap_degrees(const std::vector<double>& wrapped_deg)
     return out;
 }
 
+namespace {
+
+bool is_reference_measurement(std::complex<double> z)
+{
+    if (!std::isfinite(z.real()) || !std::isfinite(z.imag())) {
+        return false;
+    }
+    const double mag2 = z.real() * z.real() + z.imag() * z.imag();
+    return mag2 > 0.0 && std::isfinite(mag2);
+}
+
+}  // namespace
+
+std::optional<double> reference_drift_phase_deg(
+    std::complex<double> r_prev,
+    std::complex<double> r_curr)
+{
+    if (!is_reference_measurement(r_prev) || !is_reference_measurement(r_curr)) {
+        return std::nullopt;
+    }
+    return wrap180(arg_deg(r_curr) - arg_deg(r_prev));
+}
+
+std::optional<RepeatabilityEstimate> repeatability_from_attempts(
+    const std::vector<std::complex<double>>& attempts)
+{
+    std::vector<std::complex<double>> measured;
+    measured.reserve(attempts.size());
+    for (const auto& z : attempts) {
+        if (is_reference_measurement(z)) {
+            measured.push_back(z);
+        }
+    }
+    if (measured.size() < 2) {
+        return std::nullopt;
+    }
+
+    const double mag0 = magnitude_db(measured.front());
+    double db_span = 0.0;
+    double deg_span = 0.0;
+    const double arg0 = arg_deg(measured.front());
+    for (std::size_t i = 1; i < measured.size(); ++i) {
+        const double db = std::fabs(magnitude_db(measured[i]) - mag0);
+        const double deg = std::fabs(wrap180(arg_deg(measured[i]) - arg0));
+        if (db > db_span) {
+            db_span = db;
+        }
+        if (deg > deg_span) {
+            deg_span = deg;
+        }
+    }
+    if (!std::isfinite(db_span) || !std::isfinite(deg_span)) {
+        return std::nullopt;
+    }
+    return RepeatabilityEstimate{db_span, deg_span};
+}
+
 std::vector<double> unwrap_phase_deg(const std::vector<std::complex<double>>& s_tilde)
 {
     std::vector<double> wrapped;
@@ -66,72 +131,6 @@ std::vector<double> unwrap_phase_deg(const std::vector<std::complex<double>>& s_
         wrapped.push_back(arg_deg(z));
     }
     return unwrap_degrees(wrapped);
-}
-
-FilterMetrics analyze_filter(const std::vector<std::uint64_t>& frequency_hz,
-                             const std::vector<std::complex<double>>& s21)
-{
-    FilterMetrics result;
-    if (frequency_hz.size() != s21.size() || s21.size() < 3) {
-        return result;
-    }
-
-    std::vector<double> db;
-    db.reserve(s21.size());
-    for (const auto& sample : s21) {
-        db.push_back(magnitude_db(sample));
-    }
-    const auto peak_it = std::max_element(db.begin(), db.end());
-    if (peak_it == db.end() || !std::isfinite(*peak_it)) {
-        return result;
-    }
-    const std::size_t peak = static_cast<std::size_t>(std::distance(db.begin(), peak_it));
-    result.valid = true;
-    result.peak_frequency_hz = frequency_hz[peak];
-    result.peak_db = *peak_it;
-    result.insertion_loss_db = -*peak_it;
-
-    const double target = *peak_it - 3.0;
-    auto crossing = [&](std::size_t a, std::size_t b) {
-        const double ya = db[a];
-        const double yb = db[b];
-        if (!std::isfinite(ya) || !std::isfinite(yb) || ya == yb) {
-            return static_cast<double>(frequency_hz[a]);
-        }
-        const double t = (target - ya) / (yb - ya);
-        return static_cast<double>(frequency_hz[a])
-            + t * (static_cast<double>(frequency_hz[b])
-                   - static_cast<double>(frequency_hz[a]));
-    };
-
-    std::size_t left = peak;
-    while (left > 0 && db[left - 1] >= target) {
-        --left;
-    }
-    std::size_t right = peak;
-    while (right + 1 < db.size() && db[right + 1] >= target) {
-        ++right;
-    }
-    if (left == 0 || right + 1 >= db.size()) {
-        return result;
-    }
-
-    result.lower_3db_hz = crossing(left - 1, left);
-    result.upper_3db_hz = crossing(right, right + 1);
-    result.center_hz = (result.lower_3db_hz + result.upper_3db_hz) / 2.0;
-    result.bandwidth_3db_hz = result.upper_3db_hz - result.lower_3db_hz;
-    result.has_3db_band = result.bandwidth_3db_hz > 0.0;
-
-    double min_outside = std::numeric_limits<double>::infinity();
-    for (std::size_t i = 0; i < db.size(); ++i) {
-        if ((i < left || i > right) && std::isfinite(db[i])) {
-            min_outside = std::min(min_outside, db[i]);
-        }
-    }
-    if (std::isfinite(min_outside)) {
-        result.max_stopband_rejection_db = result.peak_db - min_outside;
-    }
-    return result;
 }
 
 }  // namespace afar::cal

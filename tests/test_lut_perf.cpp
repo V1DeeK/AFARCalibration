@@ -5,6 +5,7 @@
 #include "ParquetExport.h"
 #include "VnaSimulator.h"
 #include "probe_fixtures.h"
+#include "qt_test_application.h"
 #include "sim_grid_fixtures.h"
 
 #include <chrono>
@@ -62,6 +63,7 @@ void timeLutBuild(const afar::RawS21Store& store,
 TEST_CASE("CAL-005 LUT perf on probe grid (no 10-min gate)",
           "[lut_perf][CAL-005][NFR-03]")
 {
+    (void)afar::test::guiApplication();
     const auto root = std::filesystem::temp_directory_path() / "afar_lut_perf_probe";
     std::filesystem::remove_all(root);
     const auto fixtures = root / "fixtures";
@@ -91,6 +93,7 @@ TEST_CASE("CAL-005 LUT perf on probe grid (no 10-min gate)",
 TEST_CASE("CAL-005 LUT perf on full AT-04 volume",
           "[.][full][lut_perf][CAL-005][NFR-03]")
 {
+    (void)afar::test::guiApplication();
     if (!envAt04Enabled()) {
         SKIP("Set AFAR_RUN_AT04=1 and run with filter [full] for full-volume LUT timing");
     }

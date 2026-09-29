@@ -14,7 +14,6 @@
 
 using Catch::Matchers::WithinAbs;
 using afar::cal::attenuation_db;
-using afar::cal::analyze_filter;
 using afar::cal::build_direct_lut_entry;
 using afar::cal::DirectLutBuildInput;
 using afar::cal::inverse_cost;
@@ -24,8 +23,11 @@ using afar::cal::interpolate_reference;
 using afar::cal::magnitude_db;
 using afar::cal::normalize;
 using afar::cal::select_inverse_codes;
+using afar::cal::reference_drift_phase_deg;
+using afar::cal::repeatability_from_attempts;
 using afar::cal::unwrap_degrees;
 using afar::cal::unwrap_phase_deg;
+using afar::cal::vswr_from_reflection_db;
 using afar::cal::wrap180;
 
 namespace {
@@ -69,6 +71,15 @@ TEST_CASE("attenuation and magnitude dB", "[lut_math][AT-09]")
     REQUIRE_THAT(attenuation_db(z) + magnitude_db(z), WithinAbs(0.0, kTol));
 }
 
+TEST_CASE("VSWR from reflection magnitude in dB", "[lut_math][vswr]")
+{
+    REQUIRE_THAT(vswr_from_reflection_db(-6.020599913279624), WithinAbs(3.0, kTol));
+    REQUIRE_THAT(vswr_from_reflection_db(-20.0), WithinAbs(11.0 / 9.0, kTol));
+    REQUIRE_THAT(vswr_from_reflection_db(-std::numeric_limits<double>::infinity()),
+                 WithinAbs(1.0, kTol));
+    REQUIRE(std::isinf(vswr_from_reflection_db(0.0)));
+}
+
 TEST_CASE("wrap180 matches formula (6)", "[lut_math][AT-09]")
 {
     REQUIRE_THAT(wrap180(0.0), WithinAbs(0.0, kTol));
@@ -108,27 +119,32 @@ TEST_CASE("unwrap phase along axis", "[lut_math][AT-09]")
     REQUIRE_THAT(deg[3], WithinAbs(270.0, kTol));
 }
 
-TEST_CASE("filter metrics find peak and interpolated 3 dB band", "[filter]")
+TEST_CASE("reference drift between neighboring samples is not zero", "[lut_math][AT-09]")
 {
-    const std::vector<std::uint64_t> frequency{
-        1'000'000'000ULL, 2'000'000'000ULL, 3'000'000'000ULL,
-        4'000'000'000ULL, 5'000'000'000ULL};
-    const std::vector<double> db{-20.0, -6.0, 0.0, -6.0, -30.0};
-    std::vector<std::complex<double>> s21;
-    for (const double value : db) {
-        s21.emplace_back(std::pow(10.0, value / 20.0), 0.0);
-    }
+    const double deg = 12.5;
+    const double rad = deg * std::numbers::pi_v<double> / 180.0;
+    const std::complex<double> r_prev{1.0, 0.0};
+    const std::complex<double> r_curr{std::cos(rad), std::sin(rad)};
 
-    const auto metrics = analyze_filter(frequency, s21);
-    REQUIRE(metrics.valid);
-    REQUIRE(metrics.has_3db_band);
-    REQUIRE(metrics.peak_frequency_hz == 3'000'000'000ULL);
-    REQUIRE_THAT(metrics.peak_db, WithinAbs(0.0, kTol));
-    REQUIRE_THAT(metrics.lower_3db_hz, WithinAbs(2.5e9, 1.0));
-    REQUIRE_THAT(metrics.upper_3db_hz, WithinAbs(3.5e9, 1.0));
-    REQUIRE_THAT(metrics.center_hz, WithinAbs(3.0e9, 1.0));
-    REQUIRE_THAT(metrics.bandwidth_3db_hz, WithinAbs(1.0e9, 1.0));
-    REQUIRE_THAT(metrics.max_stopband_rejection_db, WithinAbs(30.0, kTol));
+    const auto drift = reference_drift_phase_deg(r_prev, r_curr);
+    REQUIRE(drift.has_value());
+    REQUIRE_THAT(*drift, WithinAbs(deg, 1e-9));
+    REQUIRE(*drift != 0.0);
+
+    const auto back = reference_drift_phase_deg(r_curr, r_prev);
+    REQUIRE(back.has_value());
+    REQUIRE_THAT(*back, WithinAbs(-deg, 1e-9));
+
+    // Ноль — не измерение дрейфа (в том числе лишний слот N_A).
+    REQUIRE_FALSE(reference_drift_phase_deg({0.0, 0.0}, r_curr).has_value());
+    REQUIRE_FALSE(reference_drift_phase_deg(r_prev, {0.0, 0.0}).has_value());
+
+    const auto none = repeatability_from_attempts({r_prev});
+    REQUIRE_FALSE(none.has_value());
+    const auto again = repeatability_from_attempts({r_prev, r_curr});
+    REQUIRE(again.has_value());
+    REQUIRE_THAT(again->deg, WithinAbs(deg, 1e-9));
+    REQUIRE(again->deg != 0.0);
 }
 
 TEST_CASE("direct LUT fields from normalized sample", "[lut_math][AT-09]")

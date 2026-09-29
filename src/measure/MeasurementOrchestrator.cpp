@@ -3,18 +3,25 @@
 #include "Manifest.h"
 #include "ParquetExport.h"
 #include "QualityGates.h"
+#include "RawS21TableExport.h"
 #include "RunReportPdf.h"
 
+#include "afar/ScpiIdn.h"
+
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <fstream>
+#include <iterator>
+#include <sstream>
 #include <thread>
 
 namespace afar {
 namespace {
 
-bool idnContainsSupportedPlanar(const std::string& idn)
+bool idnContainsC2220(const std::string& idn)
 {
-    return idn.find("C1220") != std::string::npos || idn.find("C2220") != std::string::npos;
+    return idn.find("C2220") != std::string::npos;
 }
 
 bool hasNanOrInf(const ComplexSweep& sweep)
@@ -25,6 +32,128 @@ bool hasNanOrInf(const ComplexSweep& sweep)
         }
     }
     return false;
+}
+
+std::string channelArtifactStem(std::uint8_t channel)
+{
+    return std::string("channel-") + (channel < 10 ? "0" : "")
+        + std::to_string(static_cast<unsigned>(channel));
+}
+
+DutState appliedStand(const ScanItem& item, const RunConfig& config)
+{
+    DutState stand = item.state;
+    if (item.need_reference) {
+        stand.att_code = static_cast<std::uint16_t>(config.dut.reference.att_code);
+        stand.phase_code = static_cast<std::uint8_t>(config.dut.reference.phase_code);
+    }
+    return stand;
+}
+
+bool codesMatch(const DutState& a, const DutState& b) noexcept
+{
+    return a.channel == b.channel && a.att_code == b.att_code
+        && a.phase_code == b.phase_code;
+}
+
+/// Нет обратного чтения / протокол не передан — остаётся выдержка профиля (HW-DUT-03).
+bool isNoReadbackException(const std::string& msg)
+{
+    return msg.find("нет обратного чтения") != std::string::npos
+        || msg.find("protocol not provided") != std::string::npos
+        || msg.find("протокол") != std::string::npos
+        || msg.find("не передан") != std::string::npos;
+}
+
+SweepConfig sweepConfigFromRun(const RunConfig& config)
+{
+    SweepConfig sweep{};
+    sweep.f_start_hz = config.vna.f_start_hz;
+    sweep.f_stop_hz = config.vna.f_stop_hz;
+    sweep.points = static_cast<std::uint32_t>(config.vna.points);
+    sweep.power_dbm = config.vna.power_dbm;
+    sweep.ifbw_hz = static_cast<std::uint32_t>(config.vna.ifbw_hz);
+    sweep.averages = static_cast<std::uint16_t>(config.vna.averages);
+    // s_parameter перезаписывается в measureAllFour; парсим для согласованности с prepare.
+    (void)parseSParameter(config.vna.s_parameter, sweep.s_parameter);
+    return sweep;
+}
+
+const char* sParameterName(SParameter parameter)
+{
+    switch (parameter) {
+    case SParameter::S11: return "S11";
+    case SParameter::S21: return "S21";
+    case SParameter::S12: return "S12";
+    case SParameter::S22: return "S22";
+    }
+    return "S?";
+}
+
+/// DATA-102: четыре trace через полный configure (публичного DEF-only в C2220Vna нет).
+/// Один сбой не должен стирать уже полученные трассы: переподключаемся один раз
+/// и продолжаем измерять остальные S-параметры.
+ComplexSweep measureAllFour(IVna& vna, SweepConfig base, std::vector<std::string>& failures)
+{
+    ComplexSweep out;
+    constexpr SParameter order[] = {
+        SParameter::S11,
+        SParameter::S21,
+        SParameter::S12,
+        SParameter::S22,
+    };
+    for (const auto p : order) {
+        base.s_parameter = p;
+        std::string last_error;
+        bool measured = false;
+        for (int attempt = 0; attempt < 2 && !measured; ++attempt) {
+            try {
+                if (attempt != 0) {
+                    vna.abort();
+                    vna.connect();
+                }
+                vna.configure(base);
+                auto part = vna.measure_trace();
+                if (part.frequency_hz.size() < 2
+                    || (!out.frequency_hz.empty() && part.frequency_hz != out.frequency_hz)) {
+                    throw std::runtime_error("frequency axis mismatch");
+                }
+                if (out.frequency_hz.empty()) {
+                    out.frequency_hz = std::move(part.frequency_hz);
+                }
+                out.overload = out.overload || part.overload;
+                switch (p) {
+                case SParameter::S11: out.s11 = std::move(part.s11); break;
+                case SParameter::S21: out.s21 = std::move(part.s21); break;
+                case SParameter::S12: out.s12 = std::move(part.s12); break;
+                case SParameter::S22: out.s22 = std::move(part.s22); break;
+                }
+                measured = true;
+            } catch (const std::exception& ex) {
+                last_error = ex.what();
+            }
+        }
+        if (!measured) {
+            failures.push_back(std::string(sParameterName(p)) + ": " + last_error);
+        }
+    }
+    if (out.frequency_hz.empty()) {
+        if (!failures.empty()) {
+            throw std::runtime_error(failures.front());
+        }
+        throw std::runtime_error("не удалось измерить ни одного S-параметра");
+    }
+    return out;
+}
+
+ComplexSweep measureAllFour(IVna& vna, SweepConfig base)
+{
+    std::vector<std::string> failures;
+    auto sweep = measureAllFour(vna, base, failures);
+    if (!failures.empty()) {
+        throw std::runtime_error(failures.front());
+    }
+    return sweep;
 }
 
 }  // namespace
@@ -44,7 +173,7 @@ void MeasurementOrchestrator::setConfig(RunConfig config, AttenuatorCodes att_co
 
 void MeasurementOrchestrator::logEvent(EventLevel level,
                                        const std::string& code,
-                                       const std::string& message,
+                                       const std::string& text,
                                        const DutState* st,
                                        std::optional<int> attempt)
 {
@@ -52,7 +181,7 @@ void MeasurementOrchestrator::logEvent(EventLevel level,
         return;
     }
     RunEvent ev;
-    ev.time_utc = RunEventLog::nowUtcIso8601();
+    ev.timestamp_utc = RunEventLog::nowUtcIso8601();
     ev.level = level;
     ev.component = "measurement-core";
     ev.event_code = code;
@@ -63,12 +192,14 @@ void MeasurementOrchestrator::logEvent(EventLevel level,
         ev.phase_code = static_cast<int>(st->phase_code);
     }
     ev.attempt = attempt;
-    ev.message = message;
+    ev.text = text;
     std::string diag;
     (void)log_.append(ev, diag);
 }
 
-bool MeasurementOrchestrator::transitionLogged(RunState target, const std::string& reason)
+bool MeasurementOrchestrator::transitionLogged(RunState target,
+                                               const std::string& reason,
+                                               const DutState* stand)
 {
     const auto from = sm_.state();
     if (!sm_.tryTransition(target)) {
@@ -77,8 +208,25 @@ bool MeasurementOrchestrator::transitionLogged(RunState target, const std::strin
                      + ": " + reason);
         return false;
     }
-    logEvent(EventLevel::Info, "STATE_TRANSITION",
-             std::string(toString(from)) + " -> " + toString(target) + ": " + reason);
+    // Автотест не задаёт оператора: в строке явное «нет оператора», не пустое поле.
+    std::string text = std::string(toString(from)) + " -> " + toString(target) + ": " + reason
+        + "; пользователь: нет оператора";
+    if (stand != nullptr) {
+        text += "; channel=" + std::to_string(stand->channel);
+        text += " att_code=" + std::to_string(stand->att_code);
+        text += " phase_code=" + std::to_string(stand->phase_code);
+    }
+    if (dut_ != nullptr) {
+        try {
+            const double temperature_c = dut_->temperature_c();
+            std::ostringstream oss;
+            oss << "; temperature_c=" << temperature_c;
+            text += oss.str();
+        } catch (const std::exception&) {
+            // Связи нет — снимок температуры не выдумываем.
+        }
+    }
+    logEvent(EventLevel::Info, "STATE_TRANSITION", text, stand);
     return true;
 }
 
@@ -109,8 +257,8 @@ bool MeasurementOrchestrator::ensureHardwareReady(std::string& diagnostics)
         vna_->connect();
         dut_->connect();
         const auto idn = vna_->identify();
-        if (!idnContainsSupportedPlanar(idn)) {
-            diagnostics = "VNA IDN does not contain C1220/C2220: " + idn;
+        if (!idnContainsC2220(idn)) {
+            diagnostics = "VNA IDN does not contain C2220: " + idn;
             return false;
         }
         SweepConfig sweep{};
@@ -120,15 +268,15 @@ bool MeasurementOrchestrator::ensureHardwareReady(std::string& diagnostics)
         sweep.power_dbm = config_.vna.power_dbm;
         sweep.ifbw_hz = static_cast<std::uint32_t>(config_.vna.ifbw_hz);
         sweep.averages = static_cast<std::uint16_t>(config_.vna.averages);
-        sweep.parameter = SParameter::S21;
-        vna_->configure(sweep);
-        const auto errors = vna_->drain_errors();
-        if (!errors.empty()) {
-            diagnostics = "VNA configure error: " + errors.front();
+        if (!parseSParameter(config_.vna.s_parameter, sweep.s_parameter)) {
+            diagnostics = "vna.s_parameter: must be one of S11|S12|S21|S22";
             return false;
         }
+        vna_->configure(sweep);
+        drainAndLogVnaErrors();
         return true;
     } catch (const std::exception& ex) {
+        drainAndLogVnaErrors();
         diagnostics = ex.what();
         return false;
     }
@@ -137,7 +285,8 @@ bool MeasurementOrchestrator::ensureHardwareReady(std::string& diagnostics)
 bool MeasurementOrchestrator::prepare(const std::filesystem::path& data_root,
                                       const std::filesystem::path& run_config_src,
                                       const std::filesystem::path& attenuator_csv_src,
-                                      std::string& diagnostics)
+                                      std::string& diagnostics,
+                                      const std::string& vna_calibration_id)
 {
     diagnostics.clear();
     last_error_.clear();
@@ -182,8 +331,31 @@ bool MeasurementOrchestrator::prepare(const std::filesystem::path& data_root,
     }
 
     std::string store_diag;
+    RawS21Meta store_meta;
+    {
+        std::ifstream cfg_in(series_.runConfigPath(), std::ios::binary);
+        if (!cfg_in) {
+            diagnostics = "cannot read applied run-config for raw meta";
+            last_error_ = diagnostics;
+            (void)transitionLogged(RunState::Error, diagnostics);
+            return false;
+        }
+        store_meta.run_config_json.assign(std::istreambuf_iterator<char>(cfg_in),
+                                          std::istreambuf_iterator<char>());
+    }
+    try {
+        store_meta.vna_idn = vna_->identify();
+    } catch (const std::exception& ex) {
+        diagnostics = ex.what();
+        last_error_ = diagnostics;
+        (void)transitionLogged(RunState::Error, diagnostics);
+        return false;
+    }
+    // RMD-004 / CAL-001: ручной id из мастера; SCPI калибровки нет.
+    store_meta.vna_calibration_id = vna_calibration_id;
     if (!RawS21Store::create(series_.rawS21Path(), scan_.channels(), scan_.enabledAttCodes(),
-                             scan_.phaseCodes(), frequency_axis_, store_, store_diag)) {
+                             scan_.phaseCodes(), frequency_axis_, store_meta, store_,
+                             store_diag)) {
         diagnostics = store_diag;
         last_error_ = diagnostics;
         (void)transitionLogged(RunState::Error, diagnostics);
@@ -316,11 +488,16 @@ bool MeasurementOrchestrator::stop()
         return true;
     }
     if (sm_.state() == RunState::Paused) {
-        if (!transitionLogged(RunState::Error, "stop from paused")) {
+        // Paused→Error→Aborted: отдельный код оператора, не отказ VNA/DUT.
+        constexpr const char* kReason = "OPERATOR_STOP: останов оператором из паузы";
+        last_error_.clear();
+        logEvent(EventLevel::Info, "OPERATOR_STOP",
+                 "останов оператором из паузы");
+        if (!transitionLogged(RunState::Error, kReason)) {
             return false;
         }
         dut_->set_safe_state();
-        return transitionLogged(RunState::Aborted, "stop from paused");
+        return transitionLogged(RunState::Aborted, kReason);
     }
     return false;
 }
@@ -400,6 +577,70 @@ void MeasurementOrchestrator::doSleep(int ms) const
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
+std::vector<std::string> MeasurementOrchestrator::takeLastScpiErrors()
+{
+    std::vector<std::string> out;
+    out.swap(last_scpi_errors_);
+    return out;
+}
+
+void MeasurementOrchestrator::drainAndLogVnaErrors(const DutState* st)
+{
+    if (!vna_) {
+        return;
+    }
+    try {
+        const auto errs = vna_->drain_errors();
+        for (const auto& text : errs) {
+            if (text.empty()) {
+                continue;
+            }
+            last_scpi_errors_.push_back(text);
+            logEvent(EventLevel::Warning, "VNA_SCPI_ERR", text, st);
+        }
+    } catch (const std::exception& ex) {
+        const std::string msg = std::string("drain_errors failed: ") + ex.what();
+        last_scpi_errors_.push_back(msg);
+        logEvent(EventLevel::Warning, "VNA_SCPI_ERR", msg, st);
+    }
+}
+
+bool MeasurementOrchestrator::confirmDutOrSettle(const DutState& expected)
+{
+    try {
+        const DutState rb = dut_->readback();
+        if (!codesMatch(rb, expected)) {
+            last_error_ = "DUT readback mismatch channel="
+                + std::to_string(expected.channel) + " expected att_code="
+                + std::to_string(expected.att_code) + " phase_code="
+                + std::to_string(expected.phase_code) + " got att_code="
+                + std::to_string(rb.att_code) + " phase_code="
+                + std::to_string(rb.phase_code) + " got channel="
+                + std::to_string(rb.channel);
+            logEvent(EventLevel::Error, "DUT_READBACK_MISMATCH", last_error_,
+                     &expected);
+            dut_->set_safe_state();
+            (void)transitionLogged(RunState::Error, last_error_, &expected);
+            return false;
+        }
+        // Коды подтверждены — выдержка не нужна (HW-DUT-03).
+        return true;
+    } catch (const std::exception& ex) {
+        if (isNoReadbackException(ex.what())) {
+            doSleep(settleMsFor(expected.att_code));
+            return true;
+        }
+        last_error_ = std::string(ex.what()) + " channel="
+            + std::to_string(expected.channel) + " att_code="
+            + std::to_string(expected.att_code) + " phase_code="
+            + std::to_string(expected.phase_code);
+        logEvent(EventLevel::Error, "DUT_READBACK_FAIL", last_error_, &expected);
+        dut_->set_safe_state();
+        (void)transitionLogged(RunState::Error, last_error_, &expected);
+        return false;
+    }
+}
+
 bool MeasurementOrchestrator::measureReference(const ScanItem& after_item)
 {
     DutState ref{};
@@ -408,13 +649,23 @@ bool MeasurementOrchestrator::measureReference(const ScanItem& after_item)
     ref.phase_code = static_cast<std::uint8_t>(config_.dut.reference.phase_code);
     try {
         dut_->apply(ref);
-        doSleep(settleMsFor(ref.att_code));
-        ComplexSweep sweep = vna_->measure_s21();
+    } catch (const std::exception& ex) {
+        last_error_ = ex.what();
+        logEvent(EventLevel::Error, "REF_FAIL", last_error_, &ref);
+        return false;
+    }
+    if (!confirmDutOrSettle(ref)) {
+        return false;
+    }
+    try {
+        ComplexSweep sweep = measureAllFour(*vna_, sweepConfigFromRun(config_));
+        drainAndLogVnaErrors(&ref);
         const auto row = scan_.referenceAttRow(after_item.state.att_code);
         if (!row) {
             return false;
         }
         std::string diag;
+        // LUT/reference — только S21 (DATA-102 лёгкий путь).
         if (!store_.writeReference(ref.channel, *row, sweep.s21, diag)) {
             last_error_ = diag;
             return false;
@@ -422,6 +673,7 @@ bool MeasurementOrchestrator::measureReference(const ScanItem& after_item)
         logEvent(EventLevel::Info, "REF_OK", "reference measured", &ref);
         return true;
     } catch (const std::exception& ex) {
+        drainAndLogVnaErrors(&ref);
         last_error_ = ex.what();
         logEvent(EventLevel::Error, "REF_FAIL", last_error_, &ref);
         return false;
@@ -457,23 +709,24 @@ bool MeasurementOrchestrator::measureOneState(const ScanItem& item)
         return false;
     }
 
-    doSleep(settleMsFor(st.att_code));
+    if (!confirmDutOrSettle(st)) {
+        return false;
+    }
 
     ComplexSweep sweep;
     bool vna_error = false;
     std::string vna_msg;
     const int max_tries = 1 + kVnaRetries;
+    const SweepConfig base_sweep = sweepConfigFromRun(config_);
     for (int try_i = 0; try_i < max_tries; ++try_i) {
         ++attempt;
         try {
-            sweep = vna_->measure_s21();
-            const auto errors = vna_->drain_errors();
-            if (!errors.empty()) {
-                throw std::runtime_error("VNA measurement error: " + errors.front());
-            }
+            sweep = measureAllFour(*vna_, base_sweep);
+            drainAndLogVnaErrors(&st);
             vna_error = false;
             break;
         } catch (const std::exception& ex) {
+            drainAndLogVnaErrors(&st);
             vna_error = true;
             vna_msg = ex.what();
             logEvent(EventLevel::Warning, "VNA_RETRY", vna_msg, &st, static_cast<int>(attempt));
@@ -502,6 +755,7 @@ bool MeasurementOrchestrator::measureOneState(const ScanItem& item)
         return false;
     }
 
+    // LUT — только S21; полный ComplexSweep остаётся в last_sweep_ для UI.
     rec.s21 = sweep.s21;
     rec.overload = sweep.overload;
 
@@ -578,7 +832,13 @@ bool MeasurementOrchestrator::stepOnce()
         break;
     }
     if (cursor_ >= scan_.size()) {
-        (void)transitionLogged(RunState::Finalizing, "all completed");
+        const DutState* stand = nullptr;
+        DutState snap{};
+        if (has_last_sweep_ && cursor_ > 0) {
+            snap = appliedStand(scan_.at(cursor_ - 1), config_);
+            stand = &snap;
+        }
+        (void)transitionLogged(RunState::Finalizing, "all completed", stand);
         dut_->set_safe_state();
         std::string export_diag;
         if (!finalizeExports(export_diag)) {
@@ -587,12 +847,42 @@ bool MeasurementOrchestrator::stepOnce()
             (void)transitionLogged(RunState::Error, export_diag);
             return false;
         }
-        (void)transitionLogged(RunState::Complete, "done");
-        // Обновить манифест после записи STATE_TRANSITION Complete в run-events.
+        // Строка Complete в журнал до смены состояния — манифест ещё в Finalizing.
+        {
+            std::string text = std::string(toString(sm_.state())) + " -> "
+                + toString(RunState::Complete) + ": done; пользователь: нет оператора";
+            if (stand != nullptr) {
+                text += "; channel=" + std::to_string(stand->channel);
+                text += " att_code=" + std::to_string(stand->att_code);
+                text += " phase_code=" + std::to_string(stand->phase_code);
+            }
+            if (dut_ != nullptr) {
+                try {
+                    const double temperature_c = dut_->temperature_c();
+                    std::ostringstream oss;
+                    oss << "; temperature_c=" << temperature_c;
+                    text += oss.str();
+                } catch (const std::exception&) {
+                }
+            }
+            logEvent(EventLevel::Info, "STATE_TRANSITION", text, stand);
+        }
         if (!report::writeManifest(series_, export_diag)) {
             last_error_ = export_diag;
             logEvent(EventLevel::Error, "EXPORT_FAIL", export_diag);
             (void)transitionLogged(RunState::Error, export_diag);
+            return false;
+        }
+        // DATA-03 / AT-11: SHA-256 и размеры — гейт Complete, не только unit-тест.
+        if (!report::verifyManifest(series_, export_diag)) {
+            last_error_ = export_diag;
+            logEvent(EventLevel::Error, "EXPORT_FAIL", export_diag);
+            (void)transitionLogged(RunState::Error, export_diag);
+            return false;
+        }
+        if (!sm_.tryTransition(RunState::Complete)) {
+            logEvent(EventLevel::Warning, "STATE_REJECT",
+                     "rejected Finalizing -> Complete after manifest");
             return false;
         }
         return false;
@@ -618,14 +908,16 @@ bool MeasurementOrchestrator::stepOnce()
         return false;
     }
     if (pause_requested_) {
-        (void)transitionLogged(RunState::Pausing, "pause after state");
+        const DutState snap = appliedStand(scan_.at(cursor_ - 1), config_);
+        (void)transitionLogged(RunState::Pausing, "pause after state", &snap);
         dut_->set_safe_state();
         (void)transitionLogged(RunState::Paused, "paused");
         pause_requested_ = false;
         return false;
     }
     if (stop_requested_) {
-        (void)transitionLogged(RunState::Stopping, "stop after state");
+        const DutState snap = appliedStand(scan_.at(cursor_ - 1), config_);
+        (void)transitionLogged(RunState::Stopping, "stop after state", &snap);
         dut_->set_safe_state();
         (void)transitionLogged(RunState::Aborted, "stopped");
         return false;
@@ -669,15 +961,342 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
     pdf_info.run_id = config_.run_id;
     pdf_info.completed_states = store_.completedCount();
     pdf_info.valid_direct_count = report::countValidDirect(direct);
+    pdf_info.valid_inverse_count = report::countValidInverse(inverse);
+    pdf_info.frequency_points = store_.frequencyHz().size();
+    pdf_info.attenuator_codes = store_.attCodes().size();
+    pdf_info.phase_codes = store_.phaseCodes().size();
+    if (!store_.frequencyHz().empty()) {
+        pdf_info.f_start_hz = store_.frequencyHz().front();
+        pdf_info.f_stop_hz = store_.frequencyHz().back();
+    }
+    for (const auto channel : store_.channels()) {
+        report::ChannelReportInfo channel_info;
+        channel_info.channel = channel;
+        for (const auto att : store_.attCodes()) {
+            for (const auto phase : store_.phaseCodes()) {
+                if (store_.isCompleted(channel, att, phase)) {
+                    ++channel_info.completed_states;
+                }
+            }
+        }
+        channel_info.valid_direct_count = static_cast<std::size_t>(std::count_if(
+            direct.begin(), direct.end(), [channel](const cal::DirectLutEntry& entry) {
+                return entry.channel == channel && entry.valid;
+            }));
+        channel_info.valid_inverse_count = static_cast<std::size_t>(std::count_if(
+            inverse.begin(), inverse.end(), [channel](const report::InverseLutEntry& entry) {
+                return entry.channel == channel && entry.valid;
+            }));
+        pdf_info.channels.push_back(channel_info);
+    }
     pdf_info.series_path = series_.root().string();
+    pdf_info.vna_idn = store_.vnaIdn();
+    {
+        // parse_scpi_idn — afar/ScpiIdn.h; полный IDN уже в meta.
+        const auto fields = parse_scpi_idn(pdf_info.vna_idn);
+        pdf_info.vna_model = fields.model;
+        pdf_info.vna_serial = fields.serial;
+        pdf_info.vna_firmware = fields.firmware;
+    }
+    pdf_info.max_drift_phase_deg = config_.limits.max_drift_phase_deg;
+    pdf_info.max_phase_residual_deg = config_.limits.max_phase_residual_deg;
+    {
+        const auto thru_path = series_.root() / SeriesDirectory::kThruApproval;
+        (void)report::loadThruApprovalJson(thru_path, pdf_info);
+    }
     if (!report::writeRunReportPdf(series_.reportPath(), pdf_info, diagnostics)) {
         return false;
     }
 
-    if (!report::writeManifest(series_, diagnostics)) {
+    // Один рабочий калибровочный файл и один PDF на канал. Direct LUT остаётся общей
+    // диагностической таблицей, чтобы не удваивать самый большой файл серии.
+    for (const auto& channel_info : pdf_info.channels) {
+        std::vector<report::InverseLutEntry> channel_calibration;
+        std::copy_if(inverse.begin(), inverse.end(), std::back_inserter(channel_calibration),
+                     [&channel_info](const report::InverseLutEntry& entry) {
+                         return entry.channel == channel_info.channel;
+                     });
+        const auto stem = channelArtifactStem(channel_info.channel);
+        if (channel_calibration.empty()
+            || !report::exportInverseLut(series_.root() / (stem + "-calibration.parquet"),
+                                         channel_calibration, diagnostics)) {
+            if (diagnostics.empty()) {
+                diagnostics = "channel calibration is empty: " + stem;
+            }
+            return false;
+        }
+        auto channel_pdf = pdf_info;
+        channel_pdf.completed_states = channel_info.completed_states;
+        channel_pdf.valid_direct_count = channel_info.valid_direct_count;
+        channel_pdf.valid_inverse_count = channel_info.valid_inverse_count;
+        channel_pdf.channels = {channel_info};
+        if (!report::writeRunReportPdf(series_.root() / (stem + "-report.pdf"),
+                                       channel_pdf, diagnostics)) {
+            return false;
+        }
+    }
+
+    // GAP-RAW-001: табличное сырьё т. 7.3 (до манифеста — файл попадёт в SHA-256).
+    if (!report::exportRawS21Csv(series_.rawS21CsvPath(), store_, config_.run_id,
+                                 series_.runEventsPath(), diagnostics)) {
         return false;
     }
+
+    // DATA-03 / AT-11: reopen LUT до Complete; совпадение числа valid с PDF.
+    std::vector<cal::DirectLutEntry> direct_reopen;
+    if (!report::readDirectLut(series_.directLutPath(), direct_reopen, diagnostics)) {
+        return false;
+    }
+    if (report::countValidDirect(direct_reopen) != pdf_info.valid_direct_count) {
+        diagnostics = "valid_direct_count mismatch after reopen";
+        return false;
+    }
+    std::vector<report::InverseLutEntry> inverse_reopen;
+    if (!report::readInverseLut(series_.inverseLutPath(), inverse_reopen, diagnostics)) {
+        return false;
+    }
+    if (report::countValidInverse(inverse_reopen) != report::countValidInverse(inverse)) {
+        diagnostics = "valid_inverse_count mismatch after reopen";
+        return false;
+    }
+    if (!report::isValidPdfSmoke(series_.reportPath(), diagnostics)) {
+        return false;
+    }
+
+    // manifest.sha256 — в stepOnce после строки Complete в журнале (ещё Finalizing).
     return true;
+}
+
+bool MeasurementOrchestrator::probeIdentify(std::string& idn_or_diagnostics)
+{
+    idn_or_diagnostics.clear();
+    last_error_.clear();
+    if (!vna_) {
+        idn_or_diagnostics = "VNA pointer is null";
+        last_error_ = idn_or_diagnostics;
+        return false;
+    }
+    if (sm_.state() != RunState::Idle) {
+        idn_or_diagnostics = "probeIdentify: требуется Idle";
+        last_error_ = idn_or_diagnostics;
+        return false;
+    }
+    try {
+        vna_->connect();
+        const auto idn = vna_->identify();
+        last_vna_idn_ = idn;
+        if (!idnContainsC2220(idn)) {
+            idn_or_diagnostics = "VNA IDN does not contain C2220: " + idn;
+            last_error_ = idn_or_diagnostics;
+            vna_->abort();
+            logEvent(EventLevel::Error, "HW_PROBE_FAIL", idn_or_diagnostics);
+            return false;
+        }
+        idn_or_diagnostics = idn;
+        logEvent(EventLevel::Info, "HW_PROBE_OK", idn);
+        drainAndLogVnaErrors();
+        return true;
+    } catch (const std::exception& ex) {
+        idn_or_diagnostics = ex.what();
+        last_error_ = idn_or_diagnostics;
+        drainAndLogVnaErrors();
+        vna_->abort();
+        logEvent(EventLevel::Error, "HW_PROBE_FAIL", idn_or_diagnostics);
+        return false;
+    }
+}
+
+bool MeasurementOrchestrator::runProbeCodes(const SweepConfig& sweep,
+                                            std::uint16_t att_last,
+                                            std::uint8_t phase_last,
+                                            std::string& diagnostics)
+{
+    diagnostics.clear();
+    last_error_.clear();
+    if (!vna_ || !dut_) {
+        diagnostics = "VNA/DUT pointers are null";
+        last_error_ = diagnostics;
+        return false;
+    }
+    if (sm_.state() != RunState::Idle) {
+        diagnostics = "runProbeCodes: требуется Idle";
+        last_error_ = diagnostics;
+        return false;
+    }
+
+    auto fail = [&](const std::string& msg) {
+        diagnostics = msg;
+        last_error_ = msg;
+        vna_->abort();
+        dut_->set_safe_state();
+        logEvent(EventLevel::Error, "PROBE_CODES_FAIL", msg);
+        return false;
+    };
+
+    try {
+        vna_->connect();
+        dut_->connect();
+        const auto idn = vna_->identify();
+        if (!idnContainsC2220(idn)) {
+            return fail("VNA IDN does not contain C2220: " + idn);
+        }
+        vna_->configure(sweep);
+        drainAndLogVnaErrors();
+
+        const std::uint16_t atts[2] = {0, att_last};
+        const std::uint8_t phases[2] = {0, phase_last};
+        const int n_att = (att_last == 0) ? 1 : 2;
+        const int n_ph = (phase_last == 0) ? 1 : 2;
+
+        for (int ai = 0; ai < n_att; ++ai) {
+            for (int pi = 0; pi < n_ph; ++pi) {
+                DutState st{};
+                st.channel = 1;
+                st.att_code = atts[ai];
+                st.phase_code = phases[pi];
+                dut_->apply(st);
+                if (!confirmDutOrSettle(st)) {
+                    return fail(last_error_.empty() ? "DUT confirm/settle failed" : last_error_);
+                }
+                try {
+                    (void)vna_->measure_s21();
+                    drainAndLogVnaErrors(&st);
+                } catch (const std::exception&) {
+                    drainAndLogVnaErrors(&st);
+                    throw;
+                }
+                logEvent(EventLevel::Info, "PROBE_CODE_OK",
+                         "ch=1 att=" + std::to_string(st.att_code)
+                             + " phase=" + std::to_string(st.phase_code),
+                         &st);
+            }
+        }
+        dut_->set_safe_state();
+        diagnostics = "пробные коды: ch=1 att=0.." + std::to_string(att_last)
+            + " phase=0.." + std::to_string(phase_last);
+        logEvent(EventLevel::Info, "PROBE_CODES_OK", diagnostics);
+        return true;
+    } catch (const std::exception& ex) {
+        return fail(ex.what());
+    }
+}
+
+bool MeasurementOrchestrator::measurePreview(const SweepConfig& sweep, std::string& diagnostics)
+{
+    diagnostics.clear();
+    last_error_.clear();
+    if (!vna_) {
+        diagnostics = "VNA pointer is null";
+        last_error_ = diagnostics;
+        return false;
+    }
+    const auto st = sm_.state();
+    if (st != RunState::Idle && st != RunState::Ready) {
+        diagnostics = "measurePreview: только Idle или Ready (серия не должна идти)";
+        last_error_ = diagnostics;
+        return false;
+    }
+    try {
+        if (st == RunState::Idle) {
+            vna_->connect();
+        }
+        last_vna_idn_ = vna_->identify();
+        std::vector<std::string> failures;
+        last_sweep_ = measureAllFour(*vna_, sweep, failures);
+        has_last_sweep_ = true;
+        has_last_observed_config_ = false;
+        try {
+            last_observed_config_ = vna_->read_config();
+            has_last_observed_config_ = true;
+        } catch (const std::exception& ex) {
+            failures.push_back(std::string("readback: ") + ex.what());
+        }
+        drainAndLogVnaErrors();
+        diagnostics = "measurePreview: S11/S21/S12/S22 OK";
+        if (!failures.empty()) {
+            diagnostics = "measurePreview: получены доступные трассы; ошибки: ";
+            for (std::size_t i = 0; i < failures.size(); ++i) {
+                diagnostics += (i == 0 ? "" : "; ") + failures[i];
+            }
+        }
+        logEvent(EventLevel::Info, "MEASURE_PREVIEW_OK", diagnostics);
+        return true;
+    } catch (const std::exception& ex) {
+        diagnostics = ex.what();
+        last_error_ = diagnostics;
+        drainAndLogVnaErrors();
+        logEvent(EventLevel::Error, "MEASURE_PREVIEW_FAIL", diagnostics);
+        return false;
+    }
+}
+
+bool MeasurementOrchestrator::calibrateTwoPortStep(TwoPortCalibrationStep step,
+                                                   std::string& diagnostics)
+{
+    diagnostics.clear();
+    last_error_.clear();
+    if (!vna_) {
+        diagnostics = "VNA pointer is null";
+        last_error_ = diagnostics;
+        return false;
+    }
+    const auto st = sm_.state();
+    if (st != RunState::Idle && st != RunState::Ready) {
+        diagnostics = "calibrateTwoPortStep: только Idle или Ready";
+        last_error_ = diagnostics;
+        return false;
+    }
+    try {
+        if (st == RunState::Idle) {
+            vna_->connect();
+        }
+        vna_->calibrate_two_port(step);
+        drainAndLogVnaErrors();
+        diagnostics = "calibrate_two_port step OK";
+        logEvent(EventLevel::Info, "CAL_STEP_OK", diagnostics);
+        return true;
+    } catch (const std::exception& ex) {
+        diagnostics = ex.what();
+        last_error_ = diagnostics;
+        drainAndLogVnaErrors();
+        logEvent(EventLevel::Error, "CAL_STEP_FAIL", diagnostics);
+        return false;
+    }
+}
+
+bool MeasurementOrchestrator::calibrateOnePortStep(OnePortCalibrationStep step,
+                                                   int port,
+                                                   std::string& diagnostics)
+{
+    diagnostics.clear();
+    last_error_.clear();
+    if (!vna_) {
+        diagnostics = "VNA pointer is null";
+        last_error_ = diagnostics;
+        return false;
+    }
+    const auto st = sm_.state();
+    if (st != RunState::Idle && st != RunState::Ready) {
+        diagnostics = "calibrateOnePortStep: только Idle или Ready";
+        last_error_ = diagnostics;
+        return false;
+    }
+    try {
+        if (st == RunState::Idle) {
+            vna_->connect();
+        }
+        vna_->calibrate_one_port(step, port);
+        drainAndLogVnaErrors();
+        diagnostics = "calibrate_one_port step OK";
+        logEvent(EventLevel::Info, "CAL_ONE_PORT_OK", diagnostics);
+        return true;
+    } catch (const std::exception& ex) {
+        diagnostics = ex.what();
+        last_error_ = diagnostics;
+        drainAndLogVnaErrors();
+        logEvent(EventLevel::Error, "CAL_ONE_PORT_FAIL", diagnostics);
+        return false;
+    }
 }
 
 }  // namespace afar

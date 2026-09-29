@@ -192,6 +192,19 @@ void CodeMatrixTab::onSelectionEdited()
     emit selectionChanged(selectedChannel(), selectedAttCode());
 }
 
+void CodeMatrixTab::updateDetailLabel(int status, int attempt, int overload)
+{
+    const QString timeText = m_slotUtc.isEmpty() ? QStringLiteral("время не записано")
+                                                 : m_slotUtc;
+    m_detail->setText(
+        QStringLiteral("Фаза %1 · время: %2 · статус: %3 · попыток: %4 · перегрузка: %5")
+            .arg(m_selectedPhase)
+            .arg(timeText)
+            .arg(statusText(status))
+            .arg(attempt)
+            .arg(overload ? QStringLiteral("да") : QStringLiteral("нет")));
+}
+
 void CodeMatrixTab::onCellClicked()
 {
     auto* btn = qobject_cast<QPushButton*>(sender());
@@ -203,13 +216,27 @@ void CodeMatrixTab::onCellClicked()
     const int attempt = btn->property("attempt").toInt();
     const int ov = btn->property("overload").toInt();
     m_selectedPhase = phase;
-    m_detail->setText(
-        QStringLiteral("Фаза %1 · статус: %2 · попыток: %3 · перегрузка: %4")
-            .arg(phase)
-            .arg(statusText(st))
-            .arg(attempt)
-            .arg(ov ? QStringLiteral("да") : QStringLiteral("нет")));
+    m_slotUtc.clear();
+    updateDetailLabel(st, attempt, ov);
     emit cellInspectRequested(selectedChannel(), selectedAttCode(), phase);
+}
+
+void CodeMatrixTab::setSlotRecordedUtc(int channel,
+                                       int attCode,
+                                       int phase,
+                                       const QString& timestampUtc)
+{
+    if (channel != selectedChannel() || attCode != selectedAttCode()
+        || phase != m_selectedPhase) {
+        return;
+    }
+    m_slotUtc = timestampUtc;
+    if (phase < 0 || phase >= m_cells.size()) {
+        return;
+    }
+    auto* btn = m_cells[phase];
+    updateDetailLabel(btn->property("status").toInt(), btn->property("attempt").toInt(),
+                      btn->property("overload").toInt());
 }
 
 void CodeMatrixTab::setCellSweepCurves(const QVector<double>& freqGhz,

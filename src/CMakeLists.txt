@@ -84,22 +84,51 @@ target_include_directories(afar_qc PUBLIC
 )
 afar_enable_warnings(afar_qc)
 
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+
 # RPT-001…003: Parquet(AFARPQ)/манифест/PDF без Apache Arrow и OpenSSL.
 # До afar_measure: оркестратор линкует report для Finalizing (LUT/PDF/manifest).
 add_library(afar_report STATIC
     report/ParquetExport.cpp
     report/ParquetExport.h
+    report/RawS21TableExport.cpp
+    report/RawS21TableExport.h
     report/Manifest.cpp
     report/Manifest.h
     report/RunReportPdf.cpp
     report/RunReportPdf.h
+    report/TwoPortExport.cpp
+    report/TwoPortExport.h
 )
 target_include_directories(afar_report PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/report
     ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(afar_report PUBLIC afar_cal afar_data)
+target_link_libraries(afar_report PUBLIC afar_cal afar_data afar_qc Qt6::Gui)
 afar_enable_warnings(afar_report)
+
+# Версии и хеш коммита вшиваются при конфигурации. Из GUI git не вызывается.
+find_package(Git QUIET)
+set(AFAR_GIT_COMMIT "")
+if(GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        OUTPUT_VARIABLE AFAR_GIT_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _afar_git_rc
+    )
+    if(NOT _afar_git_rc EQUAL 0)
+        set(AFAR_GIT_COMMIT "")
+    endif()
+endif()
+unset(_afar_git_rc)
+
+set(AFAR_JSON_VERSION "3.11.3")
+if(DEFINED nlohmann_json_VERSION AND NOT nlohmann_json_VERSION STREQUAL "")
+    set(AFAR_JSON_VERSION "${nlohmann_json_VERSION}")
+endif()
 
 add_library(afar_measure STATIC
     measure/RunStateMachine.cpp
@@ -143,8 +172,16 @@ target_include_directories(afar_dut PUBLIC
 target_link_libraries(afar_dut PUBLIC afar_interfaces)
 afar_enable_warnings(afar_dut)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
 set(CMAKE_AUTOMOC ON)
+if(NOT DEFINED Qt6_VERSION)
+    set(Qt6_VERSION "unknown")
+endif()
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/report/AfarBuildInfo.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/report/AfarBuildInfo.h
+    @ONLY
+)
+target_include_directories(afar_report PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/report)
 
 add_executable(AfarRxCalibrationStudio WIN32
     app/main.cpp
@@ -162,6 +199,8 @@ add_executable(AfarRxCalibrationStudio WIN32
     ui/CodeMatrixTab.h
     ui/DataFormatsTab.cpp
     ui/DataFormatsTab.h
+    ui/AcceptanceAtTab.cpp
+    ui/AcceptanceAtTab.h
     ui/StartWizard.cpp
     ui/StartWizard.h
     ui/MeasureWorker.cpp
@@ -173,17 +212,23 @@ target_include_directories(AfarRxCalibrationStudio PRIVATE
 )
 file(TO_CMAKE_PATH "${PROJECT_SOURCE_DIR}/examples" _afar_examples_dir)
 target_compile_definitions(AfarRxCalibrationStudio PRIVATE
-    AFAR_EXAMPLES_DIR="${_afar_examples_dir}"
+    "AFAR_EXAMPLES_DIR=\"${_afar_examples_dir}\""
 )
 unset(_afar_examples_dir)
+# MinGW + AUTOMOC: вложенные кавычки в -D ломают генерацию moc_predefs.h.
+set_target_properties(AfarRxCalibrationStudio PROPERTIES AUTOMOC_COMPILER_PREDEFINES OFF)
 target_link_libraries(AfarRxCalibrationStudio PRIVATE
     Qt6::Widgets
     afar_measure
     afar_vna
     afar_sim
+    afar_dut
     afar_report
     afar_data
     afar_cal
     afar_qc
 )
+if(WIN32)
+    target_link_libraries(AfarRxCalibrationStudio PRIVATE Psapi)
+endif()
 afar_enable_warnings(AfarRxCalibrationStudio)

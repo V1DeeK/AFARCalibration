@@ -4,6 +4,7 @@
 #include "MeasurementOrchestrator.h"
 #include "VnaSimulator.h"
 #include "sim_grid_fixtures.h"
+#include "qt_test_application.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -25,6 +26,7 @@ void runSimSeries(const std::filesystem::path& root,
                   std::size_t expected_states,
                   std::size_t expected_complex)
 {
+    (void)afar::test::guiApplication();
     const auto fixtures = root / "fixtures";
     afar::test::writeSimGridFixtures(fixtures, run_id, channel_last, att_count, phase_last,
                                      points);

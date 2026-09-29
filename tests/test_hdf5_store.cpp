@@ -47,7 +47,14 @@ TEST_CASE("RawS21Store create/write/reopen/completed", "[hdf5_store][DATA-006][T
 
     afar::RawS21Store store;
     std::string diag;
-    REQUIRE(afar::RawS21Store::create(path, channels, atts, phases, freqs, store, diag));
+    afar::RawS21Meta meta;
+    meta.run_config_json = R"({"schema":"afar.stage1.run-config.v1","run_id":"meta-test"})";
+    meta.vna_idn = "Planar,C2220,SIM,1.0";
+    meta.vna_calibration_id.clear();
+    REQUIRE(afar::RawS21Store::create(path, channels, atts, phases, freqs, meta, store, diag));
+    REQUIRE(store.runConfigJson() == meta.run_config_json);
+    REQUIRE(store.vnaIdn() == meta.vna_idn);
+    REQUIRE(store.vnaCalibrationId().empty());
 
     afar::RawS21StateRecord rec;
     rec.s21 = {{1.0, 2.0}, {3.0, 4.0}, {5.0, 6.0}};
@@ -68,6 +75,9 @@ TEST_CASE("RawS21Store create/write/reopen/completed", "[hdf5_store][DATA-006][T
 
     afar::RawS21Store reopened;
     REQUIRE(afar::RawS21Store::open(path, reopened, diag));
+    REQUIRE(reopened.runConfigJson() == meta.run_config_json);
+    REQUIRE(reopened.vnaIdn() == meta.vna_idn);
+    REQUIRE(reopened.vnaCalibrationId().empty());
     afar::RawS21StateRecord got;
     REQUIRE(reopened.readState(1, 0, 0, got, diag));
     REQUIRE(got.completed);
@@ -108,7 +118,7 @@ TEST_CASE("RunEventLog append JSONL without S21 arrays", "[hdf5_store][DATA-007]
     REQUIRE(afar::RunEventLog::openAppend(path, log, diag));
 
     afar::RunEvent ev;
-    ev.time_utc = "2026-09-22T12:00:00.000Z";
+    ev.timestamp_utc = "2026-09-22T12:00:00.000Z";
     ev.level = afar::EventLevel::Info;
     ev.component = "test";
     ev.event_code = "UNIT";
@@ -117,13 +127,28 @@ TEST_CASE("RunEventLog append JSONL without S21 arrays", "[hdf5_store][DATA-007]
     ev.att_code = 0;
     ev.phase_code = 2;
     ev.attempt = 1;
-    ev.message = "hello";
+    ev.text = "hello";
     REQUIRE(log.append(ev, diag));
     log.close();
 
     std::ifstream in(path);
     std::string line;
     REQUIRE(std::getline(in, line));
-    REQUIRE(line.find("\"message\":\"hello\"") != std::string::npos);
+    REQUIRE(line.find("\"timestamp_utc\":\"2026-09-22T12:00:00.000Z\"") != std::string::npos);
+    REQUIRE(line.find("\"text\":\"hello\"") != std::string::npos);
+    REQUIRE(line.find("time_utc") == std::string::npos);
+    REQUIRE(line.find("\"message\"") == std::string::npos);
     REQUIRE(line.find("s21") == std::string::npos);
+
+    afar::RunEvent parsed;
+    REQUIRE(afar::RunEventLog::parseLine(line, parsed, diag));
+    REQUIRE(parsed.timestamp_utc == "2026-09-22T12:00:00.000Z");
+    REQUIRE(parsed.text == "hello");
+
+    const std::string legacy =
+        R"({"time_utc":"2020-01-01T00:00:00.000Z","message":"old","level":"info"})";
+    afar::RunEvent legacy_ev;
+    REQUIRE(afar::RunEventLog::parseLine(legacy, legacy_ev, diag));
+    REQUIRE(legacy_ev.timestamp_utc == "2020-01-01T00:00:00.000Z");
+    REQUIRE(legacy_ev.text == "old");
 }

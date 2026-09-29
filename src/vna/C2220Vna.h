@@ -3,6 +3,7 @@
 #include "IScpiTransport.h"
 
 #include "afar/IVna.h"
+#include "afar/ScpiIdn.h"
 
 #include <cstdint>
 #include <string>
@@ -15,8 +16,8 @@ public:
     struct Profile {
         /// Явное подтверждение режима прямого доступа в профиле стенда (HW-VNA-05).
         bool allow_direct_access{false};
-        /// Необязательная единственная модель. Пусто = разрешены C1220 и C2220.
-        std::string required_model;
+        /// Подстрока модели в ответе *IDN? (по умолчанию C2220).
+        std::string required_model{"C2220"};
         std::uint32_t connect_timeout_ms{3000};
         std::uint32_t sweep_timeout_ms{30000};
         int measure_retries{2};
@@ -27,8 +28,21 @@ public:
 
     void connect() override;
     std::string identify() override;
+    /// Последний успешный `identify()` (пустая строка до первого вызова).
+    const ScpiIdnFields& last_idn() const noexcept { return last_idn_; }
     void configure(const SweepConfig& config) override;
+    SweepConfig read_config() override;
+    ComplexSweep measure_trace() override;
     ComplexSweep measure_s21() override;
+    /// Считать уже отображаемую в S2VNA трассу без изменения диапазона и нового trigger.
+    ComplexSweep read_current_trace(SweepConfig* instrument_config = nullptr);
+    /// Текущий комплект мер S2VNA, например `CKIT 1 (85032F)`.
+    std::string current_calibration_kit_id();
+    /// Выбрать один из комплектов мер S2VNA 1..64 и вернуть его номер/метку.
+    std::string select_calibration_kit(int index);
+    /// Включена ли коррекция на активном канале S2VNA.
+    bool correction_enabled();
+    void calibrate_one_port(OnePortCalibrationStep step, int port) override;
     void calibrate_two_port(TwoPortCalibrationStep step) override;
     std::vector<std::string> drain_errors() override;
     void abort() noexcept override;
@@ -43,10 +57,12 @@ private:
     void check_direct_access();
     void reject_if_foreign_model(const std::string& idn) const;
     ComplexSweep measure_once();
+    ComplexSweep read_trace_data(SParameter parameter, std::uint32_t expected_points);
 
     IScpiTransport& transport_;
     Profile profile_;
     bool connected_{false};
     SweepConfig config_{};
     bool configured_{false};
+    ScpiIdnFields last_idn_{};
 };

@@ -4,6 +4,7 @@
 #include <QString>
 #include <QVector>
 
+class AcceptanceAtTab;
 class CodeMatrixTab;
 class ConnectionBar;
 class DataFormatsTab;
@@ -32,7 +33,9 @@ private slots:
                              const QString& controllerIface,
                              bool dutConnected,
                              double temperatureC,
-                             bool temperatureValid);
+                             bool temperatureValid,
+                             const QString& vnaSerial,
+                             const QString& vnaFirmware);
     void onProgress(qint64 completed, qint64 total, int channel, int attCode, int phaseCode);
     void onPaths(const QString& seriesRoot,
                  const QString& runConfig,
@@ -59,19 +62,51 @@ private slots:
     void onToggleTheme();
     void onResumeSeries();
     void onApplyVnaSettings();
+    void onApplyControllerSettings();
     void onProbeVna();
     void onProbeFinished(bool ok, const QString& idnOrError);
-    void onSingleSweep();
-    void onSingleSweepFinished(bool ok, const QString& message);
-    void onSaveCsv();
-    void onCsvSaveFinished(bool ok, const QString& message, const QString& csvPath);
-    void onCalibrationStep(int step);
-    void onCalibrationFinished(bool ok, int step, const QString& message);
+    void refreshDataSourceBadge(bool probeOk = false, const QString& idnOrError = {});
     void onEtaChanged(const QString& text);
     void onSweepPreview(const QVector<double>& freqGhz,
                         const QVector<double>& magDb,
                         const QVector<double>& phaseUnwrapDeg);
+    void onSparamsPreview(const QVector<double>& freqGhz,
+                          const QVector<double>& s11mag,
+                          const QVector<double>& s11ph,
+                          const QVector<double>& s21mag,
+                          const QVector<double>& s21ph,
+                          const QVector<double>& s12mag,
+                          const QVector<double>& s12ph,
+                          const QVector<double>& s22mag,
+                          const QVector<double>& s22ph);
+    void onSeriesArtifactsPreview(const QString& runId,
+                                  qint64 completedStates,
+                                  const QString& directPath,
+                                  qint64 directValid,
+                                  qint64 directTotal,
+                                  bool directFlat,
+                                  const QString& directFragment,
+                                  const QString& inversePath,
+                                  qint64 inverseValid,
+                                  qint64 inverseTotal,
+                                  bool inverseFlat,
+                                  const QString& inverseFragment,
+                                  const QString& reportPath,
+                                  qint64 reportValid,
+                                  const QString& reportFragment,
+                                  const QString& manifestPath,
+                                  qint64 manifestLines,
+                                  const QString& manifestFragment);
+    void onDirectLutCurvePreview(const QVector<double>& freqGhz,
+                                 const QVector<double>& magDb,
+                                 const QVector<double>& phaseErrorDeg,
+                                 int channel,
+                                 int attCode,
+                                 int phaseCode);
     void updateCycleButtons(int state);
+    void onMeasureNow();
+    void onExportTwoPort();
+    void onCalibrateStep(int kind, int step, int port);
 
 private:
     void loadExampleDefaults();
@@ -80,12 +115,12 @@ private:
     [[nodiscard]] QString defaultDataRoot() const;
 
     QString m_unfinishedSeries;
-    QString m_lastMeasuredParameter{QStringLiteral("S21")};
 
     ConnectionBar* m_connections = nullptr;
     MeasureTab* m_measure = nullptr;
     CodeMatrixTab* m_matrix = nullptr;
     DataFormatsTab* m_formats = nullptr;
+    AcceptanceAtTab* m_acceptance = nullptr;
     QPushButton* m_wizardBtn = nullptr;
     QPushButton* m_start = nullptr;
     QPushButton* m_pause = nullptr;

@@ -1,6 +1,7 @@
 #include "C2220Vna.h"
 
 #include <charconv>
+#include <cmath>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -26,7 +27,7 @@ bool is_no_error_response(const std::string& line)
     return true;
 }
 
-bool direct_access_is_on(const std::string& reply)
+bool scpi_state_is_on(const std::string& reply)
 {
     std::string s = reply;
     while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) {
@@ -41,6 +42,23 @@ bool direct_access_is_on(const std::string& reply)
         return true;
     }
     return false;
+}
+
+std::string trim_scpi_text(std::string value)
+{
+    while (!value.empty()
+           && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r')) {
+        value.pop_back();
+    }
+    std::size_t first = 0;
+    while (first < value.size() && (value[first] == ' ' || value[first] == '\t')) {
+        ++first;
+    }
+    value = value.substr(first);
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+        value = value.substr(1, value.size() - 2);
+    }
+    return value;
 }
 
 std::vector<double> parse_ascii_doubles(const std::string& line)
@@ -93,6 +111,48 @@ std::string format_double(double v)
     return oss.str();
 }
 
+const char* s_parameter_scpi(SParameter p)
+{
+    switch (p) {
+    case SParameter::S11:
+        return "S11";
+    case SParameter::S21:
+        return "S21";
+    case SParameter::S12:
+        return "S12";
+    case SParameter::S22:
+        return "S22";
+    }
+    return "S21";
+}
+
+double parse_single_double(const std::string& reply, const char* command)
+{
+    const auto values = parse_ascii_doubles(reply);
+    if (values.size() != 1 || !std::isfinite(values.front())) {
+        throw std::runtime_error(std::string("C2220Vna: unexpected ") + command
+                                 + " reply: " + reply);
+    }
+    return values.front();
+}
+
+SParameter parse_s_parameter(const std::string& reply)
+{
+    if (reply.find("S11") != std::string::npos) {
+        return SParameter::S11;
+    }
+    if (reply.find("S21") != std::string::npos) {
+        return SParameter::S21;
+    }
+    if (reply.find("S12") != std::string::npos) {
+        return SParameter::S12;
+    }
+    if (reply.find("S22") != std::string::npos) {
+        return SParameter::S22;
+    }
+    throw std::runtime_error("C2220Vna: unknown CALC:PAR:DEF? reply: " + reply);
+}
+
 }  // namespace
 
 C2220Vna::C2220Vna(IScpiTransport& transport)
@@ -106,6 +166,9 @@ C2220Vna::C2220Vna(IScpiTransport& transport, Profile profile)
 {
     if (profile_.measure_retries < 0) {
         profile_.measure_retries = 0;
+    }
+    if (profile_.required_model.empty()) {
+        profile_.required_model = "C2220";
     }
 }
 
@@ -129,11 +192,8 @@ std::string C2220Vna::query(const std::string& cmd)
 
 void C2220Vna::reject_if_foreign_model(const std::string& idn) const
 {
-    const bool supported = profile_.required_model.empty()
-        ? (idn.find("C1220") != std::string::npos || idn.find("C2220") != std::string::npos)
-        : idn.find(profile_.required_model) != std::string::npos;
-    if (!supported) {
-        throw std::runtime_error("PlanarVna: unsupported VNA model in *IDN?: " + idn);
+    if (idn.find(profile_.required_model) == std::string::npos) {
+        throw std::runtime_error("C2220Vna: foreign VNA model in *IDN?: " + idn);
     }
 }
 
@@ -141,7 +201,7 @@ void C2220Vna::check_direct_access()
 {
     // Только запрос. Включение (ON/1) программа никогда не посылает.
     const std::string reply = query("SYST:REC:DIR:ACC?");
-    if (direct_access_is_on(reply) && !profile_.allow_direct_access) {
+    if (scpi_state_is_on(reply) && !profile_.allow_direct_access) {
         throw std::runtime_error(
             "C2220Vna: direct receiver access is ON but profile.allow_direct_access is false");
     }
@@ -154,7 +214,15 @@ void C2220Vna::connect()
     connected_ = true;
     configured_ = false;
 
-    transport_.set_io_timeout_ms(profile_.sweep_timeout_ms);
+    try {
+        // На старте связи / серии — проверка прямого доступа (HW-VNA-05).
+        transport_.set_io_timeout_ms(profile_.sweep_timeout_ms);
+        check_direct_access();
+    } catch (...) {
+        connected_ = false;
+        transport_.disconnect();
+        throw;
+    }
 }
 
 std::string C2220Vna::identify()
@@ -162,11 +230,8 @@ std::string C2220Vna::identify()
     require_connected("identify");
     const std::string idn = query("*IDN?");
     reject_if_foreign_model(idn);
-    // Эта команда существует только у C2220. C1220 нельзя опрашивать ею.
-    if (idn.find("C2220") != std::string::npos) {
-        check_direct_access();
-    }
-    return idn;
+    last_idn_ = parse_scpi_idn(idn);
+    return last_idn_.raw;
 }
 
 void C2220Vna::configure(const SweepConfig& config)
@@ -187,18 +252,10 @@ void C2220Vna::configure(const SweepConfig& config)
     write_cmd("SENS:SWE:POIN " + std::to_string(config.points));
     write_cmd("SENS:BAND " + std::to_string(config.ifbw_hz));
     write_cmd("SOUR:POW " + format_double(config.power_dbm));
-    write_cmd(std::string("CALC:PAR:DEF ") + scpi_name(config.parameter));
-    write_cmd("FORM:DATA ASC");
-    write_cmd("TRIG:SOUR BUS");
-    if (config.averages > 1) {
-        write_cmd("SENS:AVER:COUN " + std::to_string(config.averages));
-        write_cmd("SENS:AVER ON");
-        write_cmd("TRIG:AVER ON");
-        write_cmd("SENS:AVER:CLE");
-    } else {
-        write_cmd("TRIG:AVER OFF");
-        write_cmd("SENS:AVER OFF");
-    }
+    write_cmd("SENS:AVER:COUN " + std::to_string(config.averages));
+    write_cmd(std::string("SENS:AVER ") + (config.averages > 1 ? "ON" : "OFF"));
+    write_cmd(std::string("TRIG:AVER ") + (config.averages > 1 ? "ON" : "OFF"));
+    write_cmd(std::string("CALC:PAR:DEF ") + s_parameter_scpi(config.s_parameter));
 
     config_ = config;
     configured_ = true;
@@ -206,50 +263,77 @@ void C2220Vna::configure(const SweepConfig& config)
 
 ComplexSweep C2220Vna::measure_once()
 {
+    if (config_.averages > 1) {
+        write_cmd("SENS:AVER:CLE");
+    }
     write_cmd("TRIG:SING");
     const std::string opc = query("*OPC?");
     if (opc.find('1') == std::string::npos) {
         throw std::runtime_error("C2220Vna: unexpected *OPC? reply: " + opc);
     }
 
-    const std::string sdat = query("CALC:DATA:SDAT?");
-    const auto values = parse_ascii_doubles(sdat);
-    if (values.size() != static_cast<std::size_t>(config_.points) * 2u) {
-        throw std::runtime_error("C2220Vna: SDAT length mismatch: got "
-                                 + std::to_string(values.size()) + " scalars, expected "
-                                 + std::to_string(static_cast<std::size_t>(config_.points) * 2u));
-    }
+    return read_trace_data(config_.s_parameter, config_.points);
+}
 
+ComplexSweep C2220Vna::read_trace_data(SParameter parameter, std::uint32_t expected_points)
+{
     const std::string xax = query("CALC:DATA:XAX?");
     const auto axis = parse_ascii_doubles(xax);
-    if (axis.size() != config_.points) {
+    if (axis.size() < 2 || (expected_points > 0 && axis.size() != expected_points)) {
         throw std::runtime_error("C2220Vna: XAX length mismatch: got "
                                  + std::to_string(axis.size()) + ", expected "
-                                 + std::to_string(config_.points));
+                                 + std::to_string(expected_points));
+    }
+
+    const std::string sdat = query("CALC:DATA:SDAT?");
+    const auto values = parse_ascii_doubles(sdat);
+    if (values.size() != axis.size() * 2u) {
+        throw std::runtime_error("C2220Vna: SDAT length mismatch: got "
+                                 + std::to_string(values.size()) + " scalars, expected "
+                                 + std::to_string(axis.size() * 2u));
     }
 
     ComplexSweep sweep;
-    sweep.frequency_hz.resize(config_.points);
-    sweep.s21.resize(config_.points);
+    sweep.frequency_hz.resize(axis.size());
     sweep.overload = false;
-    for (std::uint32_t i = 0; i < config_.points; ++i) {
-        sweep.frequency_hz[i] = static_cast<std::uint64_t>(axis[i] + 0.5);
-        sweep.s21[i] = {values[static_cast<std::size_t>(i) * 2u],
-                        values[static_cast<std::size_t>(i) * 2u + 1u]};
+
+    std::vector<std::complex<double>>* trace = nullptr;
+    switch (parameter) {
+    case SParameter::S11:
+        trace = &sweep.s11;
+        break;
+    case SParameter::S21:
+        trace = &sweep.s21;
+        break;
+    case SParameter::S12:
+        trace = &sweep.s12;
+        break;
+    case SParameter::S22:
+        trace = &sweep.s22;
+        break;
+    }
+    trace->resize(axis.size());
+
+    for (std::size_t i = 0; i < axis.size(); ++i) {
+        if (!std::isfinite(axis[i]) || axis[i] < 0.0) {
+            throw std::runtime_error("C2220Vna: invalid frequency axis value");
+        }
+        sweep.frequency_hz[i] = static_cast<std::uint64_t>(std::llround(axis[i]));
+        (*trace)[i] = {values[i * 2u], values[i * 2u + 1u]};
     }
     return sweep;
 }
 
-ComplexSweep C2220Vna::measure_s21()
+ComplexSweep C2220Vna::measure_trace()
 {
-    require_connected("measure_s21");
+    require_connected("measure_trace");
     if (!configured_) {
-        throw std::runtime_error("C2220Vna: measure_s21 without configure");
+        throw std::runtime_error("C2220Vna: measure_trace without configure");
     }
 
     transport_.set_io_timeout_ms(profile_.sweep_timeout_ms);
 
-    std::runtime_error last{"C2220Vna: measure_s21 failed"};
+    std::runtime_error last{"C2220Vna: measure_trace failed"};
     const int attempts = profile_.measure_retries + 1;
     for (int attempt = 0; attempt < attempts; ++attempt) {
         try {
@@ -259,6 +343,115 @@ ComplexSweep C2220Vna::measure_s21()
         }
     }
     throw last;
+}
+
+ComplexSweep C2220Vna::measure_s21()
+{
+    require_connected("measure_s21");
+    if (!configured_) {
+        throw std::runtime_error("C2220Vna: measure_s21 without configure");
+    }
+    if (config_.s_parameter != SParameter::S21) {
+        throw std::runtime_error("C2220Vna: measure_s21 requires s_parameter == S21");
+    }
+    return measure_trace();
+}
+
+ComplexSweep C2220Vna::read_current_trace(SweepConfig* instrument_config)
+{
+    require_connected("read_current_trace");
+    transport_.set_io_timeout_ms(profile_.sweep_timeout_ms);
+
+    const SweepConfig observed = read_config();
+    ComplexSweep sweep = read_trace_data(observed.s_parameter, observed.points);
+    if (instrument_config != nullptr) {
+        *instrument_config = observed;
+    }
+    return sweep;
+}
+
+SweepConfig C2220Vna::read_config()
+{
+    require_connected("read_config");
+    transport_.set_io_timeout_ms(profile_.sweep_timeout_ms);
+    SweepConfig observed{};
+    observed.f_start_hz = static_cast<std::uint64_t>(
+        std::llround(parse_single_double(query("SENS:FREQ:STAR?"), "SENS:FREQ:STAR?")));
+    observed.f_stop_hz = static_cast<std::uint64_t>(
+        std::llround(parse_single_double(query("SENS:FREQ:STOP?"), "SENS:FREQ:STOP?")));
+    observed.points = static_cast<std::uint32_t>(
+        std::llround(parse_single_double(query("SENS:SWE:POIN?"), "SENS:SWE:POIN?")));
+    observed.ifbw_hz = static_cast<std::uint32_t>(
+        std::llround(parse_single_double(query("SENS:BAND?"), "SENS:BAND?")));
+    observed.power_dbm = parse_single_double(query("SOUR:POW?"), "SOUR:POW?");
+    observed.averages = scpi_state_is_on(query("SENS:AVER?"))
+        ? static_cast<std::uint16_t>(std::llround(
+              parse_single_double(query("SENS:AVER:COUN?"), "SENS:AVER:COUN?")))
+        : 1;
+    observed.s_parameter = parse_s_parameter(query("CALC:PAR:DEF?"));
+    if (observed.points < 2 || observed.f_stop_hz < observed.f_start_hz) {
+        throw std::runtime_error("C2220Vna: invalid current sweep settings");
+    }
+
+    return observed;
+}
+
+std::string C2220Vna::current_calibration_kit_id()
+{
+    require_connected("current_calibration_kit_id");
+    const std::string index = trim_scpi_text(query("SENS:CORR:COLL:CKIT?"));
+    const std::string label = trim_scpi_text(query("SENS:CORR:COLL:CKIT:LAB?"));
+    if (index.empty()) {
+        throw std::runtime_error("C2220Vna: empty calibration kit index");
+    }
+    return label.empty() ? "CKIT " + index : "CKIT " + index + " (" + label + ")";
+}
+
+std::string C2220Vna::select_calibration_kit(int index)
+{
+    require_connected("select_calibration_kit");
+    if (index < 1 || index > 64) {
+        throw std::runtime_error("C2220Vna: calibration kit index must be in range 1..64");
+    }
+    write_cmd("SENS:CORR:COLL:CKIT " + std::to_string(index));
+    return current_calibration_kit_id();
+}
+
+bool C2220Vna::correction_enabled()
+{
+    require_connected("correction_enabled");
+    return scpi_state_is_on(query("SENS:CORR:STAT?"));
+}
+
+void C2220Vna::calibrate_one_port(OnePortCalibrationStep step, int port)
+{
+    require_connected("calibrate_one_port");
+    if (port != 1 && port != 2) {
+        throw std::runtime_error("C2220Vna: calibrate_one_port port must be 1 or 2");
+    }
+    std::string command;
+    switch (step) {
+    case OnePortCalibrationStep::Begin:
+        command = "SENS:CORR:COLL:METH:SOLT1 " + std::to_string(port);
+        break;
+    case OnePortCalibrationStep::Open:
+        command = "SENS:CORR:COLL:OPEN " + std::to_string(port);
+        break;
+    case OnePortCalibrationStep::Short:
+        command = "SENS:CORR:COLL:SHOR " + std::to_string(port);
+        break;
+    case OnePortCalibrationStep::Load:
+        command = "SENS:CORR:COLL:LOAD " + std::to_string(port);
+        break;
+    case OnePortCalibrationStep::Apply:
+        command = "SENS:CORR:COLL:SAVE";
+        break;
+    }
+    write_cmd(command);
+    const std::string opc = query("*OPC?");
+    if (opc.find('1') == std::string::npos) {
+        throw std::runtime_error("C2220Vna: one-port calibration did not complete: " + opc);
+    }
 }
 
 void C2220Vna::calibrate_two_port(TwoPortCalibrationStep step)

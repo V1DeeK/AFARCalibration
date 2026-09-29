@@ -99,6 +99,12 @@ target_include_directories(test_export_manifest PRIVATE ${CMAKE_CURRENT_SOURCE_D
 afar_enable_warnings(test_export_manifest)
 add_test(NAME export_manifest COMMAND test_export_manifest)
 
+add_executable(test_two_port_export test_two_port_export.cpp)
+target_link_libraries(test_two_port_export PRIVATE Catch2::Catch2WithMain afar_report)
+afar_enable_warnings(test_two_port_export)
+add_test(NAME two_port_export COMMAND test_two_port_export)
+set_tests_properties(two_port_export PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # TEST-011 / AT-01: драйвер C2220 против локального SCPI TCP-стаба
 add_executable(test_c2220_driver test_c2220_driver.cpp)
 target_link_libraries(test_c2220_driver PRIVATE
@@ -142,9 +148,13 @@ add_executable(test_ui_interactions
     ${PROJECT_SOURCE_DIR}/src/ui/ConnectionBar.h
     ${PROJECT_SOURCE_DIR}/src/ui/S21PlotWidget.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/S21PlotWidget.h
+    ${PROJECT_SOURCE_DIR}/src/ui/MeasureTab.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/MeasureTab.h
+    ${PROJECT_SOURCE_DIR}/src/ui/StartWizard.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/StartWizard.h
 )
 target_include_directories(test_ui_interactions PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
-target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain Qt6::Widgets)
+target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_cal)
 set_target_properties(test_ui_interactions PROPERTIES AUTOMOC ON)
 afar_enable_warnings(test_ui_interactions)
 add_test(NAME ui_interactions COMMAND test_ui_interactions)

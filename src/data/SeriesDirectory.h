@@ -10,7 +10,10 @@ class SeriesDirectory {
 public:
     static constexpr const char* kRunConfig = "run-config.json";
     static constexpr const char* kAttenuatorCodes = "attenuator-codes.csv";
+    static constexpr const char* kThruApproval = "thru-approval.json";
     static constexpr const char* kRawS21 = "raw-s21.h5";
+    /// Табличный экспорт т. 7.3; не подменяет kRawS21.
+    static constexpr const char* kRawS21Csv = "raw-s21.csv";
     static constexpr const char* kRunEvents = "run-events.jsonl";
     static constexpr const char* kDirectLut = "direct-lut.parquet";
     static constexpr const char* kInverseLut = "inverse-lut.parquet";
@@ -37,6 +40,7 @@ public:
     [[nodiscard]] std::filesystem::path runConfigPath() const;
     [[nodiscard]] std::filesystem::path attenuatorCodesPath() const;
     [[nodiscard]] std::filesystem::path rawS21Path() const;
+    [[nodiscard]] std::filesystem::path rawS21CsvPath() const;
     [[nodiscard]] std::filesystem::path runEventsPath() const;
     [[nodiscard]] std::filesystem::path directLutPath() const;
     [[nodiscard]] std::filesystem::path inverseLutPath() const;
