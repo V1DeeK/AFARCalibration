@@ -33,6 +33,8 @@ struct RunEvent {
 /// Append-only JSONL журнал серии (DATA-007, LOG-01). Без массивов S21.
 class RunEventLog {
 public:
+    static constexpr std::uintmax_t kDefaultRotateBytes = 16u * 1024u * 1024u;
+
     RunEventLog() = default;
     ~RunEventLog();
 
@@ -43,7 +45,8 @@ public:
 
     static bool openAppend(const std::filesystem::path& path,
                            RunEventLog& out,
-                           std::string& diagnostics);
+                           std::string& diagnostics,
+                           std::uintmax_t rotate_bytes = kDefaultRotateBytes);
 
     void close();
     [[nodiscard]] bool isOpen() const noexcept { return file_.is_open(); }
@@ -63,6 +66,12 @@ public:
 
 private:
     std::ofstream file_;
+    std::filesystem::path path_;
+    std::uintmax_t rotate_bytes_{kDefaultRotateBytes};
+    std::uintmax_t current_size_{};
+    unsigned next_rotation_index_{1};
+
+    bool rotateIfNeeded(std::size_t additional_bytes, std::string& diagnostics);
 };
 
 }  // namespace afar

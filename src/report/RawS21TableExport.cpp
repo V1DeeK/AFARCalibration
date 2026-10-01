@@ -90,7 +90,15 @@ bool exportRawS21Csv(const std::filesystem::path& path,
 
     const auto timestamps = loadSlotTimestamps(run_events_path);
 
-    std::ostringstream csv;
+    auto temporary = path;
+    temporary += ".tmp";
+    std::error_code ec;
+    std::filesystem::remove(temporary, ec);
+    std::ofstream csv(temporary, std::ios::binary | std::ios::trunc);
+    if (!csv) {
+        diagnostics = "cannot open for write: " + temporary.string();
+        return false;
+    }
     csv << "run_id,timestamp_utc,channel,att_code,phase_code,freq_hz,"
            "s21_re,s21_im,temp_c,attempt,overload,valid\n";
 
@@ -127,22 +135,15 @@ bool exportRawS21Csv(const std::filesystem::path& path,
         }
     }
 
-    const auto body = csv.str();
-    {
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        if (!out) {
-            diagnostics = "cannot open for write: " + path.string();
-            return false;
-        }
-        out.write(body.data(), static_cast<std::streamsize>(body.size()));
-        if (!out) {
-            diagnostics = "write failed: " + path.string();
-            return false;
-        }
+    csv.flush();
+    if (!csv) {
+        diagnostics = "write failed: " + temporary.string();
+        return false;
     }
+    csv.close();
 
     // Успех — после повторного открытия (заголовок на месте).
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(temporary, std::ios::binary);
     if (!in) {
         diagnostics = "cannot reopen: " + path.string();
         return false;
@@ -160,6 +161,14 @@ bool exportRawS21Csv(const std::filesystem::path& path,
         "s21_re,s21_im,temp_c,attempt,overload,valid";
     if (header != kExpected) {
         diagnostics = "unexpected raw-s21.csv header";
+        return false;
+    }
+    in.close();
+    std::filesystem::remove(path, ec);
+    ec.clear();
+    std::filesystem::rename(temporary, path, ec);
+    if (ec) {
+        diagnostics = "cannot commit raw-s21.csv: " + ec.message();
         return false;
     }
     return true;

@@ -318,6 +318,33 @@ private:
 
 }  // namespace
 
+TEST_CASE("Socket abort interrupts a blocked read", "[c2220][socket]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    transport.set_io_timeout_ms(30000);
+    transport.connect();
+
+    std::atomic_bool interrupted{false};
+    const auto started = std::chrono::steady_clock::now();
+    std::thread reader([&] {
+        try {
+            (void)transport.read_line();
+        } catch (...) {
+            interrupted.store(true);
+        }
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    transport.request_interrupt();
+    reader.join();
+    transport.abort();
+
+    REQUIRE(interrupted.load());
+    REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
+}
+
 TEST_CASE("AT-01 C2220Vna identify via TCP stub", "[c2220]")
 {
     ScpiTcpStub stub;
@@ -442,8 +469,10 @@ TEST_CASE("C2220Vna configure and measure_s21 against stub", "[c2220]")
     REQUIRE(stub.saw_exact("SENS:AVER:COUN 4"));
     REQUIRE(stub.saw_exact("SENS:AVER ON"));
     REQUIRE(stub.saw_exact("TRIG:AVER ON"));
+    REQUIRE(stub.saw_exact("TRIG:SOUR BUS"));
     REQUIRE(stub.saw_exact("SENS:AVER:CLE"));
     REQUIRE(stub.saw_exact("CALC:PAR:DEF S21"));
+    REQUIRE(stub.saw_exact("CALC:PAR:SEL"));
     REQUIRE(stub.saw_exact("TRIG:SING"));
     REQUIRE(stub.saw_exact("*OPC?"));
     REQUIRE(stub.saw_exact("CALC:DATA:SDAT?"));
@@ -474,6 +503,7 @@ TEST_CASE("C2220Vna configure S11 fills s11 via measure_trace", "[c2220]")
 
     const auto sweep = vna.measure_trace();
     REQUIRE(stub.saw_exact("CALC:PAR:DEF S11"));
+    REQUIRE(stub.saw_exact("CALC:PAR:SEL"));
     REQUIRE(sweep.frequency_hz.size() == 3);
     REQUIRE(sweep.s11.size() == 3);
     REQUIRE(sweep.s21.empty());

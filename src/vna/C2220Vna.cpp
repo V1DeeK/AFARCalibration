@@ -255,7 +255,11 @@ void C2220Vna::configure(const SweepConfig& config)
     write_cmd("SENS:AVER:COUN " + std::to_string(config.averages));
     write_cmd(std::string("SENS:AVER ") + (config.averages > 1 ? "ON" : "OFF"));
     write_cmd(std::string("TRIG:AVER ") + (config.averages > 1 ? "ON" : "OFF"));
+    // S2VNA в INT может начать следующий непрерывный свип между DEF и чтением SDAT.
+    // BUS + явный выбор графика гарантируют, что *OPC? относится к нужному S-параметру.
+    write_cmd("TRIG:SOUR BUS");
     write_cmd(std::string("CALC:PAR:DEF ") + s_parameter_scpi(config.s_parameter));
+    write_cmd("CALC:PAR:SEL");
 
     config_ = config;
     configured_ = true;

@@ -22,6 +22,7 @@
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -1817,6 +1818,14 @@ void MeasureTab::onIfbwSpinChanged()
 
 void MeasureTab::markSweepSettingsChanged()
 {
+    QSettings settings;
+    settings.setValue(QStringLiteral("sweep/f_start_hz"), m_fStartHz);
+    settings.setValue(QStringLiteral("sweep/f_stop_hz"), m_fStopHz);
+    settings.setValue(QStringLiteral("sweep/points"), m_points->value());
+    settings.setValue(QStringLiteral("sweep/ifbw_hz"), m_ifbwHz);
+    settings.setValue(QStringLiteral("sweep/power_dbm"), m_power->value());
+    settings.setValue(QStringLiteral("sweep/averages"), m_averages->value());
+
     const QString text = QStringLiteral(
         "Настройки изменены. Последний реальный график сохранён; "
         "нажмите «Измерить сейчас» для обновления всех S-параметров.");

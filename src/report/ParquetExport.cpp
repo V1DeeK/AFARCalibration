@@ -5,6 +5,7 @@
 #include "PhaseMath.h"
 #include "QualityGates.h"
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstring>
@@ -21,29 +22,51 @@
 namespace afar::report {
 namespace {
 
-bool writeMagicAndTsv(const std::filesystem::path& path,
-                      const std::string& tsv,
+bool beginAfarPqWrite(const std::filesystem::path& path,
+                      std::filesystem::path& temporary,
+                      std::ofstream& out,
                       std::string& diagnostics)
 {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    temporary = path;
+    temporary += ".tmp";
+    std::error_code ec;
+    std::filesystem::remove(temporary, ec);
+    out.open(temporary, std::ios::binary | std::ios::trunc);
     if (!out) {
-        diagnostics = "cannot open for write: " + path.string();
+        diagnostics = "cannot open for write: " + temporary.string();
         return false;
     }
     out.write(kAfarPqMagic, static_cast<std::streamsize>(sizeof(kAfarPqMagic)));
-    out.write(tsv.data(), static_cast<std::streamsize>(tsv.size()));
+    return true;
+}
+
+bool commitAfarPqWrite(const std::filesystem::path& path,
+                       const std::filesystem::path& temporary,
+                       std::ofstream& out,
+                       std::string& diagnostics)
+{
+    out.flush();
     if (!out) {
-        diagnostics = "write failed: " + path.string();
+        diagnostics = "write failed: " + temporary.string();
+        return false;
+    }
+    out.close();
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    ec.clear();
+    std::filesystem::rename(temporary, path, ec);
+    if (ec) {
+        diagnostics = "cannot commit AFARPQ file: " + ec.message();
         return false;
     }
     return true;
 }
 
-bool readMagicAndTsv(const std::filesystem::path& path,
-                     std::string& tsv,
-                     std::string& diagnostics)
+bool openAfarPqRead(const std::filesystem::path& path,
+                    std::ifstream& in,
+                    std::string& diagnostics)
 {
-    std::ifstream in(path, std::ios::binary);
+    in.open(path, std::ios::binary);
     if (!in) {
         diagnostics = "cannot open for read: " + path.string();
         return false;
@@ -54,9 +77,6 @@ bool readMagicAndTsv(const std::filesystem::path& path,
         diagnostics = "bad AFARPQ magic: " + path.string();
         return false;
     }
-    std::ostringstream oss;
-    oss << in.rdbuf();
-    tsv = oss.str();
     return true;
 }
 
@@ -180,18 +200,152 @@ double driftAgainstPreviousReference(
     return std::numeric_limits<double>::quiet_NaN();
 }
 
+// Exact 2-D nearest-neighbour index for the inverse LUT cost. Phase is copied at
+// -360/0/+360 degrees, so Euclidean distance is identical to wrap180().
+class InverseCandidateIndex {
+public:
+    explicit InverseCandidateIndex(const std::vector<cal::InverseLutCandidate>& candidates)
+        : candidates_(candidates)
+    {
+        const bool any_valid = std::any_of(candidates.begin(), candidates.end(), [](const auto& c) {
+            return c.valid;
+        });
+        points_.reserve(candidates.size() * 3);
+        for (std::size_t i = 0; i < candidates.size(); ++i) {
+            const auto& candidate = candidates[i];
+            if ((any_valid && !candidate.valid) || !std::isfinite(candidate.a_meas_db)
+                || !std::isfinite(candidate.phi_meas_deg)) {
+                continue;
+            }
+            double phase = std::fmod(candidate.phi_meas_deg, 360.0);
+            if (phase < 0.0) {
+                phase += 360.0;
+            }
+            for (const double shift : {-360.0, 0.0, 360.0}) {
+                points_.push_back({candidate.a_meas_db, phase + shift, i});
+            }
+        }
+        nodes_.reserve(points_.size());
+        root_ = build(0, points_.size(), false);
+    }
+
+    cal::InverseLutResult select(double target_atten_db, double target_phase_deg) const
+    {
+        cal::InverseLutResult result;
+        if (root_ < 0 || !std::isfinite(target_atten_db) || !std::isfinite(target_phase_deg)) {
+            return result;
+        }
+        double phase = std::fmod(target_phase_deg, 360.0);
+        if (phase < 0.0) {
+            phase += 360.0;
+        }
+        double best_cost = std::numeric_limits<double>::infinity();
+        std::size_t best_index = candidates_.size();
+        nearest(root_, target_atten_db, phase, best_cost, best_index);
+        if (best_index == candidates_.size()) {
+            return result;
+        }
+        const auto& chosen = candidates_[best_index];
+        result.selected_att_code = chosen.att_code;
+        result.selected_phase_code = chosen.phase_code;
+        result.measured_atten_db = chosen.a_meas_db;
+        result.measured_phase_deg = chosen.phi_meas_deg;
+        result.atten_residual_db = chosen.a_meas_db - target_atten_db;
+        result.phase_residual_deg = cal::wrap180(chosen.phi_meas_deg - target_phase_deg);
+        result.cost_j = best_cost;
+        result.valid = chosen.valid;
+        result.found = true;
+        return result;
+    }
+
+private:
+    struct Point {
+        double attenuation{};
+        double phase{};
+        std::size_t candidate_index{};
+    };
+    struct Node {
+        Point point;
+        int left{-1};
+        int right{-1};
+        bool split_phase{false};
+    };
+
+    int build(std::size_t begin, std::size_t end, bool split_phase)
+    {
+        if (begin == end) {
+            return -1;
+        }
+        const auto middle = begin + (end - begin) / 2;
+        std::nth_element(points_.begin() + static_cast<std::ptrdiff_t>(begin),
+                         points_.begin() + static_cast<std::ptrdiff_t>(middle),
+                         points_.begin() + static_cast<std::ptrdiff_t>(end),
+                         [split_phase](const Point& a, const Point& b) {
+                             const double av = split_phase ? a.phase : a.attenuation;
+                             const double bv = split_phase ? b.phase : b.attenuation;
+                             if (av != bv) {
+                                 return av < bv;
+                             }
+                             return a.candidate_index < b.candidate_index;
+                         });
+        const int index = static_cast<int>(nodes_.size());
+        nodes_.push_back({points_[middle], -1, -1, split_phase});
+        const int left = build(begin, middle, !split_phase);
+        const int right = build(middle + 1, end, !split_phase);
+        nodes_[static_cast<std::size_t>(index)].left = left;
+        nodes_[static_cast<std::size_t>(index)].right = right;
+        return index;
+    }
+
+    void nearest(int node_index,
+                 double target_attenuation,
+                 double target_phase,
+                 double& best_cost,
+                 std::size_t& best_index) const
+    {
+        if (node_index < 0) {
+            return;
+        }
+        const auto& node = nodes_[static_cast<std::size_t>(node_index)];
+        const double da = node.point.attenuation - target_attenuation;
+        const double dp = node.point.phase - target_phase;
+        const double cost = da * da + dp * dp;
+        if (cost < best_cost || (cost == best_cost && node.point.candidate_index < best_index)) {
+            best_cost = cost;
+            best_index = node.point.candidate_index;
+        }
+
+        const double delta = node.split_phase ? dp : da;
+        const int near_child = delta > 0.0 ? node.left : node.right;
+        const int far_child = delta > 0.0 ? node.right : node.left;
+        nearest(near_child, target_attenuation, target_phase, best_cost, best_index);
+        if (delta * delta <= best_cost) {
+            nearest(far_child, target_attenuation, target_phase, best_cost, best_index);
+        }
+    }
+
+    const std::vector<cal::InverseLutCandidate>& candidates_;
+    std::vector<Point> points_;
+    std::vector<Node> nodes_;
+    int root_{-1};
+};
+
 }  // namespace
 
 bool exportDirectLut(const std::filesystem::path& path,
                      std::span<const cal::DirectLutEntry> rows,
                      std::string& diagnostics)
 {
-    std::ostringstream tsv;
-    tsv << "channel\tfreq_hz\tatt_code\tphase_code\ts21_re\ts21_im\tmag_db\t"
+    std::filesystem::path temporary;
+    std::ofstream out;
+    if (!beginAfarPqWrite(path, temporary, out, diagnostics)) {
+        return false;
+    }
+    out << "channel\tfreq_hz\tatt_code\tphase_code\ts21_re\ts21_im\tmag_db\t"
            "phase_unwrapped_deg\tatten_meas_db\tphase_error_deg\tdrift_phase_deg\t"
            "repeatability_db\trepeatability_deg\tvalid\n";
     for (const auto& e : rows) {
-        tsv << static_cast<unsigned>(e.channel) << '\t' << e.freq_hz << '\t' << e.att_code
+        out << static_cast<unsigned>(e.channel) << '\t' << e.freq_hz << '\t' << e.att_code
             << '\t' << static_cast<unsigned>(e.phase_code) << '\t' << formatDouble(e.s21_re)
             << '\t' << formatDouble(e.s21_im) << '\t' << formatDouble(e.mag_db) << '\t'
             << formatDouble(e.phase_unwrapped_deg) << '\t' << formatDouble(e.atten_meas_db)
@@ -199,26 +353,30 @@ bool exportDirectLut(const std::filesystem::path& path,
             << '\t' << formatDouble(e.repeatability_db) << '\t'
             << formatDouble(e.repeatability_deg) << '\t' << (e.valid ? 1 : 0) << '\n';
     }
-    return writeMagicAndTsv(path, tsv.str(), diagnostics);
+    return commitAfarPqWrite(path, temporary, out, diagnostics);
 }
 
 bool exportInverseLut(const std::filesystem::path& path,
                       std::span<const InverseLutEntry> rows,
                       std::string& diagnostics)
 {
-    std::ostringstream tsv;
-    tsv << "channel\tfreq_hz\ttarget_atten_db\ttarget_phase_deg\tselected_att_code\t"
+    std::filesystem::path temporary;
+    std::ofstream out;
+    if (!beginAfarPqWrite(path, temporary, out, diagnostics)) {
+        return false;
+    }
+    out << "channel\tfreq_hz\ttarget_atten_db\ttarget_phase_deg\tselected_att_code\t"
            "selected_phase_code\tmeasured_atten_db\tmeasured_phase_deg\t"
            "atten_residual_db\tphase_residual_deg\tvalid\n";
     for (const auto& e : rows) {
-        tsv << static_cast<unsigned>(e.channel) << '\t' << e.freq_hz << '\t'
+        out << static_cast<unsigned>(e.channel) << '\t' << e.freq_hz << '\t'
             << formatDouble(e.target_atten_db) << '\t' << formatDouble(e.target_phase_deg)
             << '\t' << e.selected_att_code << '\t' << static_cast<unsigned>(e.selected_phase_code)
             << '\t' << formatDouble(e.measured_atten_db) << '\t'
             << formatDouble(e.measured_phase_deg) << '\t' << formatDouble(e.atten_residual_db)
             << '\t' << formatDouble(e.phase_residual_deg) << '\t' << (e.valid ? 1 : 0) << '\n';
     }
-    return writeMagicAndTsv(path, tsv.str(), diagnostics);
+    return commitAfarPqWrite(path, temporary, out, diagnostics);
 }
 
 bool readDirectLut(const std::filesystem::path& path,
@@ -226,13 +384,12 @@ bool readDirectLut(const std::filesystem::path& path,
                    std::string& diagnostics)
 {
     out.clear();
-    std::string tsv;
-    if (!readMagicAndTsv(path, tsv, diagnostics)) {
+    std::ifstream in;
+    if (!openAfarPqRead(path, in, diagnostics)) {
         return false;
     }
-    std::istringstream iss(tsv);
     std::string line;
-    if (!std::getline(iss, line)) {
+    if (!std::getline(in, line)) {
         diagnostics = "empty direct lut tsv";
         return false;
     }
@@ -244,7 +401,7 @@ bool readDirectLut(const std::filesystem::path& path,
         diagnostics = "unexpected direct lut header";
         return false;
     }
-    while (std::getline(iss, line)) {
+    while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
@@ -278,13 +435,12 @@ bool readInverseLut(const std::filesystem::path& path,
                     std::string& diagnostics)
 {
     out.clear();
-    std::string tsv;
-    if (!readMagicAndTsv(path, tsv, diagnostics)) {
+    std::ifstream in;
+    if (!openAfarPqRead(path, in, diagnostics)) {
         return false;
     }
-    std::istringstream iss(tsv);
     std::string line;
-    if (!std::getline(iss, line)) {
+    if (!std::getline(in, line)) {
         diagnostics = "empty inverse lut tsv";
         return false;
     }
@@ -295,7 +451,7 @@ bool readInverseLut(const std::filesystem::path& path,
         diagnostics = "unexpected inverse lut header";
         return false;
     }
-    while (std::getline(iss, line)) {
+    while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
@@ -443,11 +599,13 @@ bool buildInverseLutFromDirect(const std::vector<cal::DirectLutEntry>& direct,
     for (int ph = config.dut.phase_codes.first; ph <= config.dut.phase_codes.last; ++ph) {
         target_ph.push_back(static_cast<double>(ph) * config.dut.phase_codes.lsb_deg);
     }
+    out.reserve(by_cf.size() * target_att.size() * target_ph.size());
 
     for (const auto& [key, candidates] : by_cf) {
+        const InverseCandidateIndex index(candidates);
         for (const double ta : target_att) {
             for (const double tp : target_ph) {
-                const auto sel = cal::select_inverse_codes(ta, tp, candidates);
+                const auto sel = index.select(ta, tp);
                 InverseLutEntry e;
                 e.channel = key.channel;
                 e.freq_hz = key.freq_hz;

@@ -59,7 +59,7 @@ ctest --test-dir build --output-on-failure
 
 На MinGW 13 флаг `-O3` в Release заменяется на `-O2` (ICE GCC). Предупреждения — как ошибки (`-Wall -Wextra -Wpedantic -Werror`).
 
-### Список CTest (16)
+### Список CTest (18 на Windows)
 
 | Имя | Назначение |
 |-----|------------|
@@ -78,7 +78,15 @@ ctest --test-dir build --output-on-failure
 | `c2220_driver` | AT-01 драйвер: Socket + TCP-stub SCPI |
 | `full_sim_run` | AT-04: компактная сетка в CI; полный объём — см. ниже |
 | `lut_perf` | замер LUT (probe в CI; полный объём — см. ниже) |
+| `at12_soak` | AT-12: 24-часовой прогон и контроль роста RSS; без переменной окружения — SKIP |
+| `verify_series_tool` | самотест независимого PowerShell-верификатора серии |
 | `ui_interactions` | режимы работы, диапазон частот и форматы графиков |
+
+Вкладка AT-12 автоматически пишет CSV с RSS, private bytes, количеством handles/потоков
+и свободным местом раз в минуту. Это телеметрия длительного прогона, а не замена
+стендового протокола приёмки.
+JSONL-журнал серии ротируется по 16 МиБ; нумерованные сегменты читаются как единый
+журнал и входят в итоговый SHA-256 манифест.
 
 Выборочно: `ctest --test-dir build -R "smoke|simulators" --output-on-failure`.
 
@@ -94,6 +102,36 @@ build\tests\test_lut_perf.exe "[full]"
 
 Без `AFAR_RUN_AT04=1` кейсы с тегом `[full]` пропускаются (`SKIP`).
 
+### Длительный AT-12 (`AFAR_RUN_AT12`)
+
+```bat
+set AFAR_RUN_AT12=1
+build\tests\test_at12_soak.exe
+```
+
+По умолчанию прогон длится 24 часа, первый час считается стабилизацией. Для короткой
+локальной проверки можно задать `AFAR_AT12_SECONDS` и
+`AFAR_AT12_STABILIZE_SECONDS`. Критерий теста — рост RSS не более 10%.
+
+### Независимая проверка серии
+
+```powershell
+.\tools\verify-series.ps1 -SelfTest
+.\tools\verify-series.ps1 "C:\Data\RX16-YYYYMMDD-NNN"
+```
+
+Утилита сверяет полный охват файлов манифестом, SHA-256, magic контейнеров,
+структуру CSV/LUT/PDF/JSONL и согласованность `run_id`.
+
+### Переносимая Windows-поставка
+
+```powershell
+.\tools\package-windows.ps1
+```
+
+Скрипт собирает приложение, разворачивает Qt/MinGW runtime, выполняет smoke-start и
+создаёт runtime ZIP, архив исходников, SHA-256, SPDX SBOM и комплект лицензий в `dist/`.
+
 ## Запуск GUI
 
 После сборки запускается только этот файл:
@@ -102,7 +140,7 @@ build\tests\test_lut_perf.exe "[full]"
 build\src\AfarRxCalibrationStudio.exe
 ```
 
-Нужны DLL Qt в `PATH` (или рядом с exe). По умолчанию железо **не** трогается: режим **Имитатор**. Для живого C1220/C2220 — см. [`docs/S2VNA-setup.md`](docs/S2VNA-setup.md): запустить S2VNA, включить Socket 5025, выбрать **S2VNA Socket** и **«Проверить связь»**.
+Нужны DLL Qt в `PATH` (или рядом с exe). По умолчанию выбран локальный **C2220 Socket (SCPI)**: программа включает Socket Server, запускает S2VNA скрыто и сама проверяет связь. Режим **Имитатор** остаётся для разработки без прибора. Подробности: [`docs/S2VNA-setup.md`](docs/S2VNA-setup.md).
 
 В режиме **«Двухпортовое устройство»** доступны все страницы этапов; страницы LUT заполняются результатами серии калибровки канала. Диапазон задаётся как **начальная/конечная** либо **центральная/полоса** частот с единицами Гц/кГц/МГц/ГГц. Форматы отображения: амплитуда + фаза, амплитуда в дБ, линейный модуль, развёрнутая фаза, групповая задержка; отдельно доступны КСВН-1 и КСВН-2.
 
@@ -163,6 +201,8 @@ build\src\AfarRxCalibrationStudio.exe
 | `docs/contracts/` | контракты SCPI, интерфейсов, форматов |
 | `docs/plans/` | планы работ |
 | `docs/reports/` | отчёты по волнам / оркестрации |
+| `packaging/` | сведения о сторонних компонентах поставки |
+| `tools/` | независимая проверка серии и сборка Windows-поставки |
 | `Planar_documentation/` | локальные руководства C2220 / S2VNA |
 | `afar_stage1_software_tz.pdf` | ТЗ этапа 1 |
 
@@ -179,6 +219,9 @@ build\src\AfarRxCalibrationStudio.exe
 - SCPI C1220/C2220 / S2VNA: [`docs/contracts/vna-c2220-scpi.md`](docs/contracts/vna-c2220-scpi.md)
 - C++-интерфейсы и автомат: [`docs/contracts/cpp-interfaces.md`](docs/contracts/cpp-interfaces.md)
 - Каталог серии и форматы: [`docs/contracts/data-formats.md`](docs/contracts/data-formats.md)
+- Руководство оператора: [`docs/operator-guide.md`](docs/operator-guide.md)
+- Руководство администратора: [`docs/admin-guide.md`](docs/admin-guide.md)
+- Программная методика испытаний: [`docs/software-test-procedure.md`](docs/software-test-procedure.md)
 - Итог волн 0–10: [`docs/reports/2026-09-22-afar-stage1-wave0-10.md`](docs/reports/2026-09-22-afar-stage1-wave0-10.md)
 - Сверка ТЗ / GAP: [`docs/reports/2026-09-24-afar-tz-gap.md`](docs/reports/2026-09-24-afar-tz-gap.md)
 - Документация прибора: [`Planar_documentation/`](Planar_documentation/)

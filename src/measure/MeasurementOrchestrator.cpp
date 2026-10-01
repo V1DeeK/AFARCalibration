@@ -962,6 +962,7 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
     pdf_info.completed_states = store_.completedCount();
     pdf_info.valid_direct_count = report::countValidDirect(direct);
     pdf_info.valid_inverse_count = report::countValidInverse(inverse);
+    const auto expected_valid_inverse = pdf_info.valid_inverse_count;
     pdf_info.frequency_points = store_.frequencyHz().size();
     pdf_info.attenuator_codes = store_.attCodes().size();
     pdf_info.phase_codes = store_.phaseCodes().size();
@@ -1043,6 +1044,10 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
     }
 
     // DATA-03 / AT-11: reopen LUT до Complete; совпадение числа valid с PDF.
+    direct.clear();
+    direct.shrink_to_fit();
+    inverse.clear();
+    inverse.shrink_to_fit();
     std::vector<cal::DirectLutEntry> direct_reopen;
     if (!report::readDirectLut(series_.directLutPath(), direct_reopen, diagnostics)) {
         return false;
@@ -1051,11 +1056,13 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
         diagnostics = "valid_direct_count mismatch after reopen";
         return false;
     }
+    direct_reopen.clear();
+    direct_reopen.shrink_to_fit();
     std::vector<report::InverseLutEntry> inverse_reopen;
     if (!report::readInverseLut(series_.inverseLutPath(), inverse_reopen, diagnostics)) {
         return false;
     }
-    if (report::countValidInverse(inverse_reopen) != report::countValidInverse(inverse)) {
+    if (report::countValidInverse(inverse_reopen) != expected_valid_inverse) {
         diagnostics = "valid_inverse_count mismatch after reopen";
         return false;
     }

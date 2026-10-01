@@ -189,6 +189,8 @@ add_executable(AfarRxCalibrationStudio WIN32
     ui/Theme.h
     ui/MainWindow.cpp
     ui/MainWindow.h
+    ui/S2VnaRuntime.cpp
+    ui/S2VnaRuntime.h
     ui/ConnectionBar.cpp
     ui/ConnectionBar.h
     ui/MeasureTab.cpp

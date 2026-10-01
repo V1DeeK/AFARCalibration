@@ -122,7 +122,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_backend->setItemData(
         1,
         QStringLiteral(
-            "Живой C2220 по TCP. Нужен запущенный SCPI-сервер S2VNA (Socket Server)."),
+            "Живой C1220/C2220 по TCP. S2VNA запускается скрыто автоматически."),
         Qt::ToolTipRole);
     m_backend->addItem(QStringLiteral("C2220 COM (SCPI)"), 2);
     m_backend->setItemData(2, QStringLiteral("S2VNA COM"), Qt::UserRole + 1);
@@ -366,7 +366,7 @@ void ConnectionBar::emitTimeoutsChanged()
 void ConnectionBar::loadSettings()
 {
     QSettings s;
-    const int backend = s.value(QStringLiteral("vna/backend"), 0).toInt();
+    const int backend = s.value(QStringLiteral("vna/backend"), 1).toInt();
     m_backend->setCurrentIndex(qBound(0, backend, 2));
     m_host->setText(s.value(QStringLiteral("vna/host"), QStringLiteral("127.0.0.1")).toString());
     m_port->setValue(s.value(QStringLiteral("vna/port"), 5025).toInt());

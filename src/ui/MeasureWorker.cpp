@@ -14,6 +14,7 @@
 #include "StubDutController.h"
 
 #include <QDateTime>
+#include <QThread>
 #include <QTimer>
 
 #include <cmath>
@@ -203,6 +204,7 @@ MeasureWorker::~MeasureWorker() = default;
 
 void MeasureWorker::rebuildVna()
 {
+    std::lock_guard lock(m_transportMutex);
     m_c2220.reset();
     m_socket.reset();
     m_com.reset();
@@ -230,6 +232,14 @@ void MeasureWorker::rebuildVna()
     } else {
         m_simVna = std::make_unique<VnaSimulator>();
         m_vna = m_simVna.get();
+    }
+}
+
+void MeasureWorker::interruptIo() noexcept
+{
+    std::lock_guard lock(m_transportMutex);
+    if (m_socket) {
+        m_socket->request_interrupt();
     }
 }
 
@@ -1382,7 +1392,11 @@ void MeasureWorker::shutdown()
         while (m_orch->stepOnce()) {
         }
     }
+    if (m_vna != nullptr) {
+        m_vna->abort();
+    }
     emit finishedClean();
+    QThread::currentThread()->quit();
 }
 
 void MeasureWorker::onTick()

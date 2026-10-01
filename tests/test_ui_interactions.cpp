@@ -1,14 +1,17 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "AcceptanceAtTab.h"
 #include "ConnectionBar.h"
 #include "MeasureTab.h"
 #include "S21PlotWidget.h"
+#include "S2VnaRuntime.h"
 #include "StartWizard.h"
 
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QImage>
@@ -20,6 +23,7 @@
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSettings>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QTemporaryDir>
@@ -36,10 +40,59 @@ QApplication& application()
     static char name[] = "test_ui_interactions";
     static char* argv[] = {name, nullptr};
     static QApplication app(argc, argv);
+    app.setOrganizationName(QStringLiteral("AFAR Tests"));
+    app.setApplicationName(QStringLiteral("AFAR UI Interactions Tests"));
     return app;
 }
 
 }  // namespace
+
+TEST_CASE("S2VNA socket flag is enabled without losing hardware settings", "[ui][s2vna]")
+{
+    QTemporaryDir temporary;
+    REQUIRE(temporary.isValid());
+    QDir root(temporary.path());
+    REQUIRE(root.mkpath(QStringLiteral("System")));
+    QFile executable(root.filePath(QStringLiteral("S2VNA.exe")));
+    REQUIRE(executable.open(QIODevice::WriteOnly));
+    executable.close();
+    const QString setupPath = root.filePath(QStringLiteral("System/Setup.dat"));
+    {
+        QSettings setup(setupPath, QSettings::IniFormat);
+        setup.setValue(QStringLiteral("SocketSvrSetup/SocketSvrEnabled"), 0);
+        setup.setValue(QStringLiteral("Hardware/DeviceID"), 23);
+    }
+
+    QString error;
+    REQUIRE(S2VnaRuntime::enableSocketServer(executable.fileName(), &error));
+    QSettings setup(setupPath, QSettings::IniFormat);
+    REQUIRE(setup.value(QStringLiteral("SocketSvrSetup/SocketSvrEnabled")).toInt() == 1);
+    REQUIRE(setup.value(QStringLiteral("Hardware/DeviceID")).toInt() == 23);
+}
+
+TEST_CASE("sweep parameters are saved after an operator edit", "[ui][settings]")
+{
+    (void)application();
+    QSettings settings;
+    settings.remove(QStringLiteral("sweep"));
+
+    MeasureTab tab;
+    tab.applyRunConfigDefaults(1.20e9, 1.40e9, 501, 2000, -15.0, 4);
+    auto* averages = tab.findChild<QSpinBox*>(QStringLiteral("sweepAverages"));
+    REQUIRE(averages != nullptr);
+    averages->setValue(5);
+
+    REQUIRE(settings.value(QStringLiteral("sweep/f_start_hz")).toDouble()
+            == Catch::Approx(1.20e9));
+    REQUIRE(settings.value(QStringLiteral("sweep/f_stop_hz")).toDouble()
+            == Catch::Approx(1.40e9));
+    REQUIRE(settings.value(QStringLiteral("sweep/points")).toInt() == 501);
+    REQUIRE(settings.value(QStringLiteral("sweep/ifbw_hz")).toInt() == 2000);
+    REQUIRE(settings.value(QStringLiteral("sweep/power_dbm")).toDouble()
+            == Catch::Approx(-15.0));
+    REQUIRE(settings.value(QStringLiteral("sweep/averages")).toInt() == 5);
+    settings.remove(QStringLiteral("sweep"));
+}
 
 TEST_CASE("filter readiness is separate from the series controller", "[ui]")
 {
@@ -324,4 +377,53 @@ TEST_CASE("one selected channel can use the complete 64 by 64 grid", "[ui]")
     QFile attenuation(wizard.attenuatorCsvPath());
     REQUIRE(attenuation.open(QIODevice::ReadOnly));
     REQUIRE(attenuation.readAll().count('\n') == 65);
+}
+
+TEST_CASE("AT-12 telemetry creates a CSV sample immediately", "[ui]")
+{
+    auto& app = application();
+    QTemporaryDir output;
+    REQUIRE(output.isValid());
+
+    {
+        QSettings settings;
+        settings.beginGroup(QStringLiteral("at_acceptance"));
+        settings.clear();
+        settings.setValue(QStringLiteral("at12/output_dir"), output.path());
+        settings.endGroup();
+        settings.sync();
+    }
+
+    AcceptanceAtTab tab;
+    auto* start = tab.findChild<QPushButton*>(QStringLiteral("at12StartTelemetry"));
+    auto* stop = tab.findChild<QPushButton*>(QStringLiteral("at12StopTelemetry"));
+    auto* status = tab.findChild<QLabel*>(QStringLiteral("at12TelemetryStatus"));
+    REQUIRE(start != nullptr);
+    REQUIRE(stop != nullptr);
+    REQUIRE(status != nullptr);
+    REQUIRE(start->isEnabled());
+    REQUIRE(QMetaObject::invokeMethod(&tab, "onAt12Start", Qt::DirectConnection));
+    app.processEvents();
+
+    QSettings result;
+    result.beginGroup(QStringLiteral("at_acceptance"));
+    const QString csvPath = result.value(QStringLiteral("at12/csv_path")).toString();
+    const int sampleCount = result.value(QStringLiteral("at12/sample_count")).toInt();
+    result.endGroup();
+    INFO("CSV path: " << csvPath.toStdString());
+    INFO("sample count: " << sampleCount);
+    INFO("status: " << status->text().toStdString());
+    REQUIRE_FALSE(csvPath.isEmpty());
+    QFile csv(csvPath);
+    REQUIRE(csv.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QByteArray contents = csv.readAll();
+    REQUIRE(contents.startsWith("timestamp_utc,rss_bytes,private_bytes,handle_count,"));
+    REQUIRE(contents.count('\n') == 2);
+    REQUIRE(sampleCount == 1);
+
+    REQUIRE(QMetaObject::invokeMethod(&tab, "onAt12Stop", Qt::DirectConnection));
+    result.beginGroup(QStringLiteral("at_acceptance"));
+    result.clear();
+    result.endGroup();
+    result.sync();
 }

@@ -11,6 +11,7 @@
 #include <QStringList>
 #include <QVector>
 #include <memory>
+#include <mutex>
 #include <optional>
 
 class C2220Vna;
@@ -32,6 +33,8 @@ public:
 
     explicit MeasureWorker(QObject* parent = nullptr);
     ~MeasureWorker() override;
+    /// Потокобезопасно прерывает блокирующий Socket I/O перед остановкой QThread.
+    void interruptIo() noexcept;
 
 public slots:
     void configureVna(int backend,
@@ -223,6 +226,7 @@ private:
     QString m_lastIdn;
 
     std::unique_ptr<VnaSimulator> m_simVna;
+    mutable std::mutex m_transportMutex;
     std::unique_ptr<ScpiSocketTransport> m_socket;
     std::unique_ptr<ScpiComTransport> m_com;
     std::unique_ptr<C2220Vna> m_c2220;

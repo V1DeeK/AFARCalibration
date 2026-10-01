@@ -8,6 +8,7 @@
 #include "MeasureWorker.h"
 #include "RunConfig.h"
 #include "RunStateMachine.h"
+#include "S2VnaRuntime.h"
 #include "StartWizard.h"
 #include "Theme.h"
 
@@ -25,8 +26,10 @@
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QThread>
+#include <QTimer>
 #include <QVBoxLayout>
 
+#include <cmath>
 #include <filesystem>
 #include <string>
 
@@ -200,14 +203,20 @@ MainWindow::MainWindow(QWidget* parent)
     scanUnfinishedSeries();
     onApplyVnaSettings();
     onApplyControllerSettings();
+    QTimer::singleShot(0, this, &MainWindow::startAutomaticVnaConnection);
 }
 
 MainWindow::~MainWindow()
 {
     if (m_thread && m_worker) {
-        QMetaObject::invokeMethod(m_worker, "shutdown", Qt::BlockingQueuedConnection);
-        m_thread->quit();
-        if (!m_thread->wait(5000)) {
+        m_worker->interruptIo();
+        QMetaObject::invokeMethod(m_worker, "shutdown", Qt::QueuedConnection);
+        using afar::RunState;
+        const auto state = static_cast<RunState>(m_state);
+        const bool seriesActive = state == RunState::Running || state == RunState::Pausing
+            || state == RunState::Paused
+            || state == RunState::Stopping || state == RunState::Finalizing;
+        if (!m_thread->wait(seriesActive ? 30000 : 5000)) {
             m_thread->terminate();
             m_thread->wait(1000);
         }
@@ -236,6 +245,21 @@ void MainWindow::loadExampleDefaults()
     } else {
         // Минимум UI-303: пресет @1296 МГц.
         m_measure->applyRunConfigDefaults(1.246e9, 1.346e9, 101, 1000, -30.0, 8);
+    }
+
+    QSettings saved;
+    if (saved.contains(QStringLiteral("sweep/f_start_hz"))) {
+        const double fStart = saved.value(QStringLiteral("sweep/f_start_hz")).toDouble();
+        const double fStop = saved.value(QStringLiteral("sweep/f_stop_hz")).toDouble();
+        if (std::isfinite(fStart) && std::isfinite(fStop)
+            && fStart >= 1e5 && fStop <= 40e9 && fStart < fStop) {
+            m_measure->applyRunConfigDefaults(
+                fStart, fStop,
+                saved.value(QStringLiteral("sweep/points"), m_measure->points()).toInt(),
+                saved.value(QStringLiteral("sweep/ifbw_hz"), m_measure->ifbwHz()).toInt(),
+                saved.value(QStringLiteral("sweep/power_dbm"), m_measure->powerDbm()).toDouble(),
+                saved.value(QStringLiteral("sweep/averages"), m_measure->averages()).toInt());
+        }
     }
 }
 
@@ -382,7 +406,6 @@ void MainWindow::onMeasureNow()
             "Для 1,160 ГГц введите 1160 МГц или 1,160 ГГц."));
         return;
     }
-    onApplyVnaSettings();
     QMetaObject::invokeMethod(m_worker, "measureNow", Qt::QueuedConnection,
                               Q_ARG(double, m_measure->fStartHz()),
                               Q_ARG(double, m_measure->fStopHz()), Q_ARG(int, m_measure->points()),
@@ -624,6 +647,43 @@ void MainWindow::onApplyControllerSettings()
 
 void MainWindow::onProbeVna()
 {
+    m_autoVnaConnectActive = false;
+    onApplyVnaSettings();
+    onApplyControllerSettings();
+    QMetaObject::invokeMethod(m_worker, "probeVna", Qt::QueuedConnection);
+}
+
+void MainWindow::startAutomaticVnaConnection()
+{
+    const QString host = m_connections->vnaHost().trimmed();
+    const bool localSocket = m_connections->vnaBackend() == 1
+                             && (host == QStringLiteral("127.0.0.1")
+                                 || host.compare(QStringLiteral("localhost"),
+                                                 Qt::CaseInsensitive)
+                                        == 0
+                                 || host == QStringLiteral("::1"));
+    if (!localSocket || qEnvironmentVariableIsSet("AFAR_DISABLE_AUTO_S2VNA")) {
+        return;
+    }
+
+    const auto result = S2VnaRuntime::ensureRunningHidden(S2VnaRuntime::defaultExecutablePath());
+    if (!result.ok) {
+        m_connections->setDiagnostic(result.message);
+        return;
+    }
+    m_connections->setDiagnostic(result.message);
+    m_autoVnaConnectActive = true;
+    m_autoVnaConnectAttemptsLeft = 20;
+    QTimer::singleShot(result.started ? 1000 : 0, this,
+                       &MainWindow::attemptAutomaticVnaConnection);
+}
+
+void MainWindow::attemptAutomaticVnaConnection()
+{
+    if (!m_autoVnaConnectActive || m_autoVnaConnectAttemptsLeft <= 0) {
+        return;
+    }
+    S2VnaRuntime::hideRunningWindows();
     onApplyVnaSettings();
     onApplyControllerSettings();
     QMetaObject::invokeMethod(m_worker, "probeVna", Qt::QueuedConnection);
@@ -661,10 +721,26 @@ void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
 {
     refreshDataSourceBadge(ok, idnOrError);
     if (ok) {
+        m_autoVnaConnectActive = false;
+        S2VnaRuntime::hideRunningWindows();
         m_connections->setDiagnostic(QStringLiteral("Связь OK: %1").arg(idnOrError));
         statusBar()->showMessage(QStringLiteral("VNA IDN: %1").arg(idnOrError), 8000);
         onMeasureNow();
     } else {
+        if (m_autoVnaConnectActive && --m_autoVnaConnectAttemptsLeft > 0) {
+            m_connections->setDiagnostic(
+                QStringLiteral("S2VNA запускается скрыто, ожидание связи… (%1)")
+                    .arg(m_autoVnaConnectAttemptsLeft));
+            QTimer::singleShot(1000, this, &MainWindow::attemptAutomaticVnaConnection);
+            return;
+        }
+        if (m_autoVnaConnectActive) {
+            m_autoVnaConnectActive = false;
+            m_connections->setDiagnostic(
+                QStringLiteral("S2VNA запущена, но Socket 127.0.0.1:5025 не ответил: %1")
+                    .arg(idnOrError));
+            return;
+        }
         m_connections->setDiagnostic(QStringLiteral("Нет связи: %1").arg(idnOrError));
         QMessageBox::warning(
             this, QStringLiteral("Проверка VNA"),
