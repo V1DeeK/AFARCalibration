@@ -518,7 +518,8 @@ void MeasureWorker::measureNow(double fStartHz,
     }
 }
 
-void MeasureWorker::exportTwoPort(const QString& basePath)
+void MeasureWorker::exportTwoPort(const QString& basePath,
+                                  const QVector<double>& markerFrequenciesGhz)
 {
     if (!m_lastTwoPortMeasurement) {
         emit exportTwoPortFinished(false, {}, {},
@@ -538,6 +539,14 @@ void MeasureWorker::exportTwoPort(const QString& basePath)
     auto pdf = base;
     s2p.replace_extension(".s2p");
     pdf.replace_extension(".pdf");
+
+    m_lastTwoPortMeasurement->marker_frequency_hz.clear();
+    for (const double frequencyGhz : markerFrequenciesGhz) {
+        if (std::isfinite(frequencyGhz) && frequencyGhz > 0.0) {
+            m_lastTwoPortMeasurement->marker_frequency_hz.push_back(
+                static_cast<std::uint64_t>(std::llround(frequencyGhz * 1e9)));
+        }
+    }
 
     std::string diagnostics;
     if (!afar::report::writeTouchstoneS2p(s2p, *m_lastTwoPortMeasurement, diagnostics)) {

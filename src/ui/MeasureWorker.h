@@ -82,7 +82,7 @@ public slots:
                     double powerDbm,
                     int averages);
     /// Сохраняет последний полный снимок без повторного измерения прибора.
-    void exportTwoPort(const QString& basePath);
+    void exportTwoPort(const QString& basePath, const QVector<double>& markerFrequenciesGhz);
     /// CAL-UI: шаг TwoPortCalibrationStep как int (Begin…Apply).
     void calibrateTwoPort(int step);
     /// CAL-UI: шаг OnePortCalibrationStep как int + порт 1|2.

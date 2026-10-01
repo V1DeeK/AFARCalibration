@@ -422,8 +422,11 @@ void MainWindow::onExportTwoPort()
     if (selected.isEmpty()) {
         return;
     }
-    QMetaObject::invokeMethod(m_worker, "exportTwoPort", Qt::QueuedConnection,
-                              Q_ARG(QString, selected));
+    const QVector<double> markers = m_measure->graphMarkerFrequenciesGhz();
+    QMetaObject::invokeMethod(
+        m_worker,
+        [worker = m_worker, selected, markers] { worker->exportTwoPort(selected, markers); },
+        Qt::QueuedConnection);
 }
 
 void MainWindow::onCalibrateStep(int kind, int step, int port)

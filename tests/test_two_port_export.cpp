@@ -32,6 +32,7 @@ TEST_CASE("two-port Touchstone and PDF use one complete sweep", "[two_port_expor
     measurement.sweep.s21 = {{0.8, 0.1}, {0.7, 0.2}, {0.6, 0.3}};
     measurement.sweep.s12 = {{0.01, 0.0}, {0.02, 0.0}, {0.03, 0.0}};
     measurement.sweep.s22 = {{0.15, 0.0}, {0.25, 0.0}, {0.35, 0.0}};
+    measurement.marker_frequency_hz = {1'500'000'000ULL};
 
     std::string diagnostics;
     REQUIRE(afar::report::validateTwoPortMeasurement(measurement, diagnostics));
@@ -55,9 +56,11 @@ TEST_CASE("two-port Touchstone and PDF use one complete sweep", "[two_port_expor
     }
     {
         std::ifstream report(pdf, std::ios::binary);
-        char magic[5]{};
-        report.read(magic, 5);
-        REQUIRE(std::string(magic, 5) == "%PDF-");
+        std::ostringstream reportBytes;
+        reportBytes << report.rdbuf();
+        REQUIRE(reportBytes.str().starts_with("%PDF-"));
+        REQUIRE(reportBytes.str().find("/Count 5") != std::string::npos);
+        REQUIRE(reportBytes.str().size() > 20'000);
     }
 
     auto invalid = measurement;

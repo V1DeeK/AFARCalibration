@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace afar::report {
 
@@ -15,6 +16,8 @@ struct TwoPortMeasurement {
     std::string vna_idn;
     std::string measured_utc;
     double reference_ohm{50.0};
+    /// Пользовательские маркеры графика, привязанные к ближайшей точке свипа.
+    std::vector<std::uint64_t> marker_frequency_hz;
 };
 
 /// Полный согласованный набор S11/S21/S12/S22 на одной частотной оси.
@@ -26,7 +29,7 @@ bool writeTouchstoneS2p(const std::filesystem::path& path,
                         const TwoPortMeasurement& measurement,
                         std::string& diagnostics);
 
-/// PDF A4: метаданные, сводка и графики модуля четырёх S-параметров.
+/// PDF A4: титульный лист и отдельная страница каждого S-параметра со статистикой.
 bool writeTwoPortReportPdf(const std::filesystem::path& path,
                            const TwoPortMeasurement& measurement,
                            std::string& diagnostics);

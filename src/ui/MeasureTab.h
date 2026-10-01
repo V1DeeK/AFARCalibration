@@ -103,6 +103,10 @@ public:
     [[nodiscard]] int ifbwHz() const;
     [[nodiscard]] double powerDbm() const;
     [[nodiscard]] int averages() const;
+    [[nodiscard]] QVector<double> graphMarkerFrequenciesGhz() const
+    {
+        return m_graphMarkers;
+    }
 
 signals:
     void openWizardRequested();
