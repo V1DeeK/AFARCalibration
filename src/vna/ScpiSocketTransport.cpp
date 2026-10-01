@@ -99,6 +99,7 @@ bool ScpiSocketTransport::is_connected() const noexcept
 
 void ScpiSocketTransport::close_socket() noexcept
 {
+    std::lock_guard lock(socketMutex_);
     if (sock_ == kInvalidSocket) {
         return;
     }
@@ -120,8 +121,22 @@ void ScpiSocketTransport::disconnect() noexcept
 
 void ScpiSocketTransport::abort() noexcept
 {
-    abortRequested_ = true;
+    abortRequested_.store(true);
     close_socket();
+}
+
+void ScpiSocketTransport::request_interrupt() noexcept
+{
+    interruptRequested_.store(true);
+    std::lock_guard lock(socketMutex_);
+    if (sock_ == kInvalidSocket) {
+        return;
+    }
+#ifdef _WIN32
+    (void)::shutdown(static_cast<SOCKET>(sock_), SD_BOTH);
+#else
+    (void)::shutdown(static_cast<int>(sock_), SHUT_RDWR);
+#endif
 }
 
 void ScpiSocketTransport::apply_recv_timeout()
@@ -157,7 +172,10 @@ void ScpiSocketTransport::apply_recv_timeout()
 void ScpiSocketTransport::connect()
 {
     ensure_winsock();
-    abortRequested_ = false;
+    if (interruptRequested_.load()) {
+        throw std::runtime_error("ScpiSocketTransport: interrupted");
+    }
+    abortRequested_.store(false);
     disconnect();
 
 #ifdef _WIN32
@@ -242,7 +260,10 @@ void ScpiSocketTransport::connect()
         throw std::runtime_error(last_socket_error("ScpiSocketTransport: set blocking"));
     }
 
-    sock_ = static_cast<SocketHandle>(candidate);
+    {
+        std::lock_guard lock(socketMutex_);
+        sock_ = static_cast<SocketHandle>(candidate);
+    }
 #else
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
@@ -322,8 +343,16 @@ void ScpiSocketTransport::connect()
         throw std::runtime_error(last_socket_error("ScpiSocketTransport: set blocking"));
     }
 
-    sock_ = candidate;
+    {
+        std::lock_guard lock(socketMutex_);
+        sock_ = candidate;
+    }
 #endif
+
+    if (abortRequested_.load() || interruptRequested_.load()) {
+        close_socket();
+        throw std::runtime_error("ScpiSocketTransport: interrupted");
+    }
 
     try {
         apply_recv_timeout();
@@ -339,13 +368,16 @@ void ScpiSocketTransport::write_line(const std::string& line)
     if (!is_connected()) {
         throw std::runtime_error("ScpiSocketTransport: write without connect");
     }
-    if (abortRequested_) {
+    if (abortRequested_.load() || interruptRequested_.load()) {
         throw std::runtime_error("ScpiSocketTransport: aborted");
     }
 
     const std::string payload = ensure_newline(line);
     std::size_t sent = 0;
     while (sent < payload.size()) {
+        if (abortRequested_.load() || interruptRequested_.load() || !is_connected()) {
+            throw std::runtime_error("ScpiSocketTransport: aborted");
+        }
 #ifdef _WIN32
         const int n = ::send(static_cast<SOCKET>(sock_), payload.data() + sent,
                              static_cast<int>(payload.size() - sent), 0);
@@ -370,7 +402,7 @@ std::string ScpiSocketTransport::read_line()
         std::chrono::steady_clock::now() + std::chrono::milliseconds(ioTimeoutMs_);
 
     while (true) {
-        if (abortRequested_) {
+        if (abortRequested_.load() || interruptRequested_.load()) {
             throw std::runtime_error("ScpiSocketTransport: aborted");
         }
 

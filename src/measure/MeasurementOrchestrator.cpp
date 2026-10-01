@@ -8,6 +8,7 @@
 
 #include "afar/ScpiIdn.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -31,6 +32,12 @@ bool hasNanOrInf(const ComplexSweep& sweep)
         }
     }
     return false;
+}
+
+std::string channelArtifactStem(std::uint8_t channel)
+{
+    return std::string("channel-") + (channel < 10 ? "0" : "")
+        + std::to_string(static_cast<unsigned>(channel));
 }
 
 DutState appliedStand(const ScanItem& item, const RunConfig& config)
@@ -72,8 +79,21 @@ SweepConfig sweepConfigFromRun(const RunConfig& config)
     return sweep;
 }
 
+const char* sParameterName(SParameter parameter)
+{
+    switch (parameter) {
+    case SParameter::S11: return "S11";
+    case SParameter::S21: return "S21";
+    case SParameter::S12: return "S12";
+    case SParameter::S22: return "S22";
+    }
+    return "S?";
+}
+
 /// DATA-102: четыре trace через полный configure (публичного DEF-only в C2220Vna нет).
-ComplexSweep measureAllFour(IVna& vna, SweepConfig base)
+/// Один сбой не должен стирать уже полученные трассы: переподключаемся один раз
+/// и продолжаем измерять остальные S-параметры.
+ComplexSweep measureAllFour(IVna& vna, SweepConfig base, std::vector<std::string>& failures)
 {
     ComplexSweep out;
     constexpr SParameter order[] = {
@@ -84,28 +104,56 @@ ComplexSweep measureAllFour(IVna& vna, SweepConfig base)
     };
     for (const auto p : order) {
         base.s_parameter = p;
-        vna.configure(base);
-        auto part = vna.measure_trace();
-        if (out.frequency_hz.empty()) {
-            out.frequency_hz = std::move(part.frequency_hz);
+        std::string last_error;
+        bool measured = false;
+        for (int attempt = 0; attempt < 2 && !measured; ++attempt) {
+            try {
+                if (attempt != 0) {
+                    vna.abort();
+                    vna.connect();
+                }
+                vna.configure(base);
+                auto part = vna.measure_trace();
+                if (part.frequency_hz.size() < 2
+                    || (!out.frequency_hz.empty() && part.frequency_hz != out.frequency_hz)) {
+                    throw std::runtime_error("frequency axis mismatch");
+                }
+                if (out.frequency_hz.empty()) {
+                    out.frequency_hz = std::move(part.frequency_hz);
+                }
+                out.overload = out.overload || part.overload;
+                switch (p) {
+                case SParameter::S11: out.s11 = std::move(part.s11); break;
+                case SParameter::S21: out.s21 = std::move(part.s21); break;
+                case SParameter::S12: out.s12 = std::move(part.s12); break;
+                case SParameter::S22: out.s22 = std::move(part.s22); break;
+                }
+                measured = true;
+            } catch (const std::exception& ex) {
+                last_error = ex.what();
+            }
         }
-        out.overload = out.overload || part.overload;
-        switch (p) {
-        case SParameter::S11:
-            out.s11 = std::move(part.s11);
-            break;
-        case SParameter::S21:
-            out.s21 = std::move(part.s21);
-            break;
-        case SParameter::S12:
-            out.s12 = std::move(part.s12);
-            break;
-        case SParameter::S22:
-            out.s22 = std::move(part.s22);
-            break;
+        if (!measured) {
+            failures.push_back(std::string(sParameterName(p)) + ": " + last_error);
         }
     }
+    if (out.frequency_hz.empty()) {
+        if (!failures.empty()) {
+            throw std::runtime_error(failures.front());
+        }
+        throw std::runtime_error("не удалось измерить ни одного S-параметра");
+    }
     return out;
+}
+
+ComplexSweep measureAllFour(IVna& vna, SweepConfig base)
+{
+    std::vector<std::string> failures;
+    auto sweep = measureAllFour(vna, base, failures);
+    if (!failures.empty()) {
+        throw std::runtime_error(failures.front());
+    }
+    return sweep;
 }
 
 }  // namespace
@@ -913,6 +961,35 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
     pdf_info.run_id = config_.run_id;
     pdf_info.completed_states = store_.completedCount();
     pdf_info.valid_direct_count = report::countValidDirect(direct);
+    pdf_info.valid_inverse_count = report::countValidInverse(inverse);
+    const auto expected_valid_inverse = pdf_info.valid_inverse_count;
+    pdf_info.frequency_points = store_.frequencyHz().size();
+    pdf_info.attenuator_codes = store_.attCodes().size();
+    pdf_info.phase_codes = store_.phaseCodes().size();
+    if (!store_.frequencyHz().empty()) {
+        pdf_info.f_start_hz = store_.frequencyHz().front();
+        pdf_info.f_stop_hz = store_.frequencyHz().back();
+    }
+    for (const auto channel : store_.channels()) {
+        report::ChannelReportInfo channel_info;
+        channel_info.channel = channel;
+        for (const auto att : store_.attCodes()) {
+            for (const auto phase : store_.phaseCodes()) {
+                if (store_.isCompleted(channel, att, phase)) {
+                    ++channel_info.completed_states;
+                }
+            }
+        }
+        channel_info.valid_direct_count = static_cast<std::size_t>(std::count_if(
+            direct.begin(), direct.end(), [channel](const cal::DirectLutEntry& entry) {
+                return entry.channel == channel && entry.valid;
+            }));
+        channel_info.valid_inverse_count = static_cast<std::size_t>(std::count_if(
+            inverse.begin(), inverse.end(), [channel](const report::InverseLutEntry& entry) {
+                return entry.channel == channel && entry.valid;
+            }));
+        pdf_info.channels.push_back(channel_info);
+    }
     pdf_info.series_path = series_.root().string();
     pdf_info.vna_idn = store_.vnaIdn();
     {
@@ -932,6 +1009,34 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
         return false;
     }
 
+    // Один рабочий калибровочный файл и один PDF на канал. Direct LUT остаётся общей
+    // диагностической таблицей, чтобы не удваивать самый большой файл серии.
+    for (const auto& channel_info : pdf_info.channels) {
+        std::vector<report::InverseLutEntry> channel_calibration;
+        std::copy_if(inverse.begin(), inverse.end(), std::back_inserter(channel_calibration),
+                     [&channel_info](const report::InverseLutEntry& entry) {
+                         return entry.channel == channel_info.channel;
+                     });
+        const auto stem = channelArtifactStem(channel_info.channel);
+        if (channel_calibration.empty()
+            || !report::exportInverseLut(series_.root() / (stem + "-calibration.parquet"),
+                                         channel_calibration, diagnostics)) {
+            if (diagnostics.empty()) {
+                diagnostics = "channel calibration is empty: " + stem;
+            }
+            return false;
+        }
+        auto channel_pdf = pdf_info;
+        channel_pdf.completed_states = channel_info.completed_states;
+        channel_pdf.valid_direct_count = channel_info.valid_direct_count;
+        channel_pdf.valid_inverse_count = channel_info.valid_inverse_count;
+        channel_pdf.channels = {channel_info};
+        if (!report::writeRunReportPdf(series_.root() / (stem + "-report.pdf"),
+                                       channel_pdf, diagnostics)) {
+            return false;
+        }
+    }
+
     // GAP-RAW-001: табличное сырьё т. 7.3 (до манифеста — файл попадёт в SHA-256).
     if (!report::exportRawS21Csv(series_.rawS21CsvPath(), store_, config_.run_id,
                                  series_.runEventsPath(), diagnostics)) {
@@ -939,6 +1044,10 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
     }
 
     // DATA-03 / AT-11: reopen LUT до Complete; совпадение числа valid с PDF.
+    direct.clear();
+    direct.shrink_to_fit();
+    inverse.clear();
+    inverse.shrink_to_fit();
     std::vector<cal::DirectLutEntry> direct_reopen;
     if (!report::readDirectLut(series_.directLutPath(), direct_reopen, diagnostics)) {
         return false;
@@ -947,11 +1056,13 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
         diagnostics = "valid_direct_count mismatch after reopen";
         return false;
     }
+    direct_reopen.clear();
+    direct_reopen.shrink_to_fit();
     std::vector<report::InverseLutEntry> inverse_reopen;
     if (!report::readInverseLut(series_.inverseLutPath(), inverse_reopen, diagnostics)) {
         return false;
     }
-    if (report::countValidInverse(inverse_reopen) != report::countValidInverse(inverse)) {
+    if (report::countValidInverse(inverse_reopen) != expected_valid_inverse) {
         diagnostics = "valid_inverse_count mismatch after reopen";
         return false;
     }
@@ -980,6 +1091,7 @@ bool MeasurementOrchestrator::probeIdentify(std::string& idn_or_diagnostics)
     try {
         vna_->connect();
         const auto idn = vna_->identify();
+        last_vna_idn_ = idn;
         if (!idnContainsC2220(idn)) {
             idn_or_diagnostics = "VNA IDN does not contain C2220: " + idn;
             last_error_ = idn_or_diagnostics;
@@ -1095,10 +1207,25 @@ bool MeasurementOrchestrator::measurePreview(const SweepConfig& sweep, std::stri
         if (st == RunState::Idle) {
             vna_->connect();
         }
-        last_sweep_ = measureAllFour(*vna_, sweep);
+        last_vna_idn_ = vna_->identify();
+        std::vector<std::string> failures;
+        last_sweep_ = measureAllFour(*vna_, sweep, failures);
         has_last_sweep_ = true;
+        has_last_observed_config_ = false;
+        try {
+            last_observed_config_ = vna_->read_config();
+            has_last_observed_config_ = true;
+        } catch (const std::exception& ex) {
+            failures.push_back(std::string("readback: ") + ex.what());
+        }
         drainAndLogVnaErrors();
         diagnostics = "measurePreview: S11/S21/S12/S22 OK";
+        if (!failures.empty()) {
+            diagnostics = "measurePreview: получены доступные трассы; ошибки: ";
+            for (std::size_t i = 0; i < failures.size(); ++i) {
+                diagnostics += (i == 0 ? "" : "; ") + failures[i];
+            }
+        }
         logEvent(EventLevel::Info, "MEASURE_PREVIEW_OK", diagnostics);
         return true;
     } catch (const std::exception& ex) {

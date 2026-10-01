@@ -152,3 +152,34 @@ TEST_CASE("RunEventLog append JSONL without S21 arrays", "[hdf5_store][DATA-007]
     REQUIRE(legacy_ev.timestamp_utc == "2020-01-01T00:00:00.000Z");
     REQUIRE(legacy_ev.text == "old");
 }
+
+TEST_CASE("RunEventLog rotates and loads all segments in order", "[hdf5_store][DATA-007][LOG-01]")
+{
+    const auto dir = std::filesystem::temp_directory_path() / "afar_run_events_rotation_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "run-events.jsonl";
+
+    afar::RunEventLog log;
+    std::string diag;
+    REQUIRE(afar::RunEventLog::openAppend(path, log, diag, 300));
+    for (int i = 0; i < 20; ++i) {
+        afar::RunEvent event;
+        event.timestamp_utc = "2026-09-22T12:00:00.000Z";
+        event.component = "rotation-test";
+        event.event_code = "EVENT-" + std::to_string(i);
+        event.run_id = "RX16-20260922-001";
+        event.text = "journal rotation payload";
+        REQUIRE(log.append(event, diag));
+    }
+    log.close();
+
+    REQUIRE(std::filesystem::exists(dir / "run-events.0001.jsonl"));
+    std::vector<afar::RunEvent> events;
+    REQUIRE(afar::RunEventLog::load(path, events, diag));
+    REQUIRE(events.size() == 20);
+    for (int i = 0; i < 20; ++i) {
+        REQUIRE(events[static_cast<std::size_t>(i)].event_code
+                == "EVENT-" + std::to_string(i));
+    }
+}

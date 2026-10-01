@@ -17,6 +17,19 @@ struct S21PlotTrace {
     QColor color;
 };
 
+struct PlotTraceStatistics {
+    bool valid = false;
+    double minFrequencyGhz = 0.0;
+    double minValue = 0.0;
+    double maxFrequencyGhz = 0.0;
+    double maxValue = 0.0;
+    double averageFrequencyGhz = 0.0;
+    double averageValue = 0.0;
+};
+
+/// MIN/MAX и точка пересечения трассы с её арифметическим средним.
+[[nodiscard]] PlotTraceStatistics plotTraceStatistics(const S21PlotTrace& trace);
+
 /// Мини-графики |S21| (дБ) и unwrap фазы (без Qt Charts, QPainter).
 class S21PlotWidget final : public QWidget {
     Q_OBJECT

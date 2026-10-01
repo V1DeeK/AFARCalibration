@@ -84,6 +84,8 @@ target_include_directories(afar_qc PUBLIC
 )
 afar_enable_warnings(afar_qc)
 
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+
 # RPT-001…003: Parquet(AFARPQ)/манифест/PDF без Apache Arrow и OpenSSL.
 # До afar_measure: оркестратор линкует report для Finalizing (LUT/PDF/manifest).
 add_library(afar_report STATIC
@@ -95,12 +97,14 @@ add_library(afar_report STATIC
     report/Manifest.h
     report/RunReportPdf.cpp
     report/RunReportPdf.h
+    report/TwoPortExport.cpp
+    report/TwoPortExport.h
 )
 target_include_directories(afar_report PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/report
     ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(afar_report PUBLIC afar_cal afar_data afar_qc)
+target_link_libraries(afar_report PUBLIC afar_cal afar_data afar_qc Qt6::Gui)
 afar_enable_warnings(afar_report)
 
 # Версии и хеш коммита вшиваются при конфигурации. Из GUI git не вызывается.
@@ -168,7 +172,6 @@ target_include_directories(afar_dut PUBLIC
 target_link_libraries(afar_dut PUBLIC afar_interfaces)
 afar_enable_warnings(afar_dut)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
 set(CMAKE_AUTOMOC ON)
 if(NOT DEFINED Qt6_VERSION)
     set(Qt6_VERSION "unknown")
@@ -186,6 +189,8 @@ add_executable(AfarRxCalibrationStudio WIN32
     ui/Theme.h
     ui/MainWindow.cpp
     ui/MainWindow.h
+    ui/S2VnaRuntime.cpp
+    ui/S2VnaRuntime.h
     ui/ConnectionBar.cpp
     ui/ConnectionBar.h
     ui/MeasureTab.cpp

@@ -51,8 +51,6 @@ public:
                           const QVector<double>& s12ph,
                           const QVector<double>& s22mag,
                           const QVector<double>& s22ph);
-    /// Выбрать фактически активный параметр S2VNA и открыть страницу графика.
-    void showInstrumentTrace(int sParameter);
     void setStandCheck(bool connectionsOk,
                        bool idnOk,
                        bool calOk,
@@ -96,6 +94,7 @@ public:
     void setUnfinishedSeriesHint(const QString& path);
     void setVnaCalibrationIdHint(const QString& id);
     void setMeasureNowEnabled(bool enabled);
+    void setTwoPortExportEnabled(bool enabled);
     void onCalibrateStepFinished(bool ok, int step, const QString& message);
 
     [[nodiscard]] double fStartHz() const;
@@ -110,14 +109,20 @@ signals:
     void resumeSeriesRequested();
     /// UI-MEAS-001: разовый съём без серии.
     void measureNowRequested();
-    void refreshLiveTraceRequested();
+    void connectAndMeasureRequested();
+    void exportTwoPortRequested();
+    void workModeChanged(bool channelCalibrationMode);
     /// CAL-UI: 0 = one-port OSL, 1 = two-port SOLT; step — enum как int; port 1|2 (для two-port игнор).
     void calibrateStepRequested(int kind, int step, int port);
+    void selectCalibrationKitRequested(int index);
 
 private slots:
     void onStageClicked(int row);
     void onFreqSpinChanged();
     void onFreqUnitChanged();
+    void onCenterSpanSpinChanged();
+    void onCenterSpanUnitChanged();
+    void onFrequencyEntryModeChanged(int index);
     void onIfbwSpinChanged();
     void onIfbwUnitChanged();
     void onSoltConfirmClicked();
@@ -153,11 +158,21 @@ private:
 
     QListWidget* m_stages = nullptr;
     QStackedWidget* m_stack = nullptr;
+    QComboBox* m_workMode = nullptr;
 
+    QComboBox* m_frequencyEntryMode = nullptr;
+    QWidget* m_fStartRow = nullptr;
+    QWidget* m_fStopRow = nullptr;
+    QWidget* m_fCenterRow = nullptr;
+    QWidget* m_fSpanRow = nullptr;
     QDoubleSpinBox* m_fStart = nullptr;
     QDoubleSpinBox* m_fStop = nullptr;
+    QDoubleSpinBox* m_fCenter = nullptr;
+    QDoubleSpinBox* m_fSpan = nullptr;
     QComboBox* m_fStartUnit = nullptr;
     QComboBox* m_fStopUnit = nullptr;
+    QComboBox* m_fCenterUnit = nullptr;
+    QComboBox* m_fSpanUnit = nullptr;
     QSpinBox* m_points = nullptr;
     QDoubleSpinBox* m_ifbw = nullptr;
     QComboBox* m_ifbwUnit = nullptr;
@@ -182,6 +197,7 @@ private:
     QLabel* m_calKindHint = nullptr;
     QComboBox* m_calKind = nullptr;
     QComboBox* m_calPort = nullptr;
+    QSpinBox* m_calKit = nullptr;
     QLabel* m_calPortLabel = nullptr;
     QLabel* m_soltStepLabel = nullptr;
     QLabel* m_soltHint = nullptr;
@@ -193,6 +209,7 @@ private:
     int m_soltStep = 0;
     bool m_soltBusy = false;
     QPushButton* m_measureNow = nullptr;
+    QPushButton* m_exportTwoPort = nullptr;
     QLabel* m_linText = nullptr;
     QLabel* m_directSummary = nullptr;
     QLabel* m_directFragment = nullptr;
@@ -210,6 +227,7 @@ private:
     std::array<S21PlotWidget*, 4> m_graphPlots{};
     QGridLayout* m_graphGrid = nullptr;
     QPushButton* m_graphMode = nullptr;
+    QComboBox* m_graphDisplayFormat = nullptr;
     QPushButton* m_graphMarkerMode = nullptr;
     QLabel* m_graphDataStatus = nullptr;
     QPlainTextEdit* m_graphTerminal = nullptr;

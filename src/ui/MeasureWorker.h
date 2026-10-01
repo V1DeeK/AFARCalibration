@@ -2,6 +2,7 @@
 
 #include "DutSimulator.h"
 #include "MeasurementOrchestrator.h"
+#include "TwoPortExport.h"
 #include "VnaSimulator.h"
 
 #include <QElapsedTimer>
@@ -10,6 +11,8 @@
 #include <QStringList>
 #include <QVector>
 #include <memory>
+#include <mutex>
+#include <optional>
 
 class C2220Vna;
 class IScpiTransport;
@@ -30,6 +33,8 @@ public:
 
     explicit MeasureWorker(QObject* parent = nullptr);
     ~MeasureWorker() override;
+    /// Потокобезопасно прерывает блокирующий Socket I/O перед остановкой QThread.
+    void interruptIo() noexcept;
 
 public slots:
     void configureVna(int backend,
@@ -76,10 +81,14 @@ public slots:
                     int ifbwHz,
                     double powerDbm,
                     int averages);
+    /// Сохраняет последний полный снимок без повторного измерения прибора.
+    void exportTwoPort(const QString& basePath);
     /// CAL-UI: шаг TwoPortCalibrationStep как int (Begin…Apply).
     void calibrateTwoPort(int step);
     /// CAL-UI: шаг OnePortCalibrationStep как int + порт 1|2.
     void calibrateOnePort(int step, int port);
+    /// Выбор подтверждённого документацией комплекта мер S2VNA 1..64.
+    void selectCalibrationKit(int index);
     void shutdown();
 
 signals:
@@ -95,8 +104,14 @@ signals:
     void stateChanged(int state, const QString& russianText, const QString& colorName);
     void prepareFinished(bool ok, const QString& diagnostics);
     void probeFinished(bool ok, const QString& idnOrError);
+    void vnaCalibrationDetected(const QString& calibrationId, bool correctionEnabled);
     void probeCodesFinished(bool ok, const QString& message);
     void measureNowFinished(bool ok, const QString& message);
+    void twoPortExportAvailable(bool available);
+    void exportTwoPortFinished(bool ok,
+                               const QString& s2pPath,
+                               const QString& pdfPath,
+                               const QString& message);
     void calibrateTwoPortFinished(bool ok, int step, const QString& message);
     void calibrateOnePortFinished(bool ok, int step, const QString& message);
     void progressChanged(qint64 completed,
@@ -118,13 +133,6 @@ signals:
                         const QVector<double>& s12ph,
                         const QVector<double>& s22mag,
                         const QVector<double>& s22ph);
-    /// Текущие настройки и активный S-параметр, прочитанные из живой S2VNA.
-    void instrumentTraceDetected(double fStartHz,
-                                 double fStopHz,
-                                 int points,
-                                 int ifbwHz,
-                                 double powerDbm,
-                                 int sParameter);
     void cellSweepPreview(const QVector<double>& freqGhz,
                           const QVector<double>& magDb,
                           const QVector<double>& phaseUnwrapDeg);
@@ -218,6 +226,7 @@ private:
     QString m_lastIdn;
 
     std::unique_ptr<VnaSimulator> m_simVna;
+    mutable std::mutex m_transportMutex;
     std::unique_ptr<ScpiSocketTransport> m_socket;
     std::unique_ptr<ScpiComTransport> m_com;
     std::unique_ptr<C2220Vna> m_c2220;
@@ -236,4 +245,5 @@ private:
     qint64 m_etaBaseCompleted = -1;
     bool m_etaActive = false;
     bool m_artifactPreviewSent = false;
+    std::optional<afar::report::TwoPortMeasurement> m_lastTwoPortMeasurement;
 };

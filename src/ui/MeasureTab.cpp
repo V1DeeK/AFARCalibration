@@ -20,7 +20,9 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollArea>
 #include <QScrollBar>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -75,6 +77,20 @@ MeasureTab::MeasureTab(QWidget* parent)
     auto* root = new QHBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
 
+    auto* navigation = new QWidget(this);
+    navigation->setMinimumWidth(190);
+    navigation->setMaximumWidth(230);
+    auto* navigationLayout = new QVBoxLayout(navigation);
+    navigationLayout->setContentsMargins(0, 0, 8, 0);
+    auto* modeLabel = new QLabel(QStringLiteral("Режим работы"), navigation);
+    modeLabel->setStyleSheet(QStringLiteral("font-weight: 700;"));
+    m_workMode = new QComboBox(navigation);
+    m_workMode->setObjectName(QStringLiteral("measurementWorkMode"));
+    m_workMode->addItem(QStringLiteral("Двухпортовое устройство"));
+    m_workMode->addItem(QStringLiteral("Калибровка канала 64×64"));
+    navigationLayout->addWidget(modeLabel);
+    navigationLayout->addWidget(m_workMode);
+
     m_stages = new QListWidget(this);
     const QStringList stages = {
         QStringLiteral("1 Подключения"),
@@ -88,10 +104,12 @@ MeasureTab::MeasureTab(QWidget* parent)
     };
     m_stages->addItems(stages);
     m_stages->setCurrentRow(0);
-    m_stages->setFixedWidth(220);
+    m_stages->setObjectName(QStringLiteral("measurementStages"));
     connect(m_stages, &QListWidget::currentRowChanged, this, &MeasureTab::onStageClicked);
+    navigationLayout->addWidget(m_stages, 1);
 
     m_stack = new QStackedWidget(this);
+    m_stack->setObjectName(QStringLiteral("measurementStageStack"));
     m_stack->addWidget(makeConnectionsPage());
     m_stack->addWidget(makeCalPage());
     m_stack->addWidget(makeLinearityPage());
@@ -105,7 +123,18 @@ MeasureTab::MeasureTab(QWidget* parent)
     m_stages->setCurrentRow(7);
     m_stack->setCurrentIndex(7);
 
-    root->addWidget(m_stages);
+    auto applyWorkMode = [this](int mode) {
+        const bool channelMode = mode == 1;
+        if (!channelMode) {
+            m_stages->setCurrentRow(7);
+        }
+        emit workModeChanged(channelMode);
+    };
+    connect(m_workMode, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            applyWorkMode);
+    applyWorkMode(0);
+
+    root->addWidget(navigation);
     root->addWidget(m_stack, 1);
 
     // UI-303 / пресет @1296: 1246…1346 МГц, 101 точка, IFBW 1 кГц.
@@ -174,6 +203,26 @@ QWidget* MeasureTab::makeCalPage()
     transportNote->setWordWrap(true);
     transportNote->setObjectName(QStringLiteral("hintLabel"));
 
+    auto* kitRow = new QHBoxLayout();
+    kitRow->addWidget(new QLabel(QStringLiteral("Комплект мер S2VNA:"), page));
+    m_calKit = new QSpinBox(page);
+    m_calKit->setObjectName(QStringLiteral("vnaCalibrationKit"));
+    m_calKit->setRange(1, 64);
+    auto* applyKit = new QPushButton(QStringLiteral("Выбрать комплект"), page);
+    applyKit->setObjectName(QStringLiteral("selectVnaCalibrationKit"));
+    kitRow->addWidget(m_calKit);
+    kitRow->addWidget(applyKit);
+    kitRow->addStretch(1);
+    connect(applyKit, &QPushButton::clicked, this, [this] {
+        const auto answer = QMessageBox::question(
+            this, QStringLiteral("Комплект мер VNA"),
+            QStringLiteral("Выбрать комплект мер S2VNA №%1?").arg(m_calKit->value()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer == QMessageBox::Yes) {
+            emit selectCalibrationKitRequested(m_calKit->value());
+        }
+    });
+
     auto* kindRow = new QHBoxLayout();
     auto* kindLabel = new QLabel(QStringLiteral("Тип калибровки:"), page);
     m_calKind = new QComboBox(page);
@@ -229,6 +278,7 @@ QWidget* MeasureTab::makeCalPage()
 
     layout->addWidget(title);
     layout->addWidget(transportNote);
+    layout->addLayout(kitRow);
     layout->addLayout(kindRow);
     layout->addWidget(m_calKindHint);
     layout->addLayout(portRow);
@@ -264,6 +314,12 @@ QWidget* MeasureTab::makeSweepPage()
     auto* params = new QGroupBox(QStringLiteral("Параметры свипа"), page);
     auto* form = new QFormLayout(params);
 
+    m_frequencyEntryMode = new QComboBox(params);
+    m_frequencyEntryMode->setObjectName(QStringLiteral("frequencyEntryMode"));
+    m_frequencyEntryMode->addItem(QStringLiteral("Начальная / конечная"));
+    m_frequencyEntryMode->addItem(QStringLiteral("Центральная / полоса"));
+    form->addRow(QStringLiteral("Задание диапазона"), m_frequencyEntryMode);
+
     auto makeFreqRow = [params](QDoubleSpinBox** spinOut, QComboBox** unitOut) {
         auto* row = new QWidget(params);
         auto* lay = new QHBoxLayout(row);
@@ -283,8 +339,14 @@ QWidget* MeasureTab::makeSweepPage()
         return row;
     };
 
-    auto* startRow = makeFreqRow(&m_fStart, &m_fStartUnit);
-    auto* stopRow = makeFreqRow(&m_fStop, &m_fStopUnit);
+    m_fStartRow = makeFreqRow(&m_fStart, &m_fStartUnit);
+    m_fStopRow = makeFreqRow(&m_fStop, &m_fStopUnit);
+    m_fCenterRow = makeFreqRow(&m_fCenter, &m_fCenterUnit);
+    m_fSpanRow = makeFreqRow(&m_fSpan, &m_fSpanUnit);
+    m_fStart->setObjectName(QStringLiteral("frequencyStart"));
+    m_fStop->setObjectName(QStringLiteral("frequencyStop"));
+    m_fCenter->setObjectName(QStringLiteral("frequencyCenter"));
+    m_fSpan->setObjectName(QStringLiteral("frequencySpan"));
 
     m_points = new QSpinBox(params);
     m_points->setRange(2, 10001);
@@ -308,14 +370,22 @@ QWidget* MeasureTab::makeSweepPage()
     m_power->setDecimals(1);
     m_power->setSuffix(QStringLiteral(" дБм"));
     m_averages = new QSpinBox(params);
-    m_averages->setRange(1, 1024);
+    m_averages->setObjectName(QStringLiteral("sweepAverages"));
+    m_averages->setRange(1, 999);
+    m_averages->setValue(1);
+    m_averages->setToolTip(QStringLiteral("S2VNA: SENS:AVER / SENS:AVER:COUN, диапазон 1…999"));
 
-    form->addRow(QStringLiteral("f нач."), startRow);
-    form->addRow(QStringLiteral("f кон."), stopRow);
+    form->addRow(QStringLiteral("f нач."), m_fStartRow);
+    form->addRow(QStringLiteral("f кон."), m_fStopRow);
+    form->addRow(QStringLiteral("f центр."), m_fCenterRow);
+    form->addRow(QStringLiteral("Полоса"), m_fSpanRow);
     form->addRow(QStringLiteral("Точки"), m_points);
     form->addRow(QStringLiteral("ПЧ (IFBW)"), ifbwRow);
     form->addRow(QStringLiteral("Мощность"), m_power);
     form->addRow(QStringLiteral("Усреднение"), m_averages);
+
+    connect(m_frequencyEntryMode, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &MeasureTab::onFrequencyEntryModeChanged);
 
     connect(m_fStart, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
             &MeasureTab::onFreqSpinChanged);
@@ -325,6 +395,14 @@ QWidget* MeasureTab::makeSweepPage()
             &MeasureTab::onFreqUnitChanged);
     connect(m_fStopUnit, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &MeasureTab::onFreqUnitChanged);
+    connect(m_fCenter, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            &MeasureTab::onCenterSpanSpinChanged);
+    connect(m_fSpan, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            &MeasureTab::onCenterSpanSpinChanged);
+    connect(m_fCenterUnit, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &MeasureTab::onCenterSpanUnitChanged);
+    connect(m_fSpanUnit, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &MeasureTab::onCenterSpanUnitChanged);
     connect(m_ifbw, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
             &MeasureTab::onIfbwSpinChanged);
     connect(m_ifbwUnit, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -335,6 +413,7 @@ QWidget* MeasureTab::makeSweepPage()
             [this] { markSweepSettingsChanged(); });
     connect(m_averages, qOverload<int>(&QSpinBox::valueChanged), this,
             [this] { markSweepSettingsChanged(); });
+    onFrequencyEntryModeChanged(0);
 
     m_plotState = new QLabel(QStringLiteral("S-параметры: состояние ещё не выбрано"), page);
     m_plotState->setStyleSheet(QStringLiteral("font-size: 15px; font-weight: 700;"));
@@ -344,7 +423,7 @@ QWidget* MeasureTab::makeSweepPage()
     m_nextHint->setWordWrap(true);
     m_nextHint->setObjectName(QStringLiteral("hintLabel"));
 
-    m_measureNow = new QPushButton(QStringLiteral("Измерить сейчас"), page);
+    m_measureNow = new QPushButton(QStringLiteral("Применить и измерить S11/S21/S12/S22"), page);
     m_measureNow->setObjectName(QStringLiteral("btnPrimary"));
     m_measureNow->setToolTip(
         QStringLiteral("Один свип S11…S22 без перебора DUT. Idle/Ready; во время серии — нет."));
@@ -469,24 +548,49 @@ QWidget* MeasureTab::makeGraphsPage()
     }
 
     auto* side = new QWidget(page);
-    side->setFixedWidth(330);
+    side->setMinimumWidth(250);
     auto* sideLayout = new QVBoxLayout(side);
     sideLayout->setContentsMargins(8, 0, 0, 0);
 
-    auto* readLive = new QPushButton(QStringLiteral("Получить текущую трассу S2VNA"), side);
+    auto* readLive = new QPushButton(QStringLiteral("Подключить C2220 и измерить всё"), side);
     readLive->setObjectName(QStringLiteral("btnPrimary"));
     readLive->setToolTip(QStringLiteral(
-        "Проверить связь и считать активный S-параметр, диапазон и точки без изменения S2VNA"));
-    connect(readLive, &QPushButton::clicked, this, &MeasureTab::refreshLiveTraceRequested);
+        "Проверить связь и измерить S11/S21/S12/S22 по настройкам нашей программы"));
+    connect(readLive, &QPushButton::clicked, this, &MeasureTab::connectAndMeasureRequested);
 
-    auto* measureAll = new QPushButton(QStringLiteral("Измерить все S-параметры и КСВН"), side);
+    auto* measureAll = new QPushButton(QStringLiteral("Применить настройки и измерить всё"), side);
     measureAll->setToolTip(QStringLiteral(
         "Считать S11, S21, S12 и S22; КСВН-1 вычисляется из S11, КСВН-2 — из S22"));
     connect(measureAll, &QPushButton::clicked, this, &MeasureTab::measureNowRequested);
 
+    m_exportTwoPort = new QPushButton(QStringLiteral("Сохранить .s2p + PDF-отчёт"), side);
+    m_exportTwoPort->setObjectName(QStringLiteral("exportTwoPortReport"));
+    m_exportTwoPort->setEnabled(false);
+    m_exportTwoPort->setToolTip(
+        QStringLiteral("Сохранить последний полный снимок без повторного измерения"));
+    connect(m_exportTwoPort, &QPushButton::clicked, this, &MeasureTab::exportTwoPortRequested);
+
+    auto* openSweepSettings = new QPushButton(
+        QStringLiteral("Настройки частоты, точек и ПЧ"), side);
+    connect(openSweepSettings, &QPushButton::clicked, this,
+            [this] { setStageHighlight(3); });
+
     m_graphDataStatus = new QLabel(QStringLiteral("Реальные данные прибора ещё не получены"), side);
     m_graphDataStatus->setWordWrap(true);
     m_graphDataStatus->setObjectName(QStringLiteral("hintLabel"));
+
+    auto* formatBox = new QGroupBox(QStringLiteral("Формат отображения"), side);
+    auto* formatLayout = new QVBoxLayout(formatBox);
+    m_graphDisplayFormat = new QComboBox(formatBox);
+    m_graphDisplayFormat->setObjectName(QStringLiteral("graphDisplayFormat"));
+    m_graphDisplayFormat->addItems({QStringLiteral("Амплитуда + фаза"),
+                                    QStringLiteral("Амплитуда, дБ"),
+                                    QStringLiteral("Амплитуда, линейная"),
+                                    QStringLiteral("Фаза unwrap, °"),
+                                    QStringLiteral("Групповая задержка, нс")});
+    connect(m_graphDisplayFormat, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this] { refreshGraphsPage(); });
+    formatLayout->addWidget(m_graphDisplayFormat);
 
     auto* traces = new QGroupBox(QStringLiteral("Показать графики"), side);
     auto* tracesLayout = new QGridLayout(traces);
@@ -494,7 +598,7 @@ QWidget* MeasureTab::makeGraphsPage()
         auto* button = new QPushButton(kGraphNames[i], traces);
         button->setObjectName(QStringLiteral("graphTrace%1").arg(kGraphNames[i]));
         button->setCheckable(true);
-        button->setChecked(i == 1); // По умолчанию привычный S21.
+        button->setChecked(i < 4); // После измерения сразу видны все четыре S-параметра.
         button->setStyleSheet(QStringLiteral(
             "QPushButton { border-left: 5px solid %1; } QPushButton:checked { font-weight: 700; }")
                                   .arg(kGraphColors[i].name()));
@@ -584,7 +688,10 @@ QWidget* MeasureTab::makeGraphsPage()
 
     sideLayout->addWidget(readLive);
     sideLayout->addWidget(measureAll);
+    sideLayout->addWidget(m_exportTwoPort);
+    sideLayout->addWidget(openSweepSettings);
     sideLayout->addWidget(m_graphDataStatus);
+    sideLayout->addWidget(formatBox);
     sideLayout->addWidget(traces);
     sideLayout->addWidget(markers);
     sideLayout->addWidget(terminalTitle);
@@ -593,8 +700,17 @@ QWidget* MeasureTab::makeGraphsPage()
     sideLayout->addWidget(calculate);
     sideLayout->addWidget(calcHint);
 
+    auto* sideScroll = new QScrollArea(page);
+    sideScroll->setObjectName(QStringLiteral("graphControlsScroll"));
+    sideScroll->setWidgetResizable(true);
+    sideScroll->setFrameShape(QFrame::NoFrame);
+    sideScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    sideScroll->setMinimumWidth(270);
+    sideScroll->setMaximumWidth(340);
+    sideScroll->setWidget(side);
+
     root->addWidget(plotHost, 1);
-    root->addWidget(side);
+    root->addWidget(sideScroll);
     refreshGraphsPage();
     return page;
 }
@@ -611,6 +727,11 @@ void MeasureTab::refreshGraphsPage()
         m_graphSeparate = false;
     }
     const bool vswrMode = !selected.isEmpty() && selected.first() >= 4;
+    const int displayFormat = m_graphDisplayFormat != nullptr
+        ? m_graphDisplayFormat->currentIndex() : 0;
+    if (m_graphDisplayFormat != nullptr) {
+        m_graphDisplayFormat->setEnabled(!vswrMode);
+    }
     m_graphMode->setEnabled(selected.size() >= 2);
     m_graphMode->setText(m_graphSeparate ? QStringLiteral("Вместе")
                                          : QStringLiteral("Отдельно"));
@@ -619,19 +740,53 @@ void MeasureTab::refreshGraphsPage()
         m_graphGrid->removeWidget(plot);
         plot->setVisible(false);
         plot->setMarkerFrequencies(m_graphMarkers);
-        plot->setSinglePanelMode(vswrMode);
-        plot->setPanelTitles(vswrMode ? QStringLiteral("КСВН")
-                                     : QStringLiteral("Модуль (дБ)"),
-                             QStringLiteral("Фаза unwrap (°)"));
+        const bool singlePanel = vswrMode || displayFormat != 0;
+        plot->setSinglePanelMode(singlePanel);
+        QString topTitle = QStringLiteral("Модуль (дБ)");
+        if (vswrMode) {
+            topTitle = QStringLiteral("КСВН");
+        } else if (displayFormat == 2) {
+            topTitle = QStringLiteral("Линейный модуль |S|");
+        } else if (displayFormat == 3) {
+            topTitle = QStringLiteral("Фаза unwrap (°)");
+        } else if (displayFormat == 4) {
+            topTitle = QStringLiteral("Групповая задержка (нс)");
+        }
+        plot->setPanelTitles(topTitle, QStringLiteral("Фаза unwrap (°)"));
     }
 
-    auto makeTrace = [this](int index) {
+    auto makeTrace = [this, displayFormat, vswrMode](int index) {
         S21PlotTrace trace;
         trace.name = kGraphNames[index];
         trace.freqGhz = m_graphFreqGhz[index];
         trace.magDb = m_graphMag[index];
         trace.phaseDeg = m_graphPhase[index];
         trace.color = kGraphColors[index];
+        if (!vswrMode && displayFormat == 2) {
+            for (double& value : trace.magDb) {
+                value = std::pow(10.0, value / 20.0);
+            }
+            trace.phaseDeg.clear();
+        } else if (!vswrMode && displayFormat == 3) {
+            trace.magDb = trace.phaseDeg;
+            trace.phaseDeg.clear();
+        } else if (!vswrMode && displayFormat == 4) {
+            QVector<double> delayNs(trace.phaseDeg.size(), 0.0);
+            for (qsizetype point = 1; point < trace.phaseDeg.size(); ++point) {
+                const double deltaHz = (trace.freqGhz[point] - trace.freqGhz[point - 1]) * 1e9;
+                if (deltaHz > 0.0) {
+                    delayNs[point] = -(trace.phaseDeg[point] - trace.phaseDeg[point - 1])
+                        / (360.0 * deltaHz) * 1e9;
+                }
+            }
+            if (delayNs.size() > 1) {
+                delayNs[0] = delayNs[1];
+            }
+            trace.magDb = std::move(delayNs);
+            trace.phaseDeg.clear();
+        } else if (displayFormat != 0) {
+            trace.phaseDeg.clear();
+        }
         return trace;
     };
 
@@ -689,6 +844,37 @@ void MeasureTab::addGraphMarker(double freqGhz)
 void MeasureTab::refreshMarkerTerminal()
 {
     QStringList lines;
+    QStringList automatic;
+    for (int trace = 0; trace < static_cast<int>(m_graphTraceButtons.size()); ++trace) {
+        if (!m_graphTraceButtons[trace]->isChecked()) {
+            continue;
+        }
+        const auto statistics = plotTraceStatistics({
+            kGraphNames[trace], m_graphFreqGhz[trace], m_graphMag[trace],
+            m_graphPhase[trace], kGraphColors[trace]});
+        if (!statistics.valid) {
+            continue;
+        }
+        const QString unit = trace >= 4 ? QString() : QStringLiteral(" дБ");
+        automatic << QStringLiteral("%1 MIN: %2%3 @ %4 ГГц")
+                         .arg(kGraphNames[trace])
+                         .arg(statistics.minValue, 0, 'f', 4)
+                         .arg(unit)
+                         .arg(statistics.minFrequencyGhz, 0, 'f', 6)
+                  << QStringLiteral("%1 MAX: %2%3 @ %4 ГГц")
+                         .arg(kGraphNames[trace])
+                         .arg(statistics.maxValue, 0, 'f', 4)
+                         .arg(unit)
+                         .arg(statistics.maxFrequencyGhz, 0, 'f', 6)
+                  << QStringLiteral("%1 СРЕДНЕЕ: %2%3 @ %4 ГГц")
+                         .arg(kGraphNames[trace])
+                         .arg(statistics.averageValue, 0, 'f', 4)
+                         .arg(unit)
+                         .arg(statistics.averageFrequencyGhz, 0, 'f', 6);
+    }
+    if (!automatic.isEmpty()) {
+        lines << QStringLiteral("Автоматические маркеры:") << automatic << QString();
+    }
     if (m_graphMarkers.isEmpty()) {
         lines << QStringLiteral("Включите «Ставить маркеры» и щёлкните по графику.");
     }
@@ -861,8 +1047,12 @@ void MeasureTab::applyRunConfigDefaults(double fStartHz,
     {
         const QSignalBlocker b1(m_fStartUnit);
         const QSignalBlocker b2(m_fStopUnit);
+        const QSignalBlocker b3(m_fCenterUnit);
+        const QSignalBlocker b4(m_fSpanUnit);
         m_fStartUnit->setCurrentIndex(unit);
         m_fStopUnit->setCurrentIndex(unit);
+        m_fCenterUnit->setCurrentIndex(unit);
+        m_fSpanUnit->setCurrentIndex(unit);
     }
     syncFreqSpinsFromHz();
     {
@@ -881,6 +1071,10 @@ void MeasureTab::applyRunConfigDefaults(double fStartHz,
 void MeasureTab::setStageHighlight(int stageIndex0)
 {
     if (stageIndex0 >= 0 && stageIndex0 < m_stages->count()) {
+        if (stageIndex0 != 0 && stageIndex0 != 1 && stageIndex0 != 3 && stageIndex0 != 7
+            && m_workMode != nullptr) {
+            m_workMode->setCurrentIndex(1);
+        }
         m_stages->setCurrentRow(stageIndex0);
     }
 }
@@ -995,20 +1189,6 @@ void MeasureTab::setSparamsCurves(const QVector<double>& freqGhz,
             .arg(freqGhz.first(), 0, 'f', 6)
             .arg(freqGhz.last(), 0, 'f', 6));
     refreshGraphsPage();
-}
-
-void MeasureTab::showInstrumentTrace(int sParameter)
-{
-    if (sParameter < 0 || sParameter >= 4) {
-        return;
-    }
-    for (int i = 0; i < static_cast<int>(m_graphTraceButtons.size()); ++i) {
-        const QSignalBlocker blocker(m_graphTraceButtons[i]);
-        m_graphTraceButtons[i]->setChecked(i == sParameter);
-    }
-    m_graphSeparate = false;
-    refreshGraphsPage();
-    setStageHighlight(7);
 }
 
 void MeasureTab::setVnaCalibrationIdHint(const QString& id)
@@ -1187,6 +1367,13 @@ void MeasureTab::setMeasureNowEnabled(bool enabled)
 {
     if (m_measureNow) {
         m_measureNow->setEnabled(enabled);
+    }
+}
+
+void MeasureTab::setTwoPortExportEnabled(bool enabled)
+{
+    if (m_exportTwoPort) {
+        m_exportTwoPort->setEnabled(enabled);
     }
 }
 
@@ -1528,8 +1715,17 @@ void MeasureTab::syncFreqSpinsFromHz()
     m_freqUiGuard = true;
     applyFreqSpinLimits(m_fStart, m_fStartUnit->currentIndex());
     applyFreqSpinLimits(m_fStop, m_fStopUnit->currentIndex());
+    applyFreqSpinLimits(m_fCenter, m_fCenterUnit->currentIndex());
+    const double spanScale = freqUnitScale(m_fSpanUnit->currentIndex());
+    m_fSpan->setRange(1.0 / spanScale, (40e9 - 1e5) / spanScale);
+    m_fSpan->setDecimals(m_fSpanUnit->currentIndex() == 0 ? 0
+                         : (m_fSpanUnit->currentIndex() == 3 ? 6 : 3));
     m_fStart->setValue(m_fStartHz / freqUnitScale(m_fStartUnit->currentIndex()));
     m_fStop->setValue(m_fStopHz / freqUnitScale(m_fStopUnit->currentIndex()));
+    const double centerHz = (m_fStartHz + m_fStopHz) / 2.0;
+    const double spanHz = std::max(1.0, m_fStopHz - m_fStartHz);
+    m_fCenter->setValue(centerHz / freqUnitScale(m_fCenterUnit->currentIndex()));
+    m_fSpan->setValue(spanHz / spanScale);
     m_freqUiGuard = false;
 }
 
@@ -1550,6 +1746,7 @@ void MeasureTab::onFreqSpinChanged()
     }
     m_fStartHz = m_fStart->value() * freqUnitScale(m_fStartUnit->currentIndex());
     m_fStopHz = m_fStop->value() * freqUnitScale(m_fStopUnit->currentIndex());
+    syncFreqSpinsFromHz();
     markSweepSettingsChanged();
 }
 
@@ -1559,6 +1756,50 @@ void MeasureTab::onFreqUnitChanged()
         return;
     }
     // Пересчёт отображения из сохранённых Гц — без потери.
+    syncFreqSpinsFromHz();
+}
+
+void MeasureTab::onCenterSpanSpinChanged()
+{
+    if (m_freqUiGuard) {
+        return;
+    }
+    const double centerHz = m_fCenter->value()
+        * freqUnitScale(m_fCenterUnit->currentIndex());
+    const double spanHz = m_fSpan->value() * freqUnitScale(m_fSpanUnit->currentIndex());
+    constexpr double kMinimumHz = 1e5;
+    constexpr double kMaximumHz = 40e9;
+    m_fStartHz = std::max(kMinimumHz, centerHz - spanHz / 2.0);
+    m_fStopHz = std::min(kMaximumHz, centerHz + spanHz / 2.0);
+    if (m_fStopHz <= m_fStartHz) {
+        m_fStopHz = std::min(kMaximumHz, m_fStartHz + 1.0);
+    }
+    syncFreqSpinsFromHz();
+    markSweepSettingsChanged();
+}
+
+void MeasureTab::onCenterSpanUnitChanged()
+{
+    if (m_freqUiGuard) {
+        return;
+    }
+    syncFreqSpinsFromHz();
+}
+
+void MeasureTab::onFrequencyEntryModeChanged(int index)
+{
+    if (m_fStartRow == nullptr) {
+        return;
+    }
+    auto* form = qobject_cast<QFormLayout*>(m_fStartRow->parentWidget()->layout());
+    if (form == nullptr) {
+        return;
+    }
+    const bool centerSpan = index == 1;
+    form->setRowVisible(m_fStartRow, !centerSpan);
+    form->setRowVisible(m_fStopRow, !centerSpan);
+    form->setRowVisible(m_fCenterRow, centerSpan);
+    form->setRowVisible(m_fSpanRow, centerSpan);
     syncFreqSpinsFromHz();
 }
 
@@ -1577,6 +1818,14 @@ void MeasureTab::onIfbwSpinChanged()
 
 void MeasureTab::markSweepSettingsChanged()
 {
+    QSettings settings;
+    settings.setValue(QStringLiteral("sweep/f_start_hz"), m_fStartHz);
+    settings.setValue(QStringLiteral("sweep/f_stop_hz"), m_fStopHz);
+    settings.setValue(QStringLiteral("sweep/points"), m_points->value());
+    settings.setValue(QStringLiteral("sweep/ifbw_hz"), m_ifbwHz);
+    settings.setValue(QStringLiteral("sweep/power_dbm"), m_power->value());
+    settings.setValue(QStringLiteral("sweep/averages"), m_averages->value());
+
     const QString text = QStringLiteral(
         "Настройки изменены. Последний реальный график сохранён; "
         "нажмите «Измерить сейчас» для обновления всех S-параметров.");

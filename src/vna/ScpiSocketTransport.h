@@ -2,7 +2,9 @@
 
 #include "IScpiTransport.h"
 
+#include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 /// TCP/IP Socket SCPI-транспорт (контракт vna-c2220-scpi § 2).
@@ -25,6 +27,8 @@ public:
     void write_line(const std::string& line) override;
     std::string read_line() override;
     void abort() noexcept override;
+    /// Потокобезопасный запрос остановки: сокет закрывает его владеющий поток.
+    void request_interrupt() noexcept;
 
     std::uint16_t port() const noexcept { return port_; }
     const std::string& host() const noexcept { return host_; }
@@ -45,6 +49,8 @@ private:
     static constexpr SocketHandle kInvalidSocket = -1;
 #endif
     SocketHandle sock_{kInvalidSocket};
+    mutable std::mutex socketMutex_;
     std::string readBuf_;
-    bool abortRequested_{false};
+    std::atomic_bool abortRequested_{false};
+    std::atomic_bool interruptRequested_{false};
 };

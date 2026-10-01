@@ -4,11 +4,13 @@
 #include "MeasurementOrchestrator.h"
 #include "VnaSimulator.h"
 #include "probe_fixtures.h"
+#include "qt_test_application.h"
 
 #include <filesystem>
 
 TEST_CASE("AT-06 crash recovery continues from incomplete", "[crash_recovery][AT-06][TEST-008]")
 {
+    (void)afar::test::guiApplication();
     const auto root = std::filesystem::temp_directory_path() / "afar_crash_recovery";
     std::filesystem::remove_all(root);
     const auto fixtures = root / "fixtures";

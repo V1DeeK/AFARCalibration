@@ -11,6 +11,8 @@ public:
     virtual void connect() = 0;
     virtual std::string identify() = 0;
     virtual void configure(const SweepConfig&) = 0;
+    /// Считать фактически применённые настройки без запуска нового свипа.
+    virtual SweepConfig read_config() = 0;
     /// Один свип текущего `CALC:PAR:DEF` (после `configure`).
     /// Заполняет `frequency_hz` и ровно один из `s11`/`s21`/`s12`/`s22`
     /// по `SweepConfig::s_parameter`; остальные векторы пусты.

@@ -6,11 +6,17 @@
 
 #include <nlohmann/json.hpp>
 
-#include <cstdio>
+#include <QFileInfo>
+#include <QFont>
+#include <QFontMetricsF>
+#include <QPageLayout>
+#include <QPageSize>
+#include <QPainter>
+#include <QPdfWriter>
+#include <QSaveFile>
+
 #include <fstream>
-#include <sstream>
 #include <string_view>
-#include <vector>
 
 #ifndef AFAR_SOFTWARE_VERSION
 #define AFAR_SOFTWARE_VERSION "0.1.0"
@@ -44,127 +50,53 @@
 namespace afar::report {
 namespace {
 
-std::string fromUtf8(std::u8string_view text)
+QString qString(const std::string& text)
 {
-    return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+    return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
 
-std::string pdfEscape(std::string_view s)
+QString softwareVersion(const RunReportInfo& info)
 {
-    std::string out;
-    out.reserve(s.size());
-    for (const unsigned char c : s) {
-        if (c == '(' || c == ')' || c == '\\') {
-            out.push_back('\\');
-        }
-        if (c < 32) {
-            out.push_back('?');
-        } else {
-            out.push_back(static_cast<char>(c));
-        }
-    }
-    return out;
+    return info.software_version.empty() ? QStringLiteral(AFAR_SOFTWARE_VERSION)
+                                         : qString(info.software_version);
 }
 
-std::string formatNumber(double value)
-{
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.6g", value);
-    return buf;
-}
-
-std::string softwareVersion(const RunReportInfo& info)
-{
-    if (!info.software_version.empty()) {
-        return info.software_version;
-    }
-    return AFAR_SOFTWARE_VERSION;
-}
-
-std::string buildCommitLine()
+QString buildCommit()
 {
     const std::string_view hash{AFAR_GIT_COMMIT};
-    if (hash.empty()) {
-        return fromUtf8(u8"\u0445\u0435\u0448 \u043d\u0435 \u0432\u0448\u0438\u0442");
-    }
-    return std::string(hash);
+    return hash.empty() ? QStringLiteral("хеш не вшит")
+                        : QString::fromLatin1(hash.data(), static_cast<qsizetype>(hash.size()));
 }
 
-std::string makeThruSummary(const RunReportInfo& info)
+QString makeThruSummary(const RunReportInfo& info)
 {
     if (info.thru_measured_mag_db >= 0.0 && info.thru_measured_phase_deg >= 0.0) {
-        return formatNumber(info.thru_measured_mag_db) + " dB / "
-            + formatNumber(info.thru_measured_phase_deg) + " deg (limit "
-            + formatNumber(info.thru_limit_mag_db) + "/"
-            + formatNumber(info.thru_limit_phase_deg) + ")";
+        return QStringLiteral("%1 дБ / %2° (предел %3 дБ / %4°)")
+            .arg(info.thru_measured_mag_db, 0, 'g', 6)
+            .arg(info.thru_measured_phase_deg, 0, 'g', 6)
+            .arg(info.thru_limit_mag_db, 0, 'g', 6)
+            .arg(info.thru_limit_phase_deg, 0, 'g', 6);
     }
-    return fromUtf8(
-        u8"\u043d\u0435 \u0438\u0437\u043c\u0435\u0440\u0435\u043d / "
-        u8"\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f \u043c\u0430\u0441\u0442\u0435\u0440\u0430");
+    return QStringLiteral("не измерен / значения мастера");
 }
 
-std::string makeContentStream(const RunReportInfo& info)
+void drawWrappedLine(QPainter& painter, const QRectF& page, qreal& y, const QString& text)
 {
-    const std::string limits_note = fromUtf8(
-        u8"\u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u041f\u041e, "
-        u8"\u043d\u0435 \u0430\u0442\u0442\u0435\u0441\u0442\u043e\u0432\u0430\u043d\u043d\u0430\u044f "
-        u8"\u043c\u0435\u0442\u0440\u043e\u043b\u043e\u0433\u0438\u044f");
-    const std::string thru = makeThruSummary(info);
-    const std::string metro_yes = fromUtf8(u8"\u0434\u0430");
-    const std::string metro_no = fromUtf8(u8"\u043d\u0435\u0442");
-    const std::string metro_approved =
-        info.metrologist_approved ? metro_yes : metro_no;
-    const std::string metro_name =
-        info.metrologist_name.empty() ? std::string("-") : info.metrologist_name;
-    const std::string metro_date =
-        info.metrologist_date.empty() ? std::string("-") : info.metrologist_date;
-    const std::string not_accreditation = fromUtf8(
-        u8"\u043d\u0435 \u0430\u0442\u0442\u0435\u0441\u0442\u0430\u0446\u0438\u044f: "
-        u8"\u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u041f\u041e / "
-        u8"\u0443\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u0435 \u043c\u0435\u0442\u0440\u043e\u043b\u043e\u0433\u0430");
+    const QRectF bounds(page.left() + 28, y, page.width() - 56, page.bottom() - y - 28);
+    const QRectF used = painter.boundingRect(bounds, Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                                              text);
+    painter.drawText(bounds, Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, text);
+    y += used.height() + 6;
+}
 
-    std::ostringstream body;
-    body << "BT\n/F1 12 Tf\n50 760 Td\n"
-         << "(AFAR RX Calibration Studio - series report) Tj\n"
-         << "0 -16 Td\n(run_id: " << pdfEscape(info.run_id) << ") Tj\n"
-         << "0 -16 Td\n(software_version: " << pdfEscape(softwareVersion(info)) << ") Tj\n"
-         << "0 -16 Td\n(build_commit: " << pdfEscape(buildCommitLine()) << ") Tj\n"
-         << "0 -16 Td\n(compiler: " << pdfEscape(AFAR_CXX_COMPILER_ID) << " "
-         << pdfEscape(AFAR_CXX_COMPILER_VERSION) << ") Tj\n"
-         << "0 -16 Td\n(cxx_standard: C++" << pdfEscape(AFAR_CXX_STANDARD) << ") Tj\n"
-         << "0 -16 Td\n(qt_version: " << pdfEscape(AFAR_QT_VERSION) << ") Tj\n"
-         << "0 -16 Td\n(nlohmann_json: " << pdfEscape(AFAR_NLOHMANN_JSON_VERSION) << ") Tj\n"
-         << "0 -16 Td\n(completed_states: " << info.completed_states << ") Tj\n"
-         << "0 -16 Td\n(valid_direct_count: " << info.valid_direct_count << ") Tj\n"
-         << "0 -16 Td\n(series_path: " << pdfEscape(info.series_path) << ") Tj\n"
-         << "0 -16 Td\n(vna_idn: " << pdfEscape(info.vna_idn) << ") Tj\n"
-         << "0 -16 Td\n(vna_model_sn_fw: " << pdfEscape(info.vna_model) << " / "
-         << pdfEscape(info.vna_serial) << " / " << pdfEscape(info.vna_firmware) << ") Tj\n"
-         << "0 -16 Td\n(limits: " << pdfEscape(limits_note) << ") Tj\n"
-         << "0 -16 Td\n(max_drift_phase_deg: " << formatNumber(info.max_drift_phase_deg)
-         << ") Tj\n"
-         << "0 -16 Td\n(max_phase_residual_deg: " << formatNumber(info.max_phase_residual_deg)
-         << ") Tj\n"
-         << "0 -16 Td\n(THRU: " << pdfEscape(thru) << ") Tj\n"
-         << "0 -16 Td\n(thru_limit_mag_db: " << formatNumber(info.thru_limit_mag_db) << ") Tj\n"
-         << "0 -16 Td\n(thru_limit_phase_deg: " << formatNumber(info.thru_limit_phase_deg)
-         << ") Tj\n"
-         << "0 -16 Td\n("
-         << pdfEscape(fromUtf8(u8"\u0443\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e "
-                               u8"\u043c\u0435\u0442\u0440\u043e\u043b\u043e\u0433\u043e\u043c: ")
-                      + metro_approved)
-         << ") Tj\n"
-         << "0 -16 Td\n("
-         << pdfEscape(fromUtf8(u8"\u043c\u0435\u0442\u0440\u043e\u043b\u043e\u0433 \u0424\u0418\u041e: ")
-                      + metro_name)
-         << ") Tj\n"
-         << "0 -16 Td\n("
-         << pdfEscape(fromUtf8(u8"\u043c\u0435\u0442\u0440\u043e\u043b\u043e\u0433 \u0434\u0430\u0442\u0430: ")
-                      + metro_date)
-         << ") Tj\n"
-         << "0 -16 Td\n(" << pdfEscape(not_accreditation) << ") Tj\n"
-         << "ET\n";
-    return body.str();
+void drawFooter(QPainter& painter, const QRectF& page, int number)
+{
+    painter.save();
+    painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
+    painter.setPen(QColor(90, 90, 90));
+    painter.drawText(page.adjusted(28, 0, -28, -10), Qt::AlignRight | Qt::AlignBottom,
+                     QStringLiteral("Страница %1").arg(number));
+    painter.restore();
 }
 
 }  // namespace
@@ -210,48 +142,158 @@ bool writeRunReportPdf(const std::filesystem::path& path,
                        const RunReportInfo& info,
                        std::string& diagnostics)
 {
-    const std::string stream = makeContentStream(info);
-
-    std::ostringstream pdf;
-    std::vector<std::size_t> offsets(6, 0);
-
-    auto mark = [&](int obj) {
-        offsets[static_cast<std::size_t>(obj)] = static_cast<std::size_t>(pdf.tellp());
-    };
-
-    pdf << "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
-    mark(1);
-    pdf << "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
-    mark(2);
-    pdf << "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n";
-    mark(3);
-    pdf << "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-           "/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n";
-    mark(4);
-    pdf << "4 0 obj\n<< /Length " << stream.size() << " >>\nstream\n" << stream
-        << "endstream\nendobj\n";
-    mark(5);
-    pdf << "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n";
-
-    const auto xref_pos = static_cast<std::size_t>(pdf.tellp());
-    pdf << "xref\n0 6\n";
-    pdf << "0000000000 65535 f \n";
-    for (int i = 1; i <= 5; ++i) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%010zu 00000 n \n", offsets[static_cast<std::size_t>(i)]);
-        pdf << buf;
-    }
-    pdf << "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n" << xref_pos << "\n%%EOF\n";
-
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) {
+    QSaveFile file(QString::fromStdWString(path.wstring()));
+    if (!file.open(QIODevice::WriteOnly)) {
         diagnostics = "cannot write pdf: " + path.string();
         return false;
     }
-    const auto bytes = pdf.str();
-    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    if (!out) {
-        diagnostics = "pdf write failed";
+    {
+        QPdfWriter writer(&file);
+        writer.setPageSize(QPageSize(QPageSize::A4));
+        writer.setPageOrientation(QPageLayout::Portrait);
+        writer.setResolution(96);
+        const bool singleChannel = info.channels.size() == 1;
+        const QString reportTitle = singleChannel
+            ? QStringLiteral("Отчёт калибровки канала %1")
+                  .arg(info.channels.front().channel)
+            : QStringLiteral("Отчёт калибровки приёмных каналов");
+        writer.setTitle(QStringLiteral("%1 - %2").arg(reportTitle, qString(info.run_id)));
+        writer.setCreator(QStringLiteral("AFAR RX Calibration Studio"));
+
+        QPainter painter(&writer);
+        if (!painter.isActive()) {
+            diagnostics = "cannot start PDF painter";
+            return false;
+        }
+        const QRectF page = writer.pageLayout().paintRectPixels(writer.resolution());
+        qreal y = page.top() + 22;
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 16, QFont::Bold));
+        painter.drawText(page.adjusted(28, 0, -28, 0), Qt::AlignHCenter | Qt::AlignTop,
+                         reportTitle);
+        y += 42;
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 10));
+        drawWrappedLine(painter, page, y, QStringLiteral("Серия: %1").arg(qString(info.run_id)));
+        drawWrappedLine(painter, page, y,
+                        QStringLiteral("Каталог: %1").arg(qString(info.series_path)));
+        drawWrappedLine(painter, page, y,
+                        QStringLiteral("VNA: %1").arg(qString(info.vna_idn)));
+        drawWrappedLine(
+            painter, page, y,
+            QStringLiteral("Диапазон: %1 - %2 ГГц; точек: %3")
+                .arg(static_cast<double>(info.f_start_hz) / 1e9, 0, 'f', 6)
+                .arg(static_cast<double>(info.f_stop_hz) / 1e9, 0, 'f', 6)
+                .arg(info.frequency_points));
+        drawWrappedLine(
+            painter, page, y,
+            QStringLiteral("Сетка: каналов %1; кодов аттенюации %2; кодов фазы %3")
+                .arg(info.channels.size()).arg(info.attenuator_codes).arg(info.phase_codes));
+        drawWrappedLine(
+            painter, page, y,
+            QStringLiteral("Завершено состояний: %1; valid direct: %2; valid inverse: %3")
+                .arg(info.completed_states).arg(info.valid_direct_count)
+                .arg(info.valid_inverse_count));
+
+        y += 8;
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 11, QFont::Bold));
+        drawWrappedLine(painter, page, y, QStringLiteral("Калибровка и контроль качества"));
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 10));
+        drawWrappedLine(painter, page, y,
+                        QStringLiteral("THRU: %1").arg(makeThruSummary(info)));
+        drawWrappedLine(
+            painter, page, y,
+            QStringLiteral("Пределы ПО: дрейф фазы %1°; остаток фазы %2°")
+                .arg(info.max_drift_phase_deg, 0, 'g', 6)
+                .arg(info.max_phase_residual_deg, 0, 'g', 6));
+        const QString metroName = info.metrologist_name.empty()
+            ? QStringLiteral("-") : qString(info.metrologist_name);
+        const QString metroDate = info.metrologist_date.empty()
+            ? QStringLiteral("-") : qString(info.metrologist_date);
+        drawWrappedLine(
+            painter, page, y,
+            QStringLiteral("Метролог: %1; дата: %2; подтверждение: %3")
+                .arg(metroName, metroDate,
+                     info.metrologist_approved ? QStringLiteral("да") : QStringLiteral("нет")));
+        painter.setPen(QColor(120, 55, 35));
+        drawWrappedLine(painter, page, y,
+                        QStringLiteral("Пределы являются настройками ПО и не заменяют "
+                                       "метрологическую аттестацию."));
+        painter.setPen(Qt::black);
+
+        y += 8;
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 11, QFont::Bold));
+        drawWrappedLine(painter, page, y, QStringLiteral("Версия и воспроизводимость"));
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 9));
+        drawWrappedLine(
+            painter, page, y,
+            QStringLiteral("ПО %1; commit %2; %3 %4; C++%5; Qt %6; nlohmann_json %7")
+                .arg(softwareVersion(info), buildCommit(), QStringLiteral(AFAR_CXX_COMPILER_ID),
+                     QStringLiteral(AFAR_CXX_COMPILER_VERSION), QStringLiteral(AFAR_CXX_STANDARD),
+                     QStringLiteral(AFAR_QT_VERSION), QStringLiteral(AFAR_NLOHMANN_JSON_VERSION)));
+        drawFooter(painter, page, 1);
+
+        writer.newPage();
+        const QRectF channelPage = writer.pageLayout().paintRectPixels(writer.resolution());
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 15, QFont::Bold));
+        painter.drawText(channelPage.adjusted(28, 18, -28, 0),
+                         Qt::AlignHCenter | Qt::AlignTop,
+                         singleChannel
+                             ? QStringLiteral("Результат канала %1")
+                                   .arg(info.channels.front().channel)
+                             : QStringLiteral("Результаты по каналам"));
+
+        const qreal left = channelPage.left() + 28;
+        const qreal top = channelPage.top() + 62;
+        const qreal rowHeight = 27;
+        const std::array<qreal, 6> x{left, left + 70, left + 190, left + 320,
+                                     left + 450, channelPage.right() - 28};
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::Bold));
+        painter.setBrush(QColor(225, 235, 247));
+        painter.drawRect(QRectF(x[0], top, x[5] - x[0], rowHeight));
+        const std::array<QString, 5> headers{QStringLiteral("Канал"),
+                                             QStringLiteral("Состояния"),
+                                             QStringLiteral("Direct valid"),
+                                             QStringLiteral("Inverse valid"),
+                                             QStringLiteral("Статус")};
+        for (int column = 0; column < 5; ++column) {
+            painter.drawText(QRectF(x[static_cast<std::size_t>(column)], top,
+                                    x[static_cast<std::size_t>(column + 1)]
+                                        - x[static_cast<std::size_t>(column)], rowHeight),
+                             Qt::AlignCenter, headers[static_cast<std::size_t>(column)]);
+        }
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 9));
+        painter.setBrush(Qt::NoBrush);
+        for (std::size_t row = 0; row < info.channels.size(); ++row) {
+            const auto& channel = info.channels[row];
+            const qreal rowTop = top + rowHeight * static_cast<qreal>(row + 1);
+            const bool ok = channel.completed_states > 0 && channel.valid_direct_count > 0
+                && channel.valid_inverse_count > 0;
+            const std::array<QString, 5> cells{
+                QString::number(channel.channel), QString::number(channel.completed_states),
+                QString::number(channel.valid_direct_count),
+                QString::number(channel.valid_inverse_count),
+                ok ? QStringLiteral("OK") : QStringLiteral("Проверить")};
+            for (int column = 0; column < 5; ++column) {
+                painter.drawText(QRectF(x[static_cast<std::size_t>(column)], rowTop,
+                                        x[static_cast<std::size_t>(column + 1)]
+                                            - x[static_cast<std::size_t>(column)], rowHeight),
+                                 Qt::AlignCenter, cells[static_cast<std::size_t>(column)]);
+            }
+            painter.setPen(QColor(180, 180, 180));
+            painter.drawLine(QPointF(x[0], rowTop + rowHeight),
+                             QPointF(x[5], rowTop + rowHeight));
+            painter.setPen(Qt::black);
+        }
+        painter.setPen(QColor(120, 120, 120));
+        for (const qreal columnX : x) {
+            painter.drawLine(QPointF(columnX, top),
+                             QPointF(columnX, top + rowHeight * (info.channels.size() + 1)));
+        }
+        painter.setPen(Qt::black);
+        drawFooter(painter, channelPage, 2);
+        painter.end();
+    }
+    if (!file.commit()) {
+        diagnostics = "PDF commit failed";
         return false;
     }
     return true;

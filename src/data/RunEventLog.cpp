@@ -1,5 +1,6 @@
 #include "RunEventLog.h"
 
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <fstream>
@@ -30,6 +31,10 @@ RunEventLog& RunEventLog::operator=(RunEventLog&& other) noexcept
     }
     close();
     file_ = std::move(other.file_);
+    path_ = std::move(other.path_);
+    rotate_bytes_ = other.rotate_bytes_;
+    current_size_ = other.current_size_;
+    next_rotation_index_ = other.next_rotation_index_;
     return *this;
 }
 
@@ -43,13 +48,70 @@ void RunEventLog::close()
 
 bool RunEventLog::openAppend(const std::filesystem::path& path,
                              RunEventLog& out,
-                             std::string& diagnostics)
+                             std::string& diagnostics,
+                             std::uintmax_t rotate_bytes)
 {
     diagnostics.clear();
     out.close();
+    out.path_ = path;
+    out.rotate_bytes_ = rotate_bytes;
+    out.current_size_ = 0;
+    out.next_rotation_index_ = 1;
+    const auto prefix = path.stem().string() + ".";
+    const auto suffix = path.extension().string();
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(path.parent_path(), ec)) {
+        if (ec || !entry.is_regular_file(ec)) {
+            continue;
+        }
+        const auto name = entry.path().filename().string();
+        if (!name.starts_with(prefix) || !name.ends_with(suffix)) {
+            continue;
+        }
+        const auto number = name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+        try {
+            out.next_rotation_index_ =
+                std::max(out.next_rotation_index_, static_cast<unsigned>(std::stoul(number) + 1));
+        } catch (...) {
+            continue;
+        }
+    }
+    if (std::filesystem::is_regular_file(path, ec)) {
+        out.current_size_ = std::filesystem::file_size(path, ec);
+    }
     out.file_.open(path, std::ios::binary | std::ios::app);
     if (!out.file_) {
         diagnostics = "cannot open run-events.jsonl: " + path.string();
+        return false;
+    }
+    return true;
+}
+
+bool RunEventLog::rotateIfNeeded(std::size_t additional_bytes, std::string& diagnostics)
+{
+    if (rotate_bytes_ == 0 || current_size_ == 0
+        || current_size_ + additional_bytes <= rotate_bytes_) {
+        return true;
+    }
+    close();
+    std::filesystem::path rotated;
+    do {
+        std::ostringstream name;
+        name << path_.stem().string() << '.' << std::setw(4) << std::setfill('0')
+             << next_rotation_index_++ << path_.extension().string();
+        rotated = path_.parent_path() / name.str();
+    } while (std::filesystem::exists(rotated));
+
+    std::error_code ec;
+    std::filesystem::rename(path_, rotated, ec);
+    if (ec) {
+        diagnostics = "RunEventLog rotation failed: " + ec.message();
+        return false;
+    }
+    current_size_ = 0;
+    file_.open(path_, std::ios::binary | std::ios::app);
+    if (!file_) {
+        diagnostics = "cannot reopen run-events.jsonl after rotation";
         return false;
     }
     return true;
@@ -126,12 +188,17 @@ bool RunEventLog::append(const RunEvent& event, std::string& diagnostics)
         j["attempt"] = nullptr;
     }
     j["text"] = event.text;
-    file_ << j.dump() << '\n';
+    const std::string line = j.dump() + '\n';
+    if (!rotateIfNeeded(line.size(), diagnostics)) {
+        return false;
+    }
+    file_ << line;
     file_.flush();
     if (!file_) {
         diagnostics = "RunEventLog append failed";
         return false;
     }
+    current_size_ += line.size();
     return true;
 }
 
@@ -204,28 +271,47 @@ bool RunEventLog::load(const std::filesystem::path& path,
 {
     diagnostics.clear();
     out.clear();
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        diagnostics = "cannot open run-events.jsonl: " + path.string();
-        return false;
-    }
-    std::string line;
-    std::size_t line_no = 0;
-    while (std::getline(in, line)) {
-        ++line_no;
-        if (line.empty() || line == "\r") {
+    std::vector<std::filesystem::path> files;
+    const auto prefix = path.stem().string() + ".";
+    const auto suffix = path.extension().string();
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(path.parent_path(), ec)) {
+        if (ec || !entry.is_regular_file(ec)) {
             continue;
         }
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
+        const auto name = entry.path().filename().string();
+        if (name != path.filename().string() && name.starts_with(prefix)
+            && name.ends_with(suffix)) {
+            files.push_back(entry.path());
         }
-        RunEvent ev;
-        if (!parseLine(line, ev, diagnostics)) {
-            diagnostics = "run-events.jsonl line " + std::to_string(line_no) + ": " + diagnostics;
-            out.clear();
+    }
+    std::sort(files.begin(), files.end());
+    files.push_back(path);
+    std::size_t line_no = 0;
+    for (const auto& file : files) {
+        std::ifstream in(file, std::ios::binary);
+        if (!in) {
+            diagnostics = "cannot open run-events file: " + file.string();
             return false;
         }
-        out.push_back(std::move(ev));
+        std::string line;
+        while (std::getline(in, line)) {
+            ++line_no;
+            if (line.empty() || line == "\r") {
+                continue;
+            }
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            RunEvent ev;
+            if (!parseLine(line, ev, diagnostics)) {
+                diagnostics = file.filename().string() + " line " + std::to_string(line_no)
+                    + ": " + diagnostics;
+                out.clear();
+                return false;
+            }
+            out.push_back(std::move(ev));
+        }
     }
     return true;
 }

@@ -255,6 +255,26 @@ private:
             reply(s, "-10");
             return;
         }
+        if (cmd == "SENS:AVER?") {
+            reply(s, "1");
+            return;
+        }
+        if (cmd == "SENS:AVER:COUN?") {
+            reply(s, "10");
+            return;
+        }
+        if (cmd == "SENS:CORR:COLL:CKIT?") {
+            reply(s, "1");
+            return;
+        }
+        if (cmd == "SENS:CORR:COLL:CKIT:LAB?") {
+            reply(s, "\"85032F\"");
+            return;
+        }
+        if (cmd == "SENS:CORR:STAT?") {
+            reply(s, "1");
+            return;
+        }
         if (cmd == "CALC:PAR:DEF?") {
             reply(s, "S12");
             return;
@@ -297,6 +317,33 @@ private:
 };
 
 }  // namespace
+
+TEST_CASE("Socket abort interrupts a blocked read", "[c2220][socket]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    transport.set_io_timeout_ms(30000);
+    transport.connect();
+
+    std::atomic_bool interrupted{false};
+    const auto started = std::chrono::steady_clock::now();
+    std::thread reader([&] {
+        try {
+            (void)transport.read_line();
+        } catch (...) {
+            interrupted.store(true);
+        }
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    transport.request_interrupt();
+    reader.join();
+    transport.abort();
+
+    REQUIRE(interrupted.load());
+    REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
+}
 
 TEST_CASE("AT-01 C2220Vna identify via TCP stub", "[c2220]")
 {
@@ -403,7 +450,7 @@ TEST_CASE("C2220Vna configure and measure_s21 against stub", "[c2220]")
     cfg.points = 3;
     cfg.power_dbm = -20.0;
     cfg.ifbw_hz = 1000;
-    cfg.averages = 1;
+    cfg.averages = 4;
     cfg.s_parameter = SParameter::S21;
     REQUIRE_NOTHROW(vna.configure(cfg));
 
@@ -419,7 +466,13 @@ TEST_CASE("C2220Vna configure and measure_s21 against stub", "[c2220]")
     REQUIRE(sweep.s21[2].imag() == Approx(1.0));
 
     REQUIRE(stub.saw_command_prefix("SENS:FREQ:STAR "));
+    REQUIRE(stub.saw_exact("SENS:AVER:COUN 4"));
+    REQUIRE(stub.saw_exact("SENS:AVER ON"));
+    REQUIRE(stub.saw_exact("TRIG:AVER ON"));
+    REQUIRE(stub.saw_exact("TRIG:SOUR BUS"));
+    REQUIRE(stub.saw_exact("SENS:AVER:CLE"));
     REQUIRE(stub.saw_exact("CALC:PAR:DEF S21"));
+    REQUIRE(stub.saw_exact("CALC:PAR:SEL"));
     REQUIRE(stub.saw_exact("TRIG:SING"));
     REQUIRE(stub.saw_exact("*OPC?"));
     REQUIRE(stub.saw_exact("CALC:DATA:SDAT?"));
@@ -450,6 +503,7 @@ TEST_CASE("C2220Vna configure S11 fills s11 via measure_trace", "[c2220]")
 
     const auto sweep = vna.measure_trace();
     REQUIRE(stub.saw_exact("CALC:PAR:DEF S11"));
+    REQUIRE(stub.saw_exact("CALC:PAR:SEL"));
     REQUIRE(sweep.frequency_hz.size() == 3);
     REQUIRE(sweep.s11.size() == 3);
     REQUIRE(sweep.s21.empty());
@@ -477,6 +531,7 @@ TEST_CASE("C2220Vna reads current S2VNA trace without reconfiguring it", "[c2220
     REQUIRE(instrument.points == 3);
     REQUIRE(instrument.ifbw_hz == 10'000);
     REQUIRE(instrument.power_dbm == Approx(-10.0));
+    REQUIRE(instrument.averages == 10);
     REQUIRE(instrument.s_parameter == SParameter::S12);
     REQUIRE(sweep.s12.size() == 3);
     REQUIRE(sweep.s11.empty());
@@ -485,6 +540,35 @@ TEST_CASE("C2220Vna reads current S2VNA trace without reconfiguring it", "[c2220
     REQUIRE_FALSE(stub.saw_exact("TRIG:SING"));
     REQUIRE_FALSE(stub.saw_command_prefix("SENS:FREQ:STAR "));
     REQUIRE(stub.saw_exact("CALC:PAR:DEF?"));
+}
+
+TEST_CASE("C2220Vna reads the active S2VNA calibration kit", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    REQUIRE(vna.current_calibration_kit_id() == "CKIT 1 (85032F)");
+    REQUIRE(vna.correction_enabled());
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:CKIT?"));
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:CKIT:LAB?"));
+    REQUIRE(stub.saw_exact("SENS:CORR:STAT?"));
+}
+
+TEST_CASE("C2220Vna selects a documented S2VNA calibration kit", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    REQUIRE(vna.select_calibration_kit(1) == "CKIT 1 (85032F)");
+    REQUIRE(stub.saw_exact("SENS:CORR:COLL:CKIT 1"));
+    REQUIRE_THROWS_AS(vna.select_calibration_kit(0), std::runtime_error);
+    REQUIRE_THROWS_AS(vna.select_calibration_kit(65), std::runtime_error);
 }
 
 TEST_CASE("C2220Vna calibrate_one_port SOLT1 sequence against stub", "[c2220]")

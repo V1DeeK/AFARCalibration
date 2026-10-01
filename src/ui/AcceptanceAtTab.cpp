@@ -2,6 +2,9 @@
 
 #include <QCheckBox>
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -10,6 +13,10 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
+#include <QStandardPaths>
+#include <QStorageInfo>
+#include <QTextStream>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #ifdef Q_OS_WIN
@@ -18,10 +25,52 @@
 #endif
 #include <windows.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 #endif
 
 namespace {
 constexpr auto kOrg = "at_acceptance";
+constexpr int kAt12SampleIntervalMs = 60'000;
+
+struct ProcessMetrics {
+    quint64 rssBytes{};
+    quint64 privateBytes{};
+    quint32 handleCount{};
+    quint32 threadCount{};
+};
+
+ProcessMetrics processMetrics()
+{
+    ProcessMetrics result;
+#ifdef Q_OS_WIN
+    PROCESS_MEMORY_COUNTERS_EX memory{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(),
+                             reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),
+                             sizeof(memory))) {
+        result.rssBytes = memory.WorkingSetSize;
+        result.privateBytes = memory.PrivateUsage;
+    }
+    DWORD handles = 0;
+    if (GetProcessHandleCount(GetCurrentProcess(), &handles)) {
+        result.handleCount = handles;
+    }
+    const DWORD processId = GetCurrentProcessId();
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot != INVALID_HANDLE_VALUE) {
+        THREADENTRY32 entry{};
+        entry.dwSize = sizeof(entry);
+        if (Thread32First(snapshot, &entry)) {
+            do {
+                if (entry.th32OwnerProcessID == processId) {
+                    ++result.threadCount;
+                }
+            } while (Thread32Next(snapshot, &entry));
+        }
+        CloseHandle(snapshot);
+    }
+#endif
+    return result;
+}
 }
 
 AcceptanceAtTab::AcceptanceAtTab(QWidget* parent)
@@ -50,14 +99,18 @@ AcceptanceAtTab::AcceptanceAtTab(QWidget* parent)
         auto* lay = new QVBoxLayout(box);
         lay->addWidget(new QLabel(
             QStringLiteral(
-                "Старт/стоп таймера чеклиста. Фактический 24-часовой прогон и ротация "
-                "журнала выполняются на стенде — эта панель только фиксирует намерение."),
+                "Автоматически пишет RSS, private bytes, handles, потоки и свободное "
+                "место в CSV раз в минуту. Стендовый прогон и ротация журнала "
+                "проверяются отдельно."),
             box));
         m_at12Status = new QLabel(box);
         m_at12Status->setWordWrap(true);
+        m_at12Status->setObjectName(QStringLiteral("at12TelemetryStatus"));
         auto* row = new QHBoxLayout();
-        m_at12Start = new QPushButton(QStringLiteral("Старт таймера чеклиста"), box);
+        m_at12Start = new QPushButton(QStringLiteral("Начать сбор метрик"), box);
+        m_at12Start->setObjectName(QStringLiteral("at12StartTelemetry"));
         m_at12Stop = new QPushButton(QStringLiteral("Стоп"), box);
+        m_at12Stop->setObjectName(QStringLiteral("at12StopTelemetry"));
         row->addWidget(m_at12Start);
         row->addWidget(m_at12Stop);
         row->addStretch(1);
@@ -72,6 +125,10 @@ AcceptanceAtTab::AcceptanceAtTab(QWidget* parent)
         m_at12RssNote = new QLabel(box);
         m_at12RssNote->setWordWrap(true);
         m_at12RssNote->setObjectName(QStringLiteral("hintLabel"));
+        m_at12CsvPath = new QLabel(box);
+        m_at12CsvPath->setWordWrap(true);
+        m_at12CsvPath->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        m_at12CsvPath->setObjectName(QStringLiteral("at12CsvPath"));
         m_at12MemoryNote = new QCheckBox(
             QStringLiteral("Заметка: следить за памятью / ротацией журнала"), box);
         m_at12NotProtocol = new QCheckBox(
@@ -80,6 +137,7 @@ AcceptanceAtTab::AcceptanceAtTab(QWidget* parent)
         lay->addLayout(row);
         lay->addLayout(rssRow);
         lay->addWidget(m_at12RssNote);
+        lay->addWidget(m_at12CsvPath);
         lay->addWidget(m_at12MemoryNote);
         lay->addWidget(m_at12NotProtocol);
         connect(m_at12Start, &QPushButton::clicked, this, &AcceptanceAtTab::onAt12Start);
@@ -88,6 +146,9 @@ AcceptanceAtTab::AcceptanceAtTab(QWidget* parent)
         connect(m_at12RssMb, &QLineEdit::editingFinished, this, &AcceptanceAtTab::persistAll);
         connect(m_at12MemoryNote, &QCheckBox::toggled, this, &AcceptanceAtTab::persistAll);
         connect(m_at12NotProtocol, &QCheckBox::toggled, this, &AcceptanceAtTab::persistAll);
+        m_at12Timer = new QTimer(this);
+        m_at12Timer->setInterval(kAt12SampleIntervalMs);
+        connect(m_at12Timer, &QTimer::timeout, this, &AcceptanceAtTab::appendAt12Sample);
         root->addWidget(box);
     }
 
@@ -151,24 +212,94 @@ AcceptanceAtTab::AcceptanceAtTab(QWidget* parent)
 
 void AcceptanceAtTab::onAt12Start()
 {
+    const QString csvPath = createAt12Csv();
+    if (csvPath.isEmpty()) {
+        m_at12Status->setText(QStringLiteral("Не удалось создать CSV для AT-12."));
+        return;
+    }
     QSettings s;
     s.beginGroup(QString::fromLatin1(kOrg));
     s.setValue(QStringLiteral("at12/running"), true);
     s.setValue(QStringLiteral("at12/started_utc"),
                QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
     s.remove(QStringLiteral("at12/stopped_utc"));
+    s.setValue(QStringLiteral("at12/csv_path"), csvPath);
+    s.setValue(QStringLiteral("at12/sample_count"), 0);
     s.endGroup();
+    s.sync();
+    m_at12Timer->start();
+    appendAt12Sample();
     refreshAt12Status();
 }
 
 void AcceptanceAtTab::onAt12Stop()
 {
+    if (m_at12Timer->isActive()) {
+        appendAt12Sample();
+        m_at12Timer->stop();
+    }
     QSettings s;
     s.beginGroup(QString::fromLatin1(kOrg));
     s.setValue(QStringLiteral("at12/running"), false);
     s.setValue(QStringLiteral("at12/stopped_utc"),
                QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
     s.endGroup();
+    s.sync();
+    refreshAt12Status();
+}
+
+QString AcceptanceAtTab::createAt12Csv()
+{
+    QSettings s;
+    s.beginGroup(QString::fromLatin1(kOrg));
+    QString outputDir = s.value(QStringLiteral("at12/output_dir")).toString();
+    s.endGroup();
+    if (outputDir.isEmpty()) {
+        outputDir = QDir(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
+                        .filePath(QStringLiteral("AFAR-RX-Calibration"));
+    }
+    if (!QDir().mkpath(outputDir)) {
+        return {};
+    }
+    const QString fileName = QStringLiteral("at12-resources-%1.csv")
+                                 .arg(QDateTime::currentDateTimeUtc().toString(
+                                     QStringLiteral("yyyyMMdd-HHmmss")));
+    const QString path = QDir(outputDir).filePath(fileName);
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        return {};
+    }
+    QTextStream(&file) << "timestamp_utc,rss_bytes,private_bytes,handle_count,thread_count,"
+                          "free_disk_bytes\n";
+    return path;
+}
+
+void AcceptanceAtTab::appendAt12Sample()
+{
+    QSettings s;
+    s.beginGroup(QString::fromLatin1(kOrg));
+    const QString path = s.value(QStringLiteral("at12/csv_path")).toString();
+    int sampleCount = s.value(QStringLiteral("at12/sample_count")).toInt();
+    if (path.isEmpty()) {
+        s.endGroup();
+        return;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append)) {
+        s.endGroup();
+        m_at12Status->setText(QStringLiteral("Не удалось дописать CSV AT-12: %1").arg(path));
+        return;
+    }
+    const auto metrics = processMetrics();
+    QStorageInfo storage(QFileInfo(path).absolutePath());
+    storage.refresh();
+    QTextStream(&file) << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) << ','
+                       << metrics.rssBytes << ',' << metrics.privateBytes << ','
+                       << metrics.handleCount << ',' << metrics.threadCount << ','
+                       << storage.bytesAvailable() << '\n';
+    s.setValue(QStringLiteral("at12/sample_count"), ++sampleCount);
+    s.endGroup();
+    s.sync();
     refreshAt12Status();
 }
 
@@ -252,16 +383,29 @@ void AcceptanceAtTab::refreshAt12Status()
     const bool running = s.value(QStringLiteral("at12/running")).toBool();
     const QString started = s.value(QStringLiteral("at12/started_utc")).toString();
     const QString stopped = s.value(QStringLiteral("at12/stopped_utc")).toString();
+    const QString csvPath = s.value(QStringLiteral("at12/csv_path")).toString();
+    const int sampleCount = s.value(QStringLiteral("at12/sample_count")).toInt();
     s.endGroup();
+    m_at12CsvPath->setText(csvPath.isEmpty()
+                               ? QStringLiteral("CSV: ещё не создан")
+                               : QStringLiteral("CSV: %1").arg(csvPath));
+    m_at12Start->setEnabled(!running);
+    m_at12Stop->setEnabled(running);
     if (running) {
         m_at12Status->setText(
-            QStringLiteral("Таймер чеклиста: идёт с %1 (UTC). Не заменяет протокол стенда.")
-                .arg(started.isEmpty() ? QStringLiteral("—") : started));
+            QStringLiteral("Сбор метрик идёт с %1 (UTC), записей: %2.")
+                .arg(started.isEmpty() ? QStringLiteral("—") : started)
+                .arg(sampleCount));
+        if (!m_at12Timer->isActive()) {
+            m_at12Timer->start();
+        }
     } else if (!stopped.isEmpty()) {
         m_at12Status->setText(
-            QStringLiteral("Таймер чеклиста: остановлен %1 (UTC). Старт был: %2.")
-                .arg(stopped, started.isEmpty() ? QStringLiteral("—") : started));
+            QStringLiteral("Сбор метрик остановлен %1 (UTC). Записей: %2. Старт: %3.")
+                .arg(stopped)
+                .arg(sampleCount)
+                .arg(started.isEmpty() ? QStringLiteral("—") : started));
     } else {
-        m_at12Status->setText(QStringLiteral("Таймер чеклиста: не запускался."));
+        m_at12Status->setText(QStringLiteral("Сбор метрик не запускался."));
     }
 }

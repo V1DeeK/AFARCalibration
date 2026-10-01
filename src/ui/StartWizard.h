@@ -8,6 +8,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
 class QRadioButton;
+class QSpinBox;
 
 /// Мастер FR-04 / UI-007 до READY на имитаторах.
 class StartWizard final : public QWizard {
@@ -40,6 +41,8 @@ public:
     /// Ручной идентификатор калибровки ВАЦ (RMD-004 / CAL-001); может быть пустым.
     [[nodiscard]] QString vnaCalibrationId() const;
     [[nodiscard]] bool fullSeriesVolume() const;
+    [[nodiscard]] bool singleChannelFullVolume() const;
+    [[nodiscard]] int selectedChannel() const;
     [[nodiscard]] bool metrologistApproved() const;
     [[nodiscard]] double thruMagLimitDb() const;
     [[nodiscard]] double thruPhaseLimitDeg() const;
@@ -83,7 +86,9 @@ private:
     QCheckBox* m_powerOk = nullptr;
     QCheckBox* m_engineer = nullptr;
     QRadioButton* m_seriesCompact = nullptr;
+    QRadioButton* m_seriesSingle = nullptr;
     QRadioButton* m_seriesFull = nullptr;
+    QSpinBox* m_selectedChannel = nullptr;
     QCheckBox* m_idnOk = nullptr;
     QLabel* m_calStatus = nullptr;
     QLineEdit* m_vnaCalId = nullptr;

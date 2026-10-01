@@ -99,6 +99,12 @@ target_include_directories(test_export_manifest PRIVATE ${CMAKE_CURRENT_SOURCE_D
 afar_enable_warnings(test_export_manifest)
 add_test(NAME export_manifest COMMAND test_export_manifest)
 
+add_executable(test_two_port_export test_two_port_export.cpp)
+target_link_libraries(test_two_port_export PRIVATE Catch2::Catch2WithMain afar_report)
+afar_enable_warnings(test_two_port_export)
+add_test(NAME two_port_export COMMAND test_two_port_export)
+set_tests_properties(two_port_export PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # TEST-011 / AT-01: драйвер C2220 против локального SCPI TCP-стаба
 add_executable(test_c2220_driver test_c2220_driver.cpp)
 target_link_libraries(test_c2220_driver PRIVATE
@@ -135,18 +141,50 @@ afar_enable_warnings(test_lut_perf)
 add_test(NAME lut_perf COMMAND test_lut_perf)
 set_tests_properties(lut_perf PROPERTIES TIMEOUT 120)
 
+# AT-12: 24-hour simulator soak when AFAR_RUN_AT12=1. The normal suite records a skip.
+add_executable(test_at12_soak test_at12_soak.cpp)
+target_link_libraries(test_at12_soak PRIVATE
+    Catch2::Catch2WithMain
+    afar_measure
+    afar_sim
+    afar_dut
+)
+if(WIN32)
+    target_link_libraries(test_at12_soak PRIVATE Psapi)
+endif()
+target_include_directories(test_at12_soak PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+afar_enable_warnings(test_at12_soak)
+add_test(NAME at12_soak COMMAND test_at12_soak)
+set_tests_properties(at12_soak PROPERTIES TIMEOUT 90000)
+
+find_program(AFAR_POWERSHELL_EXECUTABLE NAMES pwsh powershell)
+if(AFAR_POWERSHELL_EXECUTABLE)
+    add_test(NAME verify_series_tool
+        COMMAND ${AFAR_POWERSHELL_EXECUTABLE} -NoProfile -ExecutionPolicy Bypass
+                -File ${PROJECT_SOURCE_DIR}/tools/verify-series.ps1 -SelfTest)
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 add_executable(test_ui_interactions
     test_ui_interactions.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/AcceptanceAtTab.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/AcceptanceAtTab.h
     ${PROJECT_SOURCE_DIR}/src/ui/ConnectionBar.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/ConnectionBar.h
     ${PROJECT_SOURCE_DIR}/src/ui/S21PlotWidget.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/S21PlotWidget.h
     ${PROJECT_SOURCE_DIR}/src/ui/MeasureTab.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/MeasureTab.h
+    ${PROJECT_SOURCE_DIR}/src/ui/StartWizard.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/StartWizard.h
+    ${PROJECT_SOURCE_DIR}/src/ui/S2VnaRuntime.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/S2VnaRuntime.h
 )
 target_include_directories(test_ui_interactions PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
 target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_cal)
+if(WIN32)
+    target_link_libraries(test_ui_interactions PRIVATE Psapi)
+endif()
 set_target_properties(test_ui_interactions PROPERTIES AUTOMOC ON)
 afar_enable_warnings(test_ui_interactions)
 add_test(NAME ui_interactions COMMAND test_ui_interactions)

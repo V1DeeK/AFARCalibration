@@ -13,6 +13,7 @@
 #include <QSpinBox>
 #include <QStandardItem>
 #include <QStandardItemModel>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace {
@@ -65,9 +66,6 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     root->setSpacing(4);
 
     auto* row = new QHBoxLayout();
-    auto* title = new QLabel(QStringLiteral("AFAR RX Calibration Studio"), this);
-    title->setStyleSheet(QStringLiteral("font-weight: 600;"));
-
     m_vna = new QLabel(QStringLiteral("C2220: нет связи"), this);
     m_controller = new QLabel(
         QStringLiteral("CTRL: OK — ИМИТАТОР (для S-параметров не нужен)"), this);
@@ -81,19 +79,37 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_source->setStyleSheet(
         QStringLiteral("color:#664d03; font-weight:600; padding:1px 4px;"));
 
-    row->addWidget(title);
-    row->addStretch(1);
     row->addWidget(m_source);
     row->addWidget(m_filterReady);
     row->addWidget(m_vna);
     row->addWidget(m_controller);
     row->addWidget(m_temperature);
     row->addWidget(m_status);
+    row->addStretch(1);
+    auto* settingsToggle = new QToolButton(this);
+    settingsToggle->setObjectName(QStringLiteral("connectionSettingsToggle"));
+    settingsToggle->setText(QStringLiteral("Настройки подключения"));
+    settingsToggle->setCheckable(true);
+    settingsToggle->setArrowType(Qt::RightArrow);
+    settingsToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    row->addWidget(settingsToggle);
     m_theme = new QPushButton(QStringLiteral("Тема: светлая"), this);
     m_theme->setObjectName(QStringLiteral("btnTheme"));
     connect(m_theme, &QPushButton::clicked, this, &ConnectionBar::themeToggleRequested);
     row->addWidget(m_theme);
     root->addLayout(row);
+
+    auto* settingsBody = new QWidget(this);
+    settingsBody->setObjectName(QStringLiteral("connectionSettingsBody"));
+    auto* settingsLayout = new QVBoxLayout(settingsBody);
+    settingsLayout->setContentsMargins(0, 0, 0, 0);
+    settingsLayout->setSpacing(2);
+    settingsBody->setVisible(false);
+    connect(settingsToggle, &QToolButton::toggled, this,
+            [settingsToggle, settingsBody](bool expanded) {
+                settingsToggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+                settingsBody->setVisible(expanded);
+            });
 
     auto* cfg = new QHBoxLayout();
     cfg->addWidget(new QLabel(QStringLiteral("VNA:"), this));
@@ -106,7 +122,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_backend->setItemData(
         1,
         QStringLiteral(
-            "Живой C2220 по TCP. Нужен запущенный SCPI-сервер S2VNA (Socket Server)."),
+            "Живой C1220/C2220 по TCP. S2VNA запускается скрыто автоматически."),
         Qt::ToolTipRole);
     m_backend->addItem(QStringLiteral("C2220 COM (SCPI)"), 2);
     m_backend->setItemData(2, QStringLiteral("S2VNA COM"), Qt::UserRole + 1);
@@ -135,7 +151,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_probe->setObjectName(QStringLiteral("btnPrimary"));
     cfg->addWidget(m_probe);
     cfg->addStretch(1);
-    root->addLayout(cfg);
+    settingsLayout->addLayout(cfg);
 
     // DUT-UI-001: слоты контроллера до кадров т. 14 (серия по умолчанию — DutSimulator).
     auto* dutCfg = new QHBoxLayout();
@@ -163,7 +179,8 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_dutCom->setToolTip(QStringLiteral("нужен протокол т.14"));
     dutCfg->addWidget(m_dutCom);
     dutCfg->addStretch(1);
-    root->addLayout(dutCfg);
+    settingsLayout->addLayout(dutCfg);
+    root->addWidget(settingsBody);
     disableCombatControllerItem();
 
     m_diagnostic = new QLabel(this);
@@ -201,10 +218,15 @@ ConnectionBar::ConnectionBar(QWidget* parent)
 
     // UI-TO-001: инженерные тайм-ауты → QSettings → C2220Vna::Profile.
     m_timeoutsBox = new QGroupBox(QStringLiteral("Инженер: тайм-ауты VNA"), this);
+    m_timeoutsBox->setObjectName(QStringLiteral("vnaTimeoutsBox"));
     m_timeoutsBox->setCheckable(true);
     m_timeoutsBox->setChecked(false);
     m_timeoutsBox->setFlat(true);
-    auto* toForm = new QFormLayout(m_timeoutsBox);
+    auto* timeoutLayout = new QVBoxLayout(m_timeoutsBox);
+    timeoutLayout->setContentsMargins(8, 4, 8, 4);
+    auto* timeoutBody = new QWidget(m_timeoutsBox);
+    timeoutBody->setObjectName(QStringLiteral("vnaTimeoutsBody"));
+    auto* toForm = new QFormLayout(timeoutBody);
     toForm->setContentsMargins(8, 8, 8, 4);
     toForm->setHorizontalSpacing(10);
     m_connectMs = new QSpinBox(m_timeoutsBox);
@@ -223,6 +245,8 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     toForm->addRow(QStringLiteral("connect_ms"), m_connectMs);
     toForm->addRow(QStringLiteral("sweep_ms"), m_sweepMs);
     toForm->addRow(QStringLiteral("retries"), m_retries);
+    timeoutLayout->addWidget(timeoutBody);
+    timeoutBody->setVisible(false);
     root->addWidget(m_timeoutsBox);
 
     connect(m_backend, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -247,6 +271,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     connect(m_scpiClear, &QPushButton::clicked, this, &ConnectionBar::clearScpiErrorQueue);
     connect(m_scpiSimulate, &QPushButton::clicked, this,
             &ConnectionBar::simulateScpiErrorRequested);
+    connect(m_timeoutsBox, &QGroupBox::toggled, timeoutBody, &QWidget::setVisible);
     connect(m_connectMs, &QSpinBox::editingFinished, this, &ConnectionBar::emitTimeoutsChanged);
     connect(m_sweepMs, &QSpinBox::editingFinished, this, &ConnectionBar::emitTimeoutsChanged);
     connect(m_retries, &QSpinBox::editingFinished, this, &ConnectionBar::emitTimeoutsChanged);
@@ -341,7 +366,7 @@ void ConnectionBar::emitTimeoutsChanged()
 void ConnectionBar::loadSettings()
 {
     QSettings s;
-    const int backend = s.value(QStringLiteral("vna/backend"), 0).toInt();
+    const int backend = s.value(QStringLiteral("vna/backend"), 1).toInt();
     m_backend->setCurrentIndex(qBound(0, backend, 2));
     m_host->setText(s.value(QStringLiteral("vna/host"), QStringLiteral("127.0.0.1")).toString());
     m_port->setValue(s.value(QStringLiteral("vna/port"), 5025).toInt());

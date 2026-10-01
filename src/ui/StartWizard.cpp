@@ -13,6 +13,7 @@
 #include <QRadioButton>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QSpinBox>
 #include <QStandardPaths>
 #include <QStringConverter>
 #include <QTextStream>
@@ -108,6 +109,7 @@ void StartWizard::buildPages()
         hint->setWordWrap(true);
         layout->addWidget(hint);
         m_dataRoot = new QLineEdit(page);
+        m_dataRoot->setObjectName(QStringLiteral("seriesDataRoot"));
         const auto base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
         m_dataRoot->setText(QDir(base).filePath(QStringLiteral("data")));
         layout->addWidget(new QLabel(QStringLiteral("Каталог данных серий:"), page));
@@ -129,24 +131,53 @@ void StartWizard::buildPages()
 
         layout->addWidget(new QLabel(QStringLiteral("Объём серии (AT-04):"), page));
         m_seriesCompact = new QRadioButton(
-            QStringLiteral("Компактный (как сейчас: урезанная сетка)"), page);
+            QStringLiteral("Проверочный: канал 1, сокращённая сетка"), page);
+        m_seriesCompact->setObjectName(QStringLiteral("seriesVolumeCompact"));
+        m_seriesSingle = new QRadioButton(
+            QStringLiteral("Один выбранный канал × att 0…63 × фаза 0…63"), page);
+        m_seriesSingle->setObjectName(QStringLiteral("seriesVolumeSingle"));
         m_seriesFull = new QRadioButton(
             QStringLiteral("Полный AT-04 (каналы 1…16 × att 0…63 × фаза 0…63)"), page);
+        m_seriesFull->setObjectName(QStringLiteral("seriesVolumeFull"));
+        m_selectedChannel = new QSpinBox(page);
+        m_selectedChannel->setObjectName(QStringLiteral("selectedCalibrationChannel"));
+        m_selectedChannel->setRange(1, 16);
+        m_selectedChannel->setPrefix(QStringLiteral("Канал "));
+        m_selectedChannel->setEnabled(false);
         m_seriesCompact->setChecked(true);
         {
             QSettings settings;
-            if (settings.value(QStringLiteral("ui/series_volume_full"), false).toBool()) {
+            const int savedMode = settings.value(
+                QStringLiteral("ui/series_volume_mode"),
+                settings.value(QStringLiteral("ui/series_volume_full"), false).toBool() ? 2 : 0)
+                                      .toInt();
+            m_selectedChannel->setValue(
+                settings.value(QStringLiteral("ui/series_selected_channel"), 1).toInt());
+            if (savedMode == 1) {
+                m_seriesSingle->setChecked(true);
+            } else if (savedMode == 2) {
                 m_seriesFull->setChecked(true);
             }
         }
         layout->addWidget(m_seriesCompact);
+        layout->addWidget(m_seriesSingle);
+        layout->addWidget(m_selectedChannel);
         layout->addWidget(m_seriesFull);
         auto persistVolume = [this](bool) {
             QSettings settings;
-            settings.setValue(QStringLiteral("ui/series_volume_full"), fullSeriesVolume());
+            const int mode = fullSeriesVolume() ? 2 : (singleChannelFullVolume() ? 1 : 0);
+            settings.setValue(QStringLiteral("ui/series_volume_mode"), mode);
+            m_selectedChannel->setEnabled(singleChannelFullVolume());
         };
         connect(m_seriesCompact, &QRadioButton::toggled, this, persistVolume);
+        connect(m_seriesSingle, &QRadioButton::toggled, this, persistVolume);
         connect(m_seriesFull, &QRadioButton::toggled, this, persistVolume);
+        connect(m_selectedChannel, qOverload<int>(&QSpinBox::valueChanged), this,
+                [](int channel) {
+                    QSettings settings;
+                    settings.setValue(QStringLiteral("ui/series_selected_channel"), channel);
+                });
+        m_selectedChannel->setEnabled(singleChannelFullVolume());
         addPage(page);
     }
 
@@ -157,16 +188,16 @@ void StartWizard::buildPages()
         &m_idnOk));
 
     {
-        // UI-205 / CAL-001 / CAL-002: калибровка только в S2VNA, чеклист без SCPI.
+        // Для серии мастер подтверждает уже выполненную на вкладке 2 калибровку.
         auto* page = new QWizardPage(this);
-        page->setTitle(QStringLiteral("3. Калибровка ВАЦ (в S2VNA)"));
+        page->setTitle(QStringLiteral("3. Калибровка ВАЦ"));
         auto* layout = new QVBoxLayout(page);
         auto* lab = new QLabel(
             QStringLiteral(
-                "Полная калибровка ВАЦ (SOLT / Response / Thru) выполняется в программе "
-                "S2VNA до серии; здесь только подтверждение оператора. "
-                "AFAR не шлёт команды калибровки по SCPI.\n\n"
-                "Порядок: docs/S2VNA-setup.md → калибровка в S2VNA → этот чеклист → серия."),
+                "Полную двухпортовую SOLT-калибровку запустите на вкладке «2 Калибровка VNA» "
+                "нашей программы. S2VNA должна оставаться включённым SCPI-сервером. Здесь мастер "
+                "только подтверждает, что калибровка завершена и применена.\n\n"
+                "Порядок: вкладка 2 → пошаговая SOLT → этот чеклист → серия."),
             page);
         lab->setWordWrap(true);
         layout->addWidget(lab);
@@ -176,22 +207,22 @@ void StartWizard::buildPages()
         layout->addWidget(m_calStatus);
 
         layout->addWidget(new QLabel(
-            QStringLiteral("Чеклист Response / Thru (сделайте в S2VNA):"), page));
+            QStringLiteral("Чеклист применённой калибровки:"), page));
         m_calStepResponse = new QCheckBox(
-            QStringLiteral("1. Выполнен Response (нормализация) в S2VNA"), page);
+            QStringLiteral("1. Выполнена нормализация Response"), page);
         m_calStepThru = new QCheckBox(
-            QStringLiteral("2. Выполнен Thru в S2VNA (или эквивалент для тракта)"), page);
+            QStringLiteral("2. Выполнен шаг THRU"), page);
         m_calStepApplied = new QCheckBox(
-            QStringLiteral("3. Калибровка применена к активному каналу S2VNA"), page);
+            QStringLiteral("3. Калибровка применена к активному каналу прибора"), page);
         layout->addWidget(m_calStepResponse);
         layout->addWidget(m_calStepThru);
         layout->addWidget(m_calStepApplied);
 
         layout->addWidget(new QLabel(
-            QStringLiteral("Идентификатор калибровки ВАЦ (вручную, опционально):"), page));
+            QStringLiteral("Идентификатор комплекта мер ВАЦ (автоматически из S2VNA):"), page));
         m_vnaCalId = new QLineEdit(page);
         m_vnaCalId->setPlaceholderText(
-            QStringLiteral("vna_calibration_id — из S2VNA / журнала, не SCPI"));
+            QStringLiteral("Нажмите «Проверить связь»; при необходимости можно исправить вручную"));
         {
             QSettings settings;
             m_vnaCalId->setText(
@@ -549,6 +580,16 @@ bool StartWizard::fullSeriesVolume() const
     return m_seriesFull && m_seriesFull->isChecked();
 }
 
+bool StartWizard::singleChannelFullVolume() const
+{
+    return m_seriesSingle && m_seriesSingle->isChecked();
+}
+
+int StartWizard::selectedChannel() const
+{
+    return m_selectedChannel ? m_selectedChannel->value() : 1;
+}
+
 bool StartWizard::metrologistApproved() const
 {
     return m_metroApproved && m_metroApproved->isChecked()
@@ -764,11 +805,12 @@ bool StartWizard::materializeSimFixtures(QString& diagnostics)
     m_csvPath = fixtures.filePath(QStringLiteral("attenuator-codes.csv"));
     writeThruApprovalJson(fixtures.path());
 
-    const bool full = fullSeriesVolume();
-    const int chFirst = 1;
-    const int chLast = full ? 16 : 1;
+    const bool allChannels = fullSeriesVolume();
+    const bool fullGrid = allChannels || singleChannelFullVolume();
+    const int chFirst = singleChannelFullVolume() ? selectedChannel() : 1;
+    const int chLast = allChannels ? 16 : chFirst;
     const int phFirst = 0;
-    const int phLast = full ? 63 : 3;
+    const int phLast = fullGrid ? 63 : 3;
 
     const double power = m_power->value();
     const qint64 fStart = static_cast<qint64>(m_fStartHz + 0.5);
@@ -841,7 +883,7 @@ bool StartWizard::materializeSimFixtures(QString& diagnostics)
     QTextStream csvOut(&csv);
     csvOut.setEncoding(QStringConverter::Utf8);
     csvOut << "att_code,att_cmd_db,enabled,settle_ms\n";
-    if (full) {
+    if (fullGrid) {
         for (int i = 0; i < 64; ++i) {
             csvOut << i << ',' << QString::number(i * 0.5, 'f', 2) << ",true,0\n";
         }

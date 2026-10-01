@@ -92,6 +92,15 @@ void VnaSimulator::configure(const SweepConfig& config)
     configured_ = true;
 }
 
+SweepConfig VnaSimulator::read_config()
+{
+    throw_if_failure_on_io("read_config");
+    if (!connected_ || !configured_) {
+        throw std::runtime_error("VnaSimulator::read_config without configure");
+    }
+    return config_;
+}
+
 ComplexSweep VnaSimulator::measure_trace()
 {
     throw_if_failure_on_io("measure_trace");
@@ -100,6 +109,10 @@ ComplexSweep VnaSimulator::measure_trace()
     }
     if (!configured_) {
         throw std::runtime_error("VnaSimulator: measure_trace without configure");
+    }
+    if (failNextTrace_ == config_.s_parameter) {
+        failNextTrace_.reset();
+        throw std::runtime_error("VnaSimulator: transient trace failure");
     }
 
     ComplexSweep sweep;

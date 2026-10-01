@@ -2,6 +2,7 @@
 
 #include "afar/IVna.h"
 
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -22,6 +23,7 @@ public:
     void connect() override;
     std::string identify() override;
     void configure(const SweepConfig& config) override;
+    SweepConfig read_config() override;
     ComplexSweep measure_trace() override;
     ComplexSweep measure_s21() override;
     void calibrate_one_port(OnePortCalibrationStep step, int port) override;
@@ -30,6 +32,7 @@ public:
     void abort() noexcept override;
 
     void set_failure_mode(FailureMode mode);
+    void fail_next_trace(SParameter parameter) noexcept { failNextTrace_ = parameter; }
     void set_identify_string(std::string idn);
     void push_instrument_error(std::string message);
 
@@ -51,6 +54,7 @@ private:
     bool configured_{false};
     bool directAccessOn_{false};
     FailureMode failureMode_{FailureMode::None};
+    std::optional<SParameter> failNextTrace_;
     std::string identifyString_{
         "PLANAR,C2220,SIM0001,1.0"};
     SweepConfig config_{};

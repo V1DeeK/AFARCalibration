@@ -1,15 +1,31 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace afar::report {
+
+struct ChannelReportInfo {
+    std::uint8_t channel{0};
+    std::size_t completed_states{0};
+    std::size_t valid_direct_count{0};
+    std::size_t valid_inverse_count{0};
+};
 
 struct RunReportInfo {
     std::string run_id;
     std::size_t completed_states{0};
     std::size_t valid_direct_count{0};
+    std::size_t valid_inverse_count{0};
+    std::size_t frequency_points{0};
+    std::size_t attenuator_codes{0};
+    std::size_t phase_codes{0};
+    std::uint64_t f_start_hz{0};
+    std::uint64_t f_stop_hz{0};
+    std::vector<ChannelReportInfo> channels;
     /// Если пусто — в PDF пишется макрос сборки AFAR_SOFTWARE_VERSION.
     std::string software_version;
     std::string series_path;
@@ -33,7 +49,7 @@ struct RunReportInfo {
     bool thru_meta_loaded{false};
 };
 
-/// Минимальный валидный PDF 1.4: серия, версии сборки, пороги, THRU, метролог.
+/// PDF серии: параметры, версии, пороги и отдельная сводка каждого канала.
 bool writeRunReportPdf(const std::filesystem::path& path,
                        const RunReportInfo& info,
                        std::string& diagnostics);

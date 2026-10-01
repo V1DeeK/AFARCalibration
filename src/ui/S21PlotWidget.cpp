@@ -8,6 +8,7 @@
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -58,6 +59,73 @@ qsizetype nearestIndex(const QVector<double>& values, double target)
 }
 
 } // namespace
+
+PlotTraceStatistics plotTraceStatistics(const S21PlotTrace& trace)
+{
+    PlotTraceStatistics result;
+    if (trace.freqGhz.size() != trace.magDb.size() || trace.magDb.isEmpty()) {
+        return result;
+    }
+
+    qsizetype firstFinite = -1;
+    qsizetype lastFinite = -1;
+    long double sum = 0.0;
+    qsizetype count = 0;
+    for (qsizetype i = 0; i < trace.magDb.size(); ++i) {
+        const double value = trace.magDb[i];
+        if (!std::isfinite(value) || !std::isfinite(trace.freqGhz[i])) {
+            continue;
+        }
+        if (firstFinite < 0) {
+            firstFinite = i;
+            result.minValue = value;
+            result.maxValue = value;
+            result.minFrequencyGhz = trace.freqGhz[i];
+            result.maxFrequencyGhz = trace.freqGhz[i];
+        }
+        lastFinite = i;
+        if (value < result.minValue) {
+            result.minValue = value;
+            result.minFrequencyGhz = trace.freqGhz[i];
+        }
+        if (value >= result.maxValue) {
+            result.maxValue = value;
+            result.maxFrequencyGhz = trace.freqGhz[i];
+        }
+        sum += value;
+        ++count;
+    }
+    if (count == 0) {
+        return result;
+    }
+
+    result.averageValue = static_cast<double>(sum / count);
+    result.averageFrequencyGhz = trace.freqGhz[firstFinite];
+    const double centerFrequency = (trace.freqGhz[firstFinite] + trace.freqGhz[lastFinite]) / 2.0;
+    double bestDistance = std::numeric_limits<double>::infinity();
+    for (qsizetype i = firstFinite; i < lastFinite; ++i) {
+        const double y0 = trace.magDb[i];
+        const double y1 = trace.magDb[i + 1];
+        const double f0 = trace.freqGhz[i];
+        const double f1 = trace.freqGhz[i + 1];
+        if (!std::isfinite(y0) || !std::isfinite(y1)
+            || !std::isfinite(f0) || !std::isfinite(f1)
+            || (result.averageValue < std::min(y0, y1))
+            || (result.averageValue > std::max(y0, y1))) {
+            continue;
+        }
+        const double t = std::abs(y1 - y0) < 1e-15
+            ? 0.5 : (result.averageValue - y0) / (y1 - y0);
+        const double frequency = f0 + t * (f1 - f0);
+        const double distance = std::abs(frequency - centerFrequency);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            result.averageFrequencyGhz = frequency;
+        }
+    }
+    result.valid = true;
+    return result;
+}
 
 S21PlotWidget::S21PlotWidget(QWidget* parent)
     : QWidget(parent)
@@ -341,6 +409,46 @@ void S21PlotWidget::paintPanel(QPainter& p,
             p.setPen(pal.color(QPalette::WindowText));
             p.drawText(legendX + 13, area.top() + 13, it->name);
         }
+    }
+    if (!phasePanel) {
+        struct AutoMarker {
+            double frequency;
+            double value;
+            const char* label;
+        };
+        for (const auto& trace : m_traces) {
+            const auto statistics = plotTraceStatistics(trace);
+            if (!statistics.valid) {
+                continue;
+            }
+            const AutoMarker markers[] = {
+                {statistics.minFrequencyGhz, statistics.minValue, "MIN"},
+                {statistics.maxFrequencyGhz, statistics.maxValue, "MAX"},
+                {statistics.averageFrequencyGhz, statistics.averageValue, "AVG"},
+            };
+            const QColor color = trace.color.isValid()
+                ? trace.color : pal.color(QPalette::Highlight);
+            for (const auto& marker : markers) {
+                if (marker.frequency < x0 || marker.frequency > x1
+                    || !std::isfinite(marker.value)) {
+                    continue;
+                }
+                const QPointF point(
+                    plot.left() + ((marker.frequency - x0) / dx) * plot.width(),
+                    plot.bottom() - ((marker.value - yMin) / dy) * plot.height());
+                QPolygonF triangle;
+                triangle << QPointF(point.x(), point.y())
+                         << QPointF(point.x() - 6.0, point.y() - 10.0)
+                         << QPointF(point.x() + 6.0, point.y() - 10.0);
+                p.setPen(QPen(pal.color(QPalette::Base), 1.2));
+                p.setBrush(color);
+                p.drawPolygon(triangle);
+                p.setPen(color);
+                p.drawText(QPointF(point.x() + 7.0, point.y() - 2.0),
+                           QString::fromLatin1(marker.label));
+            }
+        }
+        p.setBrush(Qt::NoBrush);
     }
     if (drawOverlay) {
         p.setPen(QPen(QColor(0xC0, 0x55, 0x20), 1.5));

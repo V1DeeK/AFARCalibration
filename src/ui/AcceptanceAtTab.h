@@ -1,11 +1,13 @@
 #pragma once
 
+#include <QString>
 #include <QWidget>
 
 class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QTimer;
 
 /// Оболочки приёмки AT-12…14: локальный чеклист/статус (не фейковая метрология).
 class AcceptanceAtTab final : public QWidget {
@@ -18,11 +20,13 @@ private slots:
     void onAt12Start();
     void onAt12Stop();
     void onAt12FixRss();
+    void appendAt12Sample();
     void persistAll();
 
 private:
     void loadFromSettings();
     void refreshAt12Status();
+    [[nodiscard]] QString createAt12Csv();
 
     QLabel* m_at12Status = nullptr;
     QPushButton* m_at12Start = nullptr;
@@ -30,8 +34,10 @@ private:
     QPushButton* m_at12FixRss = nullptr;
     QLineEdit* m_at12RssMb = nullptr;
     QLabel* m_at12RssNote = nullptr;
+    QLabel* m_at12CsvPath = nullptr;
     QCheckBox* m_at12MemoryNote = nullptr;
     QCheckBox* m_at12NotProtocol = nullptr;
+    QTimer* m_at12Timer = nullptr;
 
     QCheckBox* m_at13Thru = nullptr;
     QLineEdit* m_at13CalId = nullptr;
