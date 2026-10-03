@@ -2,6 +2,7 @@
 
 #include "DutSimulator.h"
 #include "MeasurementOrchestrator.h"
+#include "TwoPortExport.h"
 #include "VnaSimulator.h"
 
 #include <QElapsedTimer>
@@ -10,6 +11,8 @@
 #include <QStringList>
 #include <QVector>
 #include <memory>
+#include <mutex>
+#include <optional>
 
 class C2220Vna;
 class IScpiTransport;
@@ -23,13 +26,20 @@ class MeasureWorker final : public QObject {
     Q_OBJECT
 
 public:
-    /// 0 = имитатор, 1 = TCP Socket (S2VNA), 2 = COM.
-    enum VnaBackend : int { BackendSimulator = 0, BackendSocket = 1, BackendCom = 2 };
+    /// 0 = имитатор, 1 = TCP Socket, 2 = COM, 3 = S2VNA Demo C2220 по Socket.
+    enum VnaBackend : int {
+        BackendSimulator = 0,
+        BackendSocket = 1,
+        BackendCom = 2,
+        BackendS2VnaDemo = 3,
+    };
     /// 0 = DutSimulator (серия), 1 = Stub (диагностика т.14), 2 = боевой (не реализован).
     enum CtrlBackend : int { CtrlSimulator = 0, CtrlStub = 1, CtrlCombat = 2 };
 
     explicit MeasureWorker(QObject* parent = nullptr);
     ~MeasureWorker() override;
+    /// Потокобезопасно прерывает блокирующий Socket I/O перед остановкой QThread.
+    void interruptIo() noexcept;
 
 public slots:
     void configureVna(int backend,
@@ -76,10 +86,20 @@ public slots:
                     int ifbwHz,
                     double powerDbm,
                     int averages);
+    /// Сохраняет последний полный снимок без повторного измерения прибора.
+    void exportTwoPort(const QString& basePath,
+                       const QVector<double>& markerFrequenciesGhz,
+                       const QString& deviceName,
+                       const QString& deviceSerial,
+                       const QString& operatorName,
+                       const QString& comment,
+                       bool operatorAccepted);
     /// CAL-UI: шаг TwoPortCalibrationStep как int (Begin…Apply).
     void calibrateTwoPort(int step);
     /// CAL-UI: шаг OnePortCalibrationStep как int + порт 1|2.
     void calibrateOnePort(int step, int port);
+    /// Выбор подтверждённого документацией комплекта мер S2VNA 1..64.
+    void selectCalibrationKit(int index);
     void shutdown();
 
 signals:
@@ -95,8 +115,14 @@ signals:
     void stateChanged(int state, const QString& russianText, const QString& colorName);
     void prepareFinished(bool ok, const QString& diagnostics);
     void probeFinished(bool ok, const QString& idnOrError);
+    void vnaCalibrationDetected(const QString& calibrationId, bool correctionEnabled);
     void probeCodesFinished(bool ok, const QString& message);
     void measureNowFinished(bool ok, const QString& message);
+    void twoPortExportAvailable(bool available);
+    void exportTwoPortFinished(bool ok,
+                               const QString& s2pPath,
+                               const QString& pdfPath,
+                               const QString& message);
     void calibrateTwoPortFinished(bool ok, int step, const QString& message);
     void calibrateOnePortFinished(bool ok, int step, const QString& message);
     void progressChanged(qint64 completed,
@@ -201,6 +227,7 @@ private:
     int m_connectTimeoutMs{3000};
     int m_sweepTimeoutMs{30000};
     int m_measureRetries{2};
+    bool m_demoVerified{false};
 
     int m_ctrlBackend{CtrlSimulator};
     QString m_dutHost{QStringLiteral("192.168.0.10")};
@@ -211,6 +238,7 @@ private:
     QString m_lastIdn;
 
     std::unique_ptr<VnaSimulator> m_simVna;
+    mutable std::mutex m_transportMutex;
     std::unique_ptr<ScpiSocketTransport> m_socket;
     std::unique_ptr<ScpiComTransport> m_com;
     std::unique_ptr<C2220Vna> m_c2220;
@@ -229,4 +257,5 @@ private:
     qint64 m_etaBaseCompleted = -1;
     bool m_etaActive = false;
     bool m_artifactPreviewSent = false;
+    std::optional<afar::report::TwoPortMeasurement> m_lastTwoPortMeasurement;
 };

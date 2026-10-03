@@ -5,12 +5,14 @@
 #include "PhaseMath.h"
 #include "QualityGates.h"
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <locale>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -21,29 +23,62 @@
 namespace afar::report {
 namespace {
 
-bool writeMagicAndTsv(const std::filesystem::path& path,
-                      const std::string& tsv,
+bool beginAtomicWrite(const std::filesystem::path& path,
+                      std::filesystem::path& temporary,
+                      std::ofstream& out,
                       std::string& diagnostics)
 {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    temporary = path;
+    temporary += ".tmp";
+    std::error_code ec;
+    std::filesystem::remove(temporary, ec);
+    out.open(temporary, std::ios::binary | std::ios::trunc);
     if (!out) {
-        diagnostics = "cannot open for write: " + path.string();
-        return false;
-    }
-    out.write(kAfarPqMagic, static_cast<std::streamsize>(sizeof(kAfarPqMagic)));
-    out.write(tsv.data(), static_cast<std::streamsize>(tsv.size()));
-    if (!out) {
-        diagnostics = "write failed: " + path.string();
+        diagnostics = "cannot open for write: " + temporary.string();
         return false;
     }
     return true;
 }
 
-bool readMagicAndTsv(const std::filesystem::path& path,
-                     std::string& tsv,
-                     std::string& diagnostics)
+bool beginAfarPqWrite(const std::filesystem::path& path,
+                      std::filesystem::path& temporary,
+                      std::ofstream& out,
+                      std::string& diagnostics)
 {
-    std::ifstream in(path, std::ios::binary);
+    if (!beginAtomicWrite(path, temporary, out, diagnostics)) {
+        return false;
+    }
+    out.write(kAfarPqMagic, static_cast<std::streamsize>(sizeof(kAfarPqMagic)));
+    return static_cast<bool>(out);
+}
+
+bool commitAtomicWrite(const std::filesystem::path& path,
+                       const std::filesystem::path& temporary,
+                       std::ofstream& out,
+                       std::string& diagnostics)
+{
+    out.flush();
+    if (!out) {
+        diagnostics = "write failed: " + temporary.string();
+        return false;
+    }
+    out.close();
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    ec.clear();
+    std::filesystem::rename(temporary, path, ec);
+    if (ec) {
+        diagnostics = "cannot commit file: " + ec.message();
+        return false;
+    }
+    return true;
+}
+
+bool openAfarPqRead(const std::filesystem::path& path,
+                    std::ifstream& in,
+                    std::string& diagnostics)
+{
+    in.open(path, std::ios::binary);
     if (!in) {
         diagnostics = "cannot open for read: " + path.string();
         return false;
@@ -54,24 +89,21 @@ bool readMagicAndTsv(const std::filesystem::path& path,
         diagnostics = "bad AFARPQ magic: " + path.string();
         return false;
     }
-    std::ostringstream oss;
-    oss << in.rdbuf();
-    tsv = oss.str();
     return true;
 }
 
-std::vector<std::string_view> splitTsvLine(std::string_view line)
+std::vector<std::string_view> splitLine(std::string_view line, char separator)
 {
     std::vector<std::string_view> cols;
     std::size_t start = 0;
     while (start <= line.size()) {
-        const auto tab = line.find('\t', start);
-        if (tab == std::string_view::npos) {
+        const auto delimiter = line.find(separator, start);
+        if (delimiter == std::string_view::npos) {
             cols.push_back(line.substr(start));
             break;
         }
-        cols.push_back(line.substr(start, tab - start));
-        start = tab + 1;
+        cols.push_back(line.substr(start, delimiter - start));
+        start = delimiter + 1;
     }
     return cols;
 }
@@ -116,8 +148,27 @@ std::string formatDouble(double v)
         return "nan";
     }
     std::ostringstream oss;
+    oss.imbue(std::locale::classic());
     oss << std::setprecision(17) << v;
     return oss.str();
+}
+
+bool parseInverseColumns(std::span<const std::string_view> cols,
+                         std::size_t offset,
+                         InverseLutEntry& entry)
+{
+    return cols.size() >= offset + 11
+        && parseNum(cols[offset], entry.channel)
+        && parseNum(cols[offset + 1], entry.freq_hz)
+        && parseNum(cols[offset + 2], entry.target_atten_db)
+        && parseNum(cols[offset + 3], entry.target_phase_deg)
+        && parseNum(cols[offset + 4], entry.selected_att_code)
+        && parseNum(cols[offset + 5], entry.selected_phase_code)
+        && parseNum(cols[offset + 6], entry.measured_atten_db)
+        && parseNum(cols[offset + 7], entry.measured_phase_deg)
+        && parseNum(cols[offset + 8], entry.atten_residual_db)
+        && parseNum(cols[offset + 9], entry.phase_residual_deg)
+        && parseBool(cols[offset + 10], entry.valid);
 }
 
 std::optional<std::uint32_t> referenceAttRow(const RawS21Store& store, std::uint16_t att_code)
@@ -180,18 +231,152 @@ double driftAgainstPreviousReference(
     return std::numeric_limits<double>::quiet_NaN();
 }
 
+// Exact 2-D nearest-neighbour index for the inverse LUT cost. Phase is copied at
+// -360/0/+360 degrees, so Euclidean distance is identical to wrap180().
+class InverseCandidateIndex {
+public:
+    explicit InverseCandidateIndex(const std::vector<cal::InverseLutCandidate>& candidates)
+        : candidates_(candidates)
+    {
+        const bool any_valid = std::any_of(candidates.begin(), candidates.end(), [](const auto& c) {
+            return c.valid;
+        });
+        points_.reserve(candidates.size() * 3);
+        for (std::size_t i = 0; i < candidates.size(); ++i) {
+            const auto& candidate = candidates[i];
+            if ((any_valid && !candidate.valid) || !std::isfinite(candidate.a_meas_db)
+                || !std::isfinite(candidate.phi_meas_deg)) {
+                continue;
+            }
+            double phase = std::fmod(candidate.phi_meas_deg, 360.0);
+            if (phase < 0.0) {
+                phase += 360.0;
+            }
+            for (const double shift : {-360.0, 0.0, 360.0}) {
+                points_.push_back({candidate.a_meas_db, phase + shift, i});
+            }
+        }
+        nodes_.reserve(points_.size());
+        root_ = build(0, points_.size(), false);
+    }
+
+    cal::InverseLutResult select(double target_atten_db, double target_phase_deg) const
+    {
+        cal::InverseLutResult result;
+        if (root_ < 0 || !std::isfinite(target_atten_db) || !std::isfinite(target_phase_deg)) {
+            return result;
+        }
+        double phase = std::fmod(target_phase_deg, 360.0);
+        if (phase < 0.0) {
+            phase += 360.0;
+        }
+        double best_cost = std::numeric_limits<double>::infinity();
+        std::size_t best_index = candidates_.size();
+        nearest(root_, target_atten_db, phase, best_cost, best_index);
+        if (best_index == candidates_.size()) {
+            return result;
+        }
+        const auto& chosen = candidates_[best_index];
+        result.selected_att_code = chosen.att_code;
+        result.selected_phase_code = chosen.phase_code;
+        result.measured_atten_db = chosen.a_meas_db;
+        result.measured_phase_deg = chosen.phi_meas_deg;
+        result.atten_residual_db = chosen.a_meas_db - target_atten_db;
+        result.phase_residual_deg = cal::wrap180(chosen.phi_meas_deg - target_phase_deg);
+        result.cost_j = best_cost;
+        result.valid = chosen.valid;
+        result.found = true;
+        return result;
+    }
+
+private:
+    struct Point {
+        double attenuation{};
+        double phase{};
+        std::size_t candidate_index{};
+    };
+    struct Node {
+        Point point;
+        int left{-1};
+        int right{-1};
+        bool split_phase{false};
+    };
+
+    int build(std::size_t begin, std::size_t end, bool split_phase)
+    {
+        if (begin == end) {
+            return -1;
+        }
+        const auto middle = begin + (end - begin) / 2;
+        std::nth_element(points_.begin() + static_cast<std::ptrdiff_t>(begin),
+                         points_.begin() + static_cast<std::ptrdiff_t>(middle),
+                         points_.begin() + static_cast<std::ptrdiff_t>(end),
+                         [split_phase](const Point& a, const Point& b) {
+                             const double av = split_phase ? a.phase : a.attenuation;
+                             const double bv = split_phase ? b.phase : b.attenuation;
+                             if (av != bv) {
+                                 return av < bv;
+                             }
+                             return a.candidate_index < b.candidate_index;
+                         });
+        const int index = static_cast<int>(nodes_.size());
+        nodes_.push_back({points_[middle], -1, -1, split_phase});
+        const int left = build(begin, middle, !split_phase);
+        const int right = build(middle + 1, end, !split_phase);
+        nodes_[static_cast<std::size_t>(index)].left = left;
+        nodes_[static_cast<std::size_t>(index)].right = right;
+        return index;
+    }
+
+    void nearest(int node_index,
+                 double target_attenuation,
+                 double target_phase,
+                 double& best_cost,
+                 std::size_t& best_index) const
+    {
+        if (node_index < 0) {
+            return;
+        }
+        const auto& node = nodes_[static_cast<std::size_t>(node_index)];
+        const double da = node.point.attenuation - target_attenuation;
+        const double dp = node.point.phase - target_phase;
+        const double cost = da * da + dp * dp;
+        if (cost < best_cost || (cost == best_cost && node.point.candidate_index < best_index)) {
+            best_cost = cost;
+            best_index = node.point.candidate_index;
+        }
+
+        const double delta = node.split_phase ? dp : da;
+        const int near_child = delta > 0.0 ? node.left : node.right;
+        const int far_child = delta > 0.0 ? node.right : node.left;
+        nearest(near_child, target_attenuation, target_phase, best_cost, best_index);
+        if (delta * delta <= best_cost) {
+            nearest(far_child, target_attenuation, target_phase, best_cost, best_index);
+        }
+    }
+
+    const std::vector<cal::InverseLutCandidate>& candidates_;
+    std::vector<Point> points_;
+    std::vector<Node> nodes_;
+    int root_{-1};
+};
+
 }  // namespace
 
 bool exportDirectLut(const std::filesystem::path& path,
                      std::span<const cal::DirectLutEntry> rows,
                      std::string& diagnostics)
 {
-    std::ostringstream tsv;
-    tsv << "channel\tfreq_hz\tatt_code\tphase_code\ts21_re\ts21_im\tmag_db\t"
+    std::filesystem::path temporary;
+    std::ofstream out;
+    if (!beginAfarPqWrite(path, temporary, out, diagnostics)) {
+        return false;
+    }
+    out << "channel\tfreq_hz\tatt_code\tphase_code\ts21_re\ts21_im\tmag_db\t"
            "phase_unwrapped_deg\tatten_meas_db\tphase_error_deg\tdrift_phase_deg\t"
            "repeatability_db\trepeatability_deg\tvalid\n";
     for (const auto& e : rows) {
-        tsv << static_cast<unsigned>(e.channel) << '\t' << e.freq_hz << '\t' << e.att_code
+        out << static_cast<unsigned>(e.channel) << '\t' << e.freq_hz << '\t' << e.att_code
             << '\t' << static_cast<unsigned>(e.phase_code) << '\t' << formatDouble(e.s21_re)
             << '\t' << formatDouble(e.s21_im) << '\t' << formatDouble(e.mag_db) << '\t'
             << formatDouble(e.phase_unwrapped_deg) << '\t' << formatDouble(e.atten_meas_db)
@@ -199,26 +384,58 @@ bool exportDirectLut(const std::filesystem::path& path,
             << '\t' << formatDouble(e.repeatability_db) << '\t'
             << formatDouble(e.repeatability_deg) << '\t' << (e.valid ? 1 : 0) << '\n';
     }
-    return writeMagicAndTsv(path, tsv.str(), diagnostics);
+    return commitAtomicWrite(path, temporary, out, diagnostics);
 }
 
 bool exportInverseLut(const std::filesystem::path& path,
                       std::span<const InverseLutEntry> rows,
                       std::string& diagnostics)
 {
-    std::ostringstream tsv;
-    tsv << "channel\tfreq_hz\ttarget_atten_db\ttarget_phase_deg\tselected_att_code\t"
+    std::filesystem::path temporary;
+    std::ofstream out;
+    if (!beginAfarPqWrite(path, temporary, out, diagnostics)) {
+        return false;
+    }
+    out << "channel\tfreq_hz\ttarget_atten_db\ttarget_phase_deg\tselected_att_code\t"
            "selected_phase_code\tmeasured_atten_db\tmeasured_phase_deg\t"
            "atten_residual_db\tphase_residual_deg\tvalid\n";
     for (const auto& e : rows) {
-        tsv << static_cast<unsigned>(e.channel) << '\t' << e.freq_hz << '\t'
+        out << static_cast<unsigned>(e.channel) << '\t' << e.freq_hz << '\t'
             << formatDouble(e.target_atten_db) << '\t' << formatDouble(e.target_phase_deg)
             << '\t' << e.selected_att_code << '\t' << static_cast<unsigned>(e.selected_phase_code)
             << '\t' << formatDouble(e.measured_atten_db) << '\t'
             << formatDouble(e.measured_phase_deg) << '\t' << formatDouble(e.atten_residual_db)
             << '\t' << formatDouble(e.phase_residual_deg) << '\t' << (e.valid ? 1 : 0) << '\n';
     }
-    return writeMagicAndTsv(path, tsv.str(), diagnostics);
+    return commitAtomicWrite(path, temporary, out, diagnostics);
+}
+
+bool exportInverseLutCsv(const std::filesystem::path& path,
+                         std::string_view run_id,
+                         std::span<const InverseLutEntry> rows,
+                         std::string& diagnostics)
+{
+    if (run_id.empty() || run_id.find_first_of(",\r\n") != std::string_view::npos) {
+        diagnostics = "run_id cannot be represented in calibration CSV";
+        return false;
+    }
+    std::filesystem::path temporary;
+    std::ofstream out;
+    if (!beginAtomicWrite(path, temporary, out, diagnostics)) {
+        return false;
+    }
+    out << "run_id,channel,freq_hz,target_atten_db,target_phase_deg,selected_att_code,"
+           "selected_phase_code,measured_atten_db,measured_phase_deg,atten_residual_db,"
+           "phase_residual_deg,valid\n";
+    for (const auto& e : rows) {
+        out << run_id << ',' << static_cast<unsigned>(e.channel) << ',' << e.freq_hz << ','
+            << formatDouble(e.target_atten_db) << ',' << formatDouble(e.target_phase_deg) << ','
+            << e.selected_att_code << ',' << static_cast<unsigned>(e.selected_phase_code) << ','
+            << formatDouble(e.measured_atten_db) << ',' << formatDouble(e.measured_phase_deg)
+            << ',' << formatDouble(e.atten_residual_db) << ','
+            << formatDouble(e.phase_residual_deg) << ',' << (e.valid ? 1 : 0) << '\n';
+    }
+    return commitAtomicWrite(path, temporary, out, diagnostics);
 }
 
 bool readDirectLut(const std::filesystem::path& path,
@@ -226,13 +443,12 @@ bool readDirectLut(const std::filesystem::path& path,
                    std::string& diagnostics)
 {
     out.clear();
-    std::string tsv;
-    if (!readMagicAndTsv(path, tsv, diagnostics)) {
+    std::ifstream in;
+    if (!openAfarPqRead(path, in, diagnostics)) {
         return false;
     }
-    std::istringstream iss(tsv);
     std::string line;
-    if (!std::getline(iss, line)) {
+    if (!std::getline(in, line)) {
         diagnostics = "empty direct lut tsv";
         return false;
     }
@@ -244,14 +460,14 @@ bool readDirectLut(const std::filesystem::path& path,
         diagnostics = "unexpected direct lut header";
         return false;
     }
-    while (std::getline(iss, line)) {
+    while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
         if (line.empty()) {
             continue;
         }
-        const auto cols = splitTsvLine(line);
+        const auto cols = splitLine(line, '\t');
         if (cols.size() < 14) {
             diagnostics = "direct lut row too short";
             return false;
@@ -278,13 +494,12 @@ bool readInverseLut(const std::filesystem::path& path,
                     std::string& diagnostics)
 {
     out.clear();
-    std::string tsv;
-    if (!readMagicAndTsv(path, tsv, diagnostics)) {
+    std::ifstream in;
+    if (!openAfarPqRead(path, in, diagnostics)) {
         return false;
     }
-    std::istringstream iss(tsv);
     std::string line;
-    if (!std::getline(iss, line)) {
+    if (!std::getline(in, line)) {
         diagnostics = "empty inverse lut tsv";
         return false;
     }
@@ -295,30 +510,76 @@ bool readInverseLut(const std::filesystem::path& path,
         diagnostics = "unexpected inverse lut header";
         return false;
     }
-    while (std::getline(iss, line)) {
+    while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
         if (line.empty()) {
             continue;
         }
-        const auto cols = splitTsvLine(line);
+        const auto cols = splitLine(line, '\t');
         if (cols.size() < 11) {
             diagnostics = "inverse lut row too short";
             return false;
         }
         InverseLutEntry e;
-        bool ok = parseNum(cols[0], e.channel) && parseNum(cols[1], e.freq_hz)
-            && parseNum(cols[2], e.target_atten_db) && parseNum(cols[3], e.target_phase_deg)
-            && parseNum(cols[4], e.selected_att_code) && parseNum(cols[5], e.selected_phase_code)
-            && parseNum(cols[6], e.measured_atten_db) && parseNum(cols[7], e.measured_phase_deg)
-            && parseNum(cols[8], e.atten_residual_db) && parseNum(cols[9], e.phase_residual_deg)
-            && parseBool(cols[10], e.valid);
-        if (!ok) {
+        if (!parseInverseColumns(cols, 0, e)) {
             diagnostics = "inverse lut parse error";
             return false;
         }
         out.push_back(e);
+    }
+    return true;
+}
+
+bool readInverseLutCsv(const std::filesystem::path& path,
+                       std::string& run_id,
+                       std::vector<InverseLutEntry>& out,
+                       std::string& diagnostics)
+{
+    run_id.clear();
+    out.clear();
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        diagnostics = "cannot open for read: " + path.string();
+        return false;
+    }
+    std::string line;
+    if (!std::getline(in, line)) {
+        diagnostics = "empty inverse lut csv";
+        return false;
+    }
+    if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+    }
+    constexpr std::string_view expectedHeader =
+        "run_id,channel,freq_hz,target_atten_db,target_phase_deg,selected_att_code,"
+        "selected_phase_code,measured_atten_db,measured_phase_deg,atten_residual_db,"
+        "phase_residual_deg,valid";
+    if (line != expectedHeader) {
+        diagnostics = "unexpected inverse lut csv header";
+        return false;
+    }
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.empty()) {
+            continue;
+        }
+        const auto cols = splitLine(line, ',');
+        InverseLutEntry entry;
+        if (cols.size() != 12 || cols[0].empty() || !parseInverseColumns(cols, 1, entry)) {
+            diagnostics = "inverse lut csv parse error";
+            return false;
+        }
+        if (run_id.empty()) {
+            run_id.assign(cols[0]);
+        } else if (cols[0] != run_id) {
+            diagnostics = "inverse lut csv contains multiple run_id values";
+            return false;
+        }
+        out.push_back(entry);
     }
     return true;
 }
@@ -378,17 +639,20 @@ bool buildDirectLutFromStore(const RawS21Store& store,
                     in.drift_phase_deg = att_row
                         ? driftAgainstPreviousReference(refs, *att_row, fi)
                         : std::numeric_limits<double>::quiet_NaN();
-                    // В слоте хранится только последний свип: истории повторных attempt нет.
-                    const auto repeatability = cal::repeatability_from_attempts({});
-                    if (repeatability) {
-                        in.repeatability_db = repeatability->db;
-                        in.repeatability_deg = repeatability->deg;
-                    } else {
-                        in.repeatability_db = std::numeric_limits<double>::quiet_NaN();
-                        in.repeatability_deg = std::numeric_limits<double>::quiet_NaN();
-                    }
+                    in.repeatability_db = fi < rec.repeatability_db.size()
+                        ? rec.repeatability_db[fi]
+                        : std::numeric_limits<double>::quiet_NaN();
+                    in.repeatability_deg = fi < rec.repeatability_deg.size()
+                        ? rec.repeatability_deg[fi]
+                        : std::numeric_limits<double>::quiet_NaN();
                     in.sample_valid = (fi < rec.valid.size()) && (rec.valid[fi] != 0)
                         && (fi < norm.size()) && norm[fi].valid && !rec.overload;
+                    qc::QualityInputs repeatability_qc;
+                    repeatability_qc.repeatability_db = in.repeatability_db;
+                    repeatability_qc.repeatability_deg = in.repeatability_deg;
+                    if (!qc::evaluate_valid(repeatability_qc)) {
+                        in.sample_valid = false;
+                    }
                     if (std::isfinite(in.drift_phase_deg)
                         && std::fabs(in.drift_phase_deg) > drift_limit) {
                         in.sample_valid = false;
@@ -443,11 +707,13 @@ bool buildInverseLutFromDirect(const std::vector<cal::DirectLutEntry>& direct,
     for (int ph = config.dut.phase_codes.first; ph <= config.dut.phase_codes.last; ++ph) {
         target_ph.push_back(static_cast<double>(ph) * config.dut.phase_codes.lsb_deg);
     }
+    out.reserve(by_cf.size() * target_att.size() * target_ph.size());
 
     for (const auto& [key, candidates] : by_cf) {
+        const InverseCandidateIndex index(candidates);
         for (const double ta : target_att) {
             for (const double tp : target_ph) {
-                const auto sel = cal::select_inverse_codes(ta, tp, candidates);
+                const auto sel = index.select(ta, tp);
                 InverseLutEntry e;
                 e.channel = key.channel;
                 e.freq_hz = key.freq_hz;

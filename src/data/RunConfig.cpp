@@ -1,6 +1,7 @@
 #include "RunConfig.h"
 
 #include "RunId.h"
+#include "afar/C2220Limits.h"
 
 #include <nlohmann/json.hpp>
 
@@ -12,15 +13,6 @@ namespace afar {
 namespace {
 
 using json = nlohmann::json;
-
-constexpr std::uint64_t kFreqMinHz = 100'000ULL;
-constexpr std::uint64_t kFreqMaxHz = 20'000'000'000ULL;
-constexpr int kPointsMin = 2;
-constexpr int kPointsMax = 500'001;
-constexpr int kIfbwMinHz = 1;
-constexpr int kIfbwMaxHz = 1'000'000;
-constexpr double kPowerMinDbm = -60.0;
-constexpr double kPowerMaxDbm = 10.0;
 
 std::string readUtf8File(const std::filesystem::path& path, std::string& diagnostics)
 {
@@ -182,13 +174,13 @@ bool parseVna(const json& j, VnaConfig& out, std::string& diagnostics)
     if (!requireInt(j.at("f_stop_hz"), "vna.f_stop_hz", f_stop, diagnostics)) {
         return false;
     }
-    if (f_start < static_cast<std::int64_t>(kFreqMinHz)
-        || f_start > static_cast<std::int64_t>(kFreqMaxHz)) {
+    if (f_start < static_cast<std::int64_t>(c2220::kFrequencyMinHz)
+        || f_start > static_cast<std::int64_t>(c2220::kFrequencyMaxHz)) {
         diagnostics = "vna.f_start_hz: out of instrument range 100000..20000000000 Hz";
         return false;
     }
-    if (f_stop < static_cast<std::int64_t>(kFreqMinHz)
-        || f_stop > static_cast<std::int64_t>(kFreqMaxHz)) {
+    if (f_stop < static_cast<std::int64_t>(c2220::kFrequencyMinHz)
+        || f_stop > static_cast<std::int64_t>(c2220::kFrequencyMaxHz)) {
         diagnostics = "vna.f_stop_hz: out of instrument range 100000..20000000000 Hz";
         return false;
     }
@@ -203,7 +195,8 @@ bool parseVna(const json& j, VnaConfig& out, std::string& diagnostics)
     if (!requireInt(j.at("points"), "vna.points", points, diagnostics)) {
         return false;
     }
-    if (points < kPointsMin || points > kPointsMax) {
+    if (points < static_cast<std::int64_t>(c2220::kPointsMin)
+        || points > static_cast<std::int64_t>(c2220::kPointsMax)) {
         diagnostics = "vna.points: out of instrument range 2..500001";
         return false;
     }
@@ -213,7 +206,8 @@ bool parseVna(const json& j, VnaConfig& out, std::string& diagnostics)
     if (!requireInt(j.at("ifbw_hz"), "vna.ifbw_hz", ifbw, diagnostics)) {
         return false;
     }
-    if (ifbw < kIfbwMinHz || ifbw > kIfbwMaxHz) {
+    if (ifbw < static_cast<std::int64_t>(c2220::kIfbwMinHz)
+        || ifbw > static_cast<std::int64_t>(c2220::kIfbwMaxHz)) {
         diagnostics = "vna.ifbw_hz: out of instrument range 1..1000000 Hz";
         return false;
     }
@@ -222,7 +216,8 @@ bool parseVna(const json& j, VnaConfig& out, std::string& diagnostics)
     if (!requireNumber(j.at("power_dbm"), "vna.power_dbm", out.power_dbm, diagnostics)) {
         return false;
     }
-    if (out.power_dbm < kPowerMinDbm || out.power_dbm > kPowerMaxDbm) {
+    if (!std::isfinite(out.power_dbm) || out.power_dbm < c2220::kPowerMinDbm
+        || out.power_dbm > c2220::kPowerMaxDbm) {
         diagnostics = "vna.power_dbm: out of instrument range -60..+10 dBm";
         return false;
     }
@@ -231,11 +226,24 @@ bool parseVna(const json& j, VnaConfig& out, std::string& diagnostics)
     if (!requireInt(j.at("averages"), "vna.averages", averages, diagnostics)) {
         return false;
     }
-    if (averages < 1 || averages > 999) {
+    if (averages < static_cast<std::int64_t>(c2220::kAveragesMin)
+        || averages > static_cast<std::int64_t>(c2220::kAveragesMax)) {
         diagnostics = "vna.averages: out of instrument range 1..999";
         return false;
     }
     out.averages = static_cast<int>(averages);
+    SweepConfig sweep{};
+    sweep.f_start_hz = out.f_start_hz;
+    sweep.f_stop_hz = out.f_stop_hz;
+    sweep.points = static_cast<std::uint32_t>(out.points);
+    sweep.ifbw_hz = static_cast<std::uint32_t>(out.ifbw_hz);
+    sweep.power_dbm = out.power_dbm;
+    sweep.averages = static_cast<std::uint16_t>(out.averages);
+    std::string sweepDiagnostics;
+    if (!c2220::validateSweep(sweep, sweepDiagnostics)) {
+        diagnostics = "vna: " + sweepDiagnostics;
+        return false;
+    }
     return true;
 }
 

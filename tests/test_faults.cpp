@@ -82,3 +82,30 @@ TEST_CASE("AT-08 DUT reject does not measure", "[faults][AT-08][TEST-009]")
     // Без успешного apply слот не completed.
     REQUIRE(orch.store().completedCount() == 0);
 }
+
+TEST_CASE("series rejects a VNA frequency axis different from run config", "[faults][axis]")
+{
+    const auto root = std::filesystem::temp_directory_path() / "afar_fault_axis";
+    std::filesystem::remove_all(root);
+    const auto fixtures = root / "fixtures";
+    afar::test::writeProbeFixtures(fixtures, "RX16-20260922-012", 5);
+
+    afar::RunConfig cfg;
+    afar::AttenuatorCodes att;
+    std::string diag;
+    REQUIRE(afar::test::loadProbeConfig(fixtures, cfg, att, diag));
+
+    VnaSimulator vna;
+    vna.set_frequency_offset_hz(1);
+    DutSimulator dut;
+    afar::MeasurementOrchestrator orch(&vna, &dut);
+    orch.setConfig(cfg, att);
+    orch.setSleepEnabled(false);
+    REQUIRE(orch.prepare(root / "data", fixtures / "run-config.json",
+                         fixtures / "attenuator-codes.csv", diag));
+    REQUIRE(orch.start(diag));
+    orch.runUntilDone();
+
+    REQUIRE(orch.state() == afar::RunState::Error);
+    REQUIRE_THAT(orch.lastError(), ContainsSubstring("frequency axis mismatch"));
+}

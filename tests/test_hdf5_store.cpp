@@ -58,6 +58,8 @@ TEST_CASE("RawS21Store create/write/reopen/completed", "[hdf5_store][DATA-006][T
 
     afar::RawS21StateRecord rec;
     rec.s21 = {{1.0, 2.0}, {3.0, 4.0}, {5.0, 6.0}};
+    rec.repeatability_db = {0.01, 0.02, 0.03};
+    rec.repeatability_deg = {0.1, 0.2, 0.3};
     rec.valid = {1, 1, 0};
     rec.temperature_c = 25.5f;
     rec.overload = false;
@@ -85,6 +87,8 @@ TEST_CASE("RawS21Store create/write/reopen/completed", "[hdf5_store][DATA-006][T
     REQUIRE(got.s21.size() == 3);
     REQUIRE(got.s21[0].real() == Catch::Approx(1.0));
     REQUIRE(got.s21[2].imag() == Catch::Approx(6.0));
+    REQUIRE(got.repeatability_db[1] == Catch::Approx(0.02));
+    REQUIRE(got.repeatability_deg[2] == Catch::Approx(0.3));
     REQUIRE(reopened.completedCount() == 1);
 
     // clearCompleted снимает AT-05 блок и позволяет переписать слот
@@ -151,4 +155,35 @@ TEST_CASE("RunEventLog append JSONL without S21 arrays", "[hdf5_store][DATA-007]
     REQUIRE(afar::RunEventLog::parseLine(legacy, legacy_ev, diag));
     REQUIRE(legacy_ev.timestamp_utc == "2020-01-01T00:00:00.000Z");
     REQUIRE(legacy_ev.text == "old");
+}
+
+TEST_CASE("RunEventLog rotates and loads all segments in order", "[hdf5_store][DATA-007][LOG-01]")
+{
+    const auto dir = std::filesystem::temp_directory_path() / "afar_run_events_rotation_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "run-events.jsonl";
+
+    afar::RunEventLog log;
+    std::string diag;
+    REQUIRE(afar::RunEventLog::openAppend(path, log, diag, 300));
+    for (int i = 0; i < 20; ++i) {
+        afar::RunEvent event;
+        event.timestamp_utc = "2026-09-22T12:00:00.000Z";
+        event.component = "rotation-test";
+        event.event_code = "EVENT-" + std::to_string(i);
+        event.run_id = "RX16-20260922-001";
+        event.text = "journal rotation payload";
+        REQUIRE(log.append(event, diag));
+    }
+    log.close();
+
+    REQUIRE(std::filesystem::exists(dir / "run-events.0001.jsonl"));
+    std::vector<afar::RunEvent> events;
+    REQUIRE(afar::RunEventLog::load(path, events, diag));
+    REQUIRE(events.size() == 20);
+    for (int i = 0; i < 20; ++i) {
+        REQUIRE(events[static_cast<std::size_t>(i)].event_code
+                == "EVENT-" + std::to_string(i));
+    }
 }

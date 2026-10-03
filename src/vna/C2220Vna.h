@@ -31,10 +31,17 @@ public:
     /// Последний успешный `identify()` (пустая строка до первого вызова).
     const ScpiIdnFields& last_idn() const noexcept { return last_idn_; }
     void configure(const SweepConfig& config) override;
+    SweepConfig read_config() override;
     ComplexSweep measure_trace() override;
     ComplexSweep measure_s21() override;
     /// Считать уже отображаемую в S2VNA трассу без изменения диапазона и нового trigger.
     ComplexSweep read_current_trace(SweepConfig* instrument_config = nullptr);
+    /// Текущий комплект мер S2VNA, например `CKIT 1 (85032F)`.
+    std::string current_calibration_kit_id();
+    /// Выбрать один из комплектов мер S2VNA 1..64 и вернуть его номер/метку.
+    std::string select_calibration_kit(int index);
+    /// Включена ли коррекция на активном канале S2VNA.
+    bool correction_enabled();
     void calibrate_one_port(OnePortCalibrationStep step, int port) override;
     void calibrate_two_port(TwoPortCalibrationStep step) override;
     std::vector<std::string> drain_errors() override;

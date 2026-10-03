@@ -19,8 +19,8 @@ CMake-имя проекта: `AfarRxCalibrationStudio`. Целевая ОС: Win
 | Компонент | Версия / роль |
 |-----------|----------------|
 | Язык | C++20 (`CMAKE_CXX_STANDARD 20`, расширения выключены) |
-| Сборка | CMake ≥ 3.22, CTest |
-| Компилятор | MinGW/UCRT64 (`g++`), генератор `MinGW Makefiles` |
+| Сборка | CMake ≥ 3.22, Ninja, CTest |
+| Компилятор | MinGW/UCRT64 (`g++`) |
 | GUI | Qt 6 |
 | Тесты | Catch2 v3.7.1 (FetchContent при конфигурации) |
 | Сырой S21 / LUT | собственные контейнеры **AFARH5** и **AFARPQ** (имена файлов `raw-s21.h5`, `*.parquet` по каталогу серии) — **без** системных libhdf5 и Apache Arrow |
@@ -35,31 +35,31 @@ CMake-имя проекта: `AfarRxCalibrationStudio`. Целевая ОС: Win
 
 1. **CMake 3.22+** и **Git** (первый `cmake -S` качает Catch2 и nlohmann_json).
 2. **MinGW/UCRT64** — в `PATH` сессии: `g++.exe`, `mingw32-make.exe`.
-3. **Qt 6** — префикс через `CMAKE_PREFIX_PATH`. `find_package(Qt6 … REQUIRED)` только для exe `AfarRxCalibrationStudio`; библиотеки `afar_*` и их тесты Qt не линкуют (кроме самого GUI).
+3. **Qt 6** — префикс через `CMAKE_PREFIX_PATH`. Qt Widgets используется GUI, Qt Gui — генератором двухпортового PDF-отчёта.
 
 Живой C1220/C2220 для сборки и обычного `ctest` не нужен: приёмка AT-01…AT-11 на имитаторах и TCP-stub. Прибор нужен для измерений на стенде и для аппаратной части AT-01.
 
 ## Сборка и тесты
 
-Каталог `build/` — артефакт конфигурации (см. `.gitignore`). Генератор — **MinGW Makefiles**.
+Каталог `build/` — единственный актуальный каталог сборки (см. `.gitignore`). Генератор — **Ninja**.
 
 ```bat
-cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=C:/msys64/ucrt64/bin/g++.exe -DCMAKE_PREFIX_PATH=C:/msys64/ucrt64
-cmake --build build
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=C:/msys64/ucrt64/bin/c++.exe -DCMAKE_MAKE_PROGRAM=C:/msys64/ucrt64/bin/ninja.exe -DCMAKE_PREFIX_PATH=C:/msys64/ucrt64
+cmake --build build --parallel 12
 ctest --test-dir build --output-on-failure
 ```
 
 Если MinGW `bin` уже в `PATH` и задан `CMAKE_PREFIX_PATH`:
 
 ```bat
-cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 12
 ctest --test-dir build --output-on-failure
 ```
 
 На MinGW 13 флаг `-O3` в Release заменяется на `-O2` (ICE GCC). Предупреждения — как ошибки (`-Wall -Wextra -Wpedantic -Werror`).
 
-### Список CTest (14)
+### Список CTest (18 на Windows)
 
 | Имя | Назначение |
 |-----|------------|
@@ -74,9 +74,19 @@ ctest --test-dir build --output-on-failure
 | `crash_recovery` | AT-06: восстановление после сбоя |
 | `faults` | AT-07 / AT-08: тайм-аут VNA, отказ DUT |
 | `export_manifest` | AT-11: LUT/PDF/манифест SHA-256 (тот же путь — `finalizeExports` в Finalizing при Complete) |
+| `two_port_export` | единый снимок S11/S21/S12/S22 → Touchstone `.s2p` и двухстраничный PDF |
 | `c2220_driver` | AT-01 драйвер: Socket + TCP-stub SCPI |
 | `full_sim_run` | AT-04: компактная сетка в CI; полный объём — см. ниже |
 | `lut_perf` | замер LUT (probe в CI; полный объём — см. ниже) |
+| `at12_soak` | AT-12: 24-часовой прогон и контроль роста RSS; без переменной окружения — SKIP |
+| `verify_series_tool` | самотест независимого PowerShell-верификатора серии |
+| `ui_interactions` | режимы работы, диапазон частот и форматы графиков |
+
+Вкладка AT-12 автоматически пишет CSV с RSS, private bytes, количеством handles/потоков
+и свободным местом раз в минуту. Это телеметрия длительного прогона, а не замена
+стендового протокола приёмки.
+JSONL-журнал серии ротируется по 16 МиБ; нумерованные сегменты читаются как единый
+журнал и входят в итоговый SHA-256 манифест.
 
 Выборочно: `ctest --test-dir build -R "smoke|simulators" --output-on-failure`.
 
@@ -92,15 +102,51 @@ build\tests\test_lut_perf.exe "[full]"
 
 Без `AFAR_RUN_AT04=1` кейсы с тегом `[full]` пропускаются (`SKIP`).
 
+### Длительный AT-12 (`AFAR_RUN_AT12`)
+
+```bat
+set AFAR_RUN_AT12=1
+build\tests\test_at12_soak.exe
+```
+
+По умолчанию прогон длится 24 часа, первый час считается стабилизацией. Для короткой
+локальной проверки можно задать `AFAR_AT12_SECONDS` и
+`AFAR_AT12_STABILIZE_SECONDS`. Критерий теста — рост RSS не более 10%.
+
+### Независимая проверка серии
+
+```powershell
+.\tools\verify-series.ps1 -SelfTest
+.\tools\verify-series.ps1 "C:\Data\RX16-YYYYMMDD-NNN"
+```
+
+Утилита сверяет полный охват файлов манифестом, SHA-256, magic контейнеров,
+структуру CSV/LUT/PDF/JSONL и согласованность `run_id`.
+
+### Переносимая Windows-поставка
+
+```powershell
+.\tools\package-windows.ps1
+```
+
+Скрипт собирает приложение, разворачивает Qt/MinGW runtime, выполняет smoke-start и
+создаёт runtime ZIP, архив исходников, SHA-256, SPDX SBOM и комплект лицензий в `dist/`.
+
 ## Запуск GUI
 
-После сборки:
+После сборки запускается только этот файл:
 
 ```bat
 build\src\AfarRxCalibrationStudio.exe
 ```
 
-Нужны DLL Qt в `PATH` (или рядом с exe). По умолчанию железо **не** трогается: режим **Имитатор**. Для живого C1220/C2220 — см. [`docs/S2VNA-setup.md`](docs/S2VNA-setup.md): запустить S2VNA, включить Socket 5025, выбрать **S2VNA Socket** и **«Проверить связь»**. На экране **«4 S-параметры / фильтр»** доступны S11/S21/S12/S22 и единицы Гц/кГц/МГц/ГГц. Кнопка измерения строит графики с координатной сеткой; отдельная кнопка сохраняет последнее измерение как `s_parameter,frequency_hz,real,imag,magnitude_db,phase_deg`.
+Нужны DLL Qt в `PATH` (или рядом с exe). По умолчанию выбран локальный **C2220 Socket (SCPI)**: программа включает Socket Server, запускает S2VNA скрыто и сама проверяет связь. Режим **Имитатор** остаётся для разработки без прибора. Подробности: [`docs/S2VNA-setup.md`](docs/S2VNA-setup.md).
+
+В режиме **«Двухпортовое устройство»** доступны все страницы этапов; страницы LUT заполняются результатами серии калибровки канала. Диапазон задаётся как **начальная/конечная** либо **центральная/полоса** частот с единицами Гц/кГц/МГц/ГГц. Форматы отображения: амплитуда + фаза, амплитуда в дБ, линейный модуль, развёрнутая фаза, групповая задержка; отдельно доступны КСВН-1 и КСВН-2.
+
+После **«Применить настройки и измерить всё»** программа получает S11/S21/S12/S22 с прибора одним логическим измерением. Кнопка **«Сохранить .s2p и отчёт PDF»** становится доступна только при наличии полного согласованного набора четырёх трасс; она сохраняет Touchstone 1.0 в порядке S11, S21, S12, S22 и пятистраничный PDF: титульный лист и отдельную страницу для каждого графика с MIN/MAX/AVG, фазой, параметрами свипа и пользовательскими маркерами. Повторное измерение при экспорте не выполняется. Усреднение 1…999 управляется через подтверждённые команды S2VNA `SENS:AVER*` / `TRIG:AVER`.
+
+В режиме **«Калибровка канала 64×64»** мастер предлагает три объёма: короткий проверочный прогон, полный перебор 64×64 для одного выбранного канала 1…16 либо полный AT-04 для всех 16 каналов. Одноканальный режим формирует 4096 состояний. Помимо общих `direct-lut.parquet`, `inverse-lut.parquet` и `report.pdf`, для каждого измеренного канала создаются рабочая обратная LUT `channel-XX-calibration.parquet` и отдельный `channel-XX-report.pdf`; все файлы входят в SHA-256 манифест. С реальным изделием режим станет рабочим после передачи протокола контроллера; сейчас полный цикл проверяется на `DutSimulator`.
 
 Этап **«2 Калибровка VNA»** содержит пошаговую полную двухпортовую SOLT: соединение, OPEN/SHORT/LOAD обоих портов, THRU и применение. Перед началом в S2VNA выбирается фактический комплект калибровочных мер.
 
@@ -155,6 +201,8 @@ build\src\AfarRxCalibrationStudio.exe
 | `docs/contracts/` | контракты SCPI, интерфейсов, форматов |
 | `docs/plans/` | планы работ |
 | `docs/reports/` | отчёты по волнам / оркестрации |
+| `packaging/` | сведения о сторонних компонентах поставки |
+| `tools/` | независимая проверка серии и сборка Windows-поставки |
 | `Planar_documentation/` | локальные руководства C2220 / S2VNA |
 | `afar_stage1_software_tz.pdf` | ТЗ этапа 1 |
 
@@ -171,6 +219,9 @@ build\src\AfarRxCalibrationStudio.exe
 - SCPI C1220/C2220 / S2VNA: [`docs/contracts/vna-c2220-scpi.md`](docs/contracts/vna-c2220-scpi.md)
 - C++-интерфейсы и автомат: [`docs/contracts/cpp-interfaces.md`](docs/contracts/cpp-interfaces.md)
 - Каталог серии и форматы: [`docs/contracts/data-formats.md`](docs/contracts/data-formats.md)
+- Руководство оператора: [`docs/operator-guide.md`](docs/operator-guide.md)
+- Руководство администратора: [`docs/admin-guide.md`](docs/admin-guide.md)
+- Программная методика испытаний: [`docs/software-test-procedure.md`](docs/software-test-procedure.md)
 - Итог волн 0–10: [`docs/reports/2026-09-22-afar-stage1-wave0-10.md`](docs/reports/2026-09-22-afar-stage1-wave0-10.md)
 - Сверка ТЗ / GAP: [`docs/reports/2026-09-24-afar-tz-gap.md`](docs/reports/2026-09-24-afar-tz-gap.md)
 - Документация прибора: [`Planar_documentation/`](Planar_documentation/)

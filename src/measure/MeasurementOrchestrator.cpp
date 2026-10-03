@@ -2,18 +2,23 @@
 
 #include "Manifest.h"
 #include "ParquetExport.h"
+#include "PhaseMath.h"
 #include "QualityGates.h"
 #include "RawS21TableExport.h"
 #include "RunReportPdf.h"
 
 #include "afar/ScpiIdn.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 
 namespace afar {
 namespace {
@@ -23,14 +28,10 @@ bool idnContainsC2220(const std::string& idn)
     return idn.find("C2220") != std::string::npos;
 }
 
-bool hasNanOrInf(const ComplexSweep& sweep)
+std::string channelArtifactStem(std::uint8_t channel)
 {
-    for (const auto& z : sweep.s21) {
-        if (!std::isfinite(z.real()) || !std::isfinite(z.imag())) {
-            return true;
-        }
-    }
-    return false;
+    return std::string("channel-") + (channel < 10 ? "0" : "")
+        + std::to_string(static_cast<unsigned>(channel));
 }
 
 DutState appliedStand(const ScanItem& item, const RunConfig& config)
@@ -72,8 +73,21 @@ SweepConfig sweepConfigFromRun(const RunConfig& config)
     return sweep;
 }
 
+const char* sParameterName(SParameter parameter)
+{
+    switch (parameter) {
+    case SParameter::S11: return "S11";
+    case SParameter::S21: return "S21";
+    case SParameter::S12: return "S12";
+    case SParameter::S22: return "S22";
+    }
+    return "S?";
+}
+
 /// DATA-102: четыре trace через полный configure (публичного DEF-only в C2220Vna нет).
-ComplexSweep measureAllFour(IVna& vna, SweepConfig base)
+/// Один сбой не должен стирать уже полученные трассы: переподключаемся один раз
+/// и продолжаем измерять остальные S-параметры.
+ComplexSweep measureAllFour(IVna& vna, SweepConfig base, std::vector<std::string>& failures)
 {
     ComplexSweep out;
     constexpr SParameter order[] = {
@@ -84,28 +98,56 @@ ComplexSweep measureAllFour(IVna& vna, SweepConfig base)
     };
     for (const auto p : order) {
         base.s_parameter = p;
-        vna.configure(base);
-        auto part = vna.measure_trace();
-        if (out.frequency_hz.empty()) {
-            out.frequency_hz = std::move(part.frequency_hz);
+        std::string last_error;
+        bool measured = false;
+        for (int attempt = 0; attempt < 2 && !measured; ++attempt) {
+            try {
+                if (attempt != 0) {
+                    vna.abort();
+                    vna.connect();
+                }
+                vna.configure(base);
+                auto part = vna.measure_trace();
+                if (part.frequency_hz.size() < 2
+                    || (!out.frequency_hz.empty() && part.frequency_hz != out.frequency_hz)) {
+                    throw std::runtime_error("frequency axis mismatch");
+                }
+                if (out.frequency_hz.empty()) {
+                    out.frequency_hz = std::move(part.frequency_hz);
+                }
+                out.overload = out.overload || part.overload;
+                switch (p) {
+                case SParameter::S11: out.s11 = std::move(part.s11); break;
+                case SParameter::S21: out.s21 = std::move(part.s21); break;
+                case SParameter::S12: out.s12 = std::move(part.s12); break;
+                case SParameter::S22: out.s22 = std::move(part.s22); break;
+                }
+                measured = true;
+            } catch (const std::exception& ex) {
+                last_error = ex.what();
+            }
         }
-        out.overload = out.overload || part.overload;
-        switch (p) {
-        case SParameter::S11:
-            out.s11 = std::move(part.s11);
-            break;
-        case SParameter::S21:
-            out.s21 = std::move(part.s21);
-            break;
-        case SParameter::S12:
-            out.s12 = std::move(part.s12);
-            break;
-        case SParameter::S22:
-            out.s22 = std::move(part.s22);
-            break;
+        if (!measured) {
+            failures.push_back(std::string(sParameterName(p)) + ": " + last_error);
         }
     }
+    if (out.frequency_hz.empty()) {
+        if (!failures.empty()) {
+            throw std::runtime_error(failures.front());
+        }
+        throw std::runtime_error("не удалось измерить ни одного S-параметра");
+    }
     return out;
+}
+
+ComplexSweep measureAllFour(IVna& vna, SweepConfig base)
+{
+    std::vector<std::string> failures;
+    auto sweep = measureAllFour(vna, base, failures);
+    if (!failures.empty()) {
+        throw std::runtime_error(failures.front());
+    }
+    return sweep;
 }
 
 }  // namespace
@@ -348,6 +390,35 @@ bool MeasurementOrchestrator::prepareRecovery(const std::filesystem::path& serie
     }
     if (!RawS21Store::open(series_.rawS21Path(), store_, diagnostics)) {
         return false;
+    }
+    if (store_.channels() != scan_.channels()
+        || store_.attCodes() != scan_.enabledAttCodes()
+        || store_.phaseCodes() != scan_.phaseCodes()
+        || store_.frequencyHz() != frequency_axis_) {
+        diagnostics = "raw-s21.h5 axes do not match recovered run configuration";
+        return false;
+    }
+
+    // Состояние записывается до обязательной опоры. Если процесс упал между этими
+    // операциями, повторяем последний state строки, иначе recovery его пропустит.
+    for (std::size_t i = 0; i < scan_.size(); ++i) {
+        const auto& item = scan_.at(i);
+        const auto& state = item.state;
+        if (!item.need_reference
+            || !store_.isCompleted(state.channel, state.att_code, state.phase_code)) {
+            continue;
+        }
+        const auto row = scan_.referenceAttRow(state.att_code);
+        std::vector<std::complex<double>> reference;
+        std::string reference_diag;
+        if (!row || !store_.readReference(state.channel, *row, reference, reference_diag)) {
+            if (!store_.clearCompleted(state.channel, state.att_code, state.phase_code,
+                                       diagnostics)) {
+                return false;
+            }
+            logEvent(EventLevel::Warning, "RECOVERY_REFERENCE_MISSING",
+                     "required reference is missing; preceding state scheduled again", &state);
+        }
     }
     if (!ensureHardwareReady(diagnostics)) {
         last_error_ = diagnostics;
@@ -611,6 +682,10 @@ bool MeasurementOrchestrator::measureReference(const ScanItem& after_item)
     }
     try {
         ComplexSweep sweep = measureAllFour(*vna_, sweepConfigFromRun(config_));
+        if (sweep.frequency_hz != frequency_axis_
+            || sweep.s21.size() != frequency_axis_.size()) {
+            throw std::runtime_error("reference frequency axis mismatch");
+        }
         drainAndLogVnaErrors(&ref);
         const auto row = scan_.referenceAttRow(after_item.state.att_code);
         if (!row) {
@@ -666,6 +741,7 @@ bool MeasurementOrchestrator::measureOneState(const ScanItem& item)
     }
 
     ComplexSweep sweep;
+    ComplexSweep repeat_sweep;
     bool vna_error = false;
     std::string vna_msg;
     const int max_tries = 1 + kVnaRetries;
@@ -674,6 +750,18 @@ bool MeasurementOrchestrator::measureOneState(const ScanItem& item)
         ++attempt;
         try {
             sweep = measureAllFour(*vna_, base_sweep);
+            if (sweep.frequency_hz != frequency_axis_
+                || sweep.s21.size() != frequency_axis_.size()) {
+                throw std::runtime_error("measurement frequency axis mismatch");
+            }
+            auto repeat_config = base_sweep;
+            repeat_config.s_parameter = SParameter::S21;
+            vna_->configure(repeat_config);
+            repeat_sweep = vna_->measure_s21();
+            if (repeat_sweep.frequency_hz != frequency_axis_
+                || repeat_sweep.s21.size() != frequency_axis_.size()) {
+                throw std::runtime_error("repeatability frequency axis mismatch");
+            }
             drainAndLogVnaErrors(&st);
             vna_error = false;
             break;
@@ -696,6 +784,9 @@ bool MeasurementOrchestrator::measureOneState(const ScanItem& item)
     if (vna_error) {
         // AT-07: помечаем invalid после исчерпания повторов.
         rec.s21.assign(frequency_axis_.size(), {0.0, 0.0});
+        const double unavailable = std::numeric_limits<double>::quiet_NaN();
+        rec.repeatability_db.assign(frequency_axis_.size(), unavailable);
+        rec.repeatability_deg.assign(frequency_axis_.size(), unavailable);
         rec.valid.assign(frequency_axis_.size(), 0);
         rec.overload = false;
         last_error_ = vna_msg;
@@ -709,23 +800,32 @@ bool MeasurementOrchestrator::measureOneState(const ScanItem& item)
 
     // LUT — только S21; полный ComplexSweep остаётся в last_sweep_ для UI.
     rec.s21 = sweep.s21;
-    rec.overload = sweep.overload;
-
-    qc::QualityInputs qi;
-    qi.code_confirmed = true;
-    qi.vna_timeout_or_error = false;
-    qi.length_mismatch =
-        (sweep.frequency_hz.size() != frequency_axis_.size()
-         || sweep.s21.size() != frequency_axis_.size());
-    qi.has_nan_or_inf = hasNanOrInf(sweep);
-    qi.overload = sweep.overload;
+    rec.overload = sweep.overload || repeat_sweep.overload;
+    rec.repeatability_db.resize(frequency_axis_.size());
+    rec.repeatability_deg.resize(frequency_axis_.size());
+    rec.valid.resize(frequency_axis_.size());
 
     qc::QualityThresholds th;
     th.max_drift_phase_deg = config_.limits.max_drift_phase_deg;
     th.max_phase_residual_deg = config_.limits.max_phase_residual_deg;
-    const bool ok = qc::evaluate_valid(qi, th);
+    for (std::size_t i = 0; i < frequency_axis_.size(); ++i) {
+        const auto repeatability =
+            cal::repeatability_from_attempts({sweep.s21[i], repeat_sweep.s21[i]});
+        const double unavailable = std::numeric_limits<double>::quiet_NaN();
+        rec.repeatability_db[i] = repeatability ? repeatability->db : unavailable;
+        rec.repeatability_deg[i] = repeatability ? repeatability->deg : unavailable;
 
-    rec.valid.assign(frequency_axis_.size(), ok ? 1 : 0);
+        qc::QualityInputs qi;
+        qi.code_confirmed = true;
+        qi.has_nan_or_inf = !std::isfinite(sweep.s21[i].real())
+            || !std::isfinite(sweep.s21[i].imag())
+            || !std::isfinite(repeat_sweep.s21[i].real())
+            || !std::isfinite(repeat_sweep.s21[i].imag());
+        qi.overload = rec.overload;
+        qi.repeatability_db = rec.repeatability_db[i];
+        qi.repeatability_deg = rec.repeatability_deg[i];
+        rec.valid[i] = qc::evaluate_valid(qi, th) ? 1 : 0;
+    }
 
     std::string diag;
     if (!store_.writeState(st.channel, st.att_code, st.phase_code, rec, diag)) {
@@ -913,6 +1013,177 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
     pdf_info.run_id = config_.run_id;
     pdf_info.completed_states = store_.completedCount();
     pdf_info.valid_direct_count = report::countValidDirect(direct);
+    pdf_info.valid_inverse_count = report::countValidInverse(inverse);
+    const auto expected_valid_inverse = pdf_info.valid_inverse_count;
+    pdf_info.frequency_points = store_.frequencyHz().size();
+    pdf_info.attenuator_codes = store_.attCodes().size();
+    pdf_info.phase_codes = store_.phaseCodes().size();
+    pdf_info.ifbw_hz = config_.vna.ifbw_hz;
+    pdf_info.power_dbm = config_.vna.power_dbm;
+    pdf_info.averages = config_.vna.averages;
+    if (!store_.frequencyHz().empty()) {
+        pdf_info.f_start_hz = store_.frequencyHz().front();
+        pdf_info.f_stop_hz = store_.frequencyHz().back();
+    }
+    std::array<std::size_t, 256> channel_indices{};
+    channel_indices.fill(std::numeric_limits<std::size_t>::max());
+    std::unordered_map<std::uint16_t, std::size_t> att_indices;
+    std::array<std::size_t, 256> phase_indices{};
+    phase_indices.fill(std::numeric_limits<std::size_t>::max());
+    std::unordered_map<std::uint16_t, double> nominal_attenuation;
+    for (std::size_t index = 0; index < store_.attCodes().size(); ++index) {
+        att_indices.emplace(store_.attCodes()[index], index);
+    }
+    for (std::size_t index = 0; index < store_.phaseCodes().size(); ++index) {
+        phase_indices[store_.phaseCodes()[index]] = index;
+    }
+    for (const auto& row : att_codes_.rows) {
+        if (row.enabled && row.att_code >= 0 && row.att_code <= 65'535) {
+            nominal_attenuation[static_cast<std::uint16_t>(row.att_code)] = row.att_cmd_db;
+        }
+    }
+    const std::uint64_t center_frequency = store_.frequencyHz().empty()
+        ? 0 : store_.frequencyHz()[store_.frequencyHz().size() / 2];
+
+    for (const auto channel : store_.channels()) {
+        report::ChannelReportInfo channel_info;
+        channel_info.channel = channel;
+        channel_info.expected_states = store_.attCodes().size() * store_.phaseCodes().size();
+        channel_info.center_frequency_hz = center_frequency;
+        channel_info.att_codes = store_.attCodes();
+        channel_info.phase_codes = store_.phaseCodes();
+        channel_info.states.reserve(channel_info.expected_states);
+        for (const auto att : store_.attCodes()) {
+            for (const auto phase : store_.phaseCodes()) {
+                RawS21StateRecord record;
+                if (!store_.readState(channel, att, phase, record, diagnostics)) {
+                    return false;
+                }
+                report::ChannelStateReport state;
+                state.att_code = att;
+                state.phase_code = phase;
+                state.completed = record.completed;
+                state.overload = record.overload;
+                state.attempt = record.attempt;
+                if (record.completed) {
+                    ++channel_info.completed_states;
+                }
+                if (record.overload) {
+                    ++channel_info.overload_states;
+                }
+                if (record.attempt > 1) {
+                    channel_info.retry_count += record.attempt - 1;
+                }
+                channel_info.states.push_back(state);
+            }
+        }
+        channel_info.valid_inverse_count = static_cast<std::size_t>(std::count_if(
+            inverse.begin(), inverse.end(), [channel](const report::InverseLutEntry& entry) {
+                return entry.channel == channel && entry.valid;
+            }));
+        channel_indices[channel] = pdf_info.channels.size();
+        pdf_info.channels.push_back(channel_info);
+    }
+
+    for (const auto& entry : direct) {
+        const auto channel_index = channel_indices[entry.channel];
+        const auto att = att_indices.find(entry.att_code);
+        const auto phase_index = phase_indices[entry.phase_code];
+        if (channel_index == std::numeric_limits<std::size_t>::max()
+            || att == att_indices.end()
+            || phase_index == std::numeric_limits<std::size_t>::max()) {
+            diagnostics = "direct LUT contains an unknown channel/attenuator/phase code";
+            return false;
+        }
+        auto& channel = pdf_info.channels[channel_index];
+        auto& state = channel.states[att->second * channel.phase_codes.size() + phase_index];
+        ++state.sample_count;
+        if (entry.valid) {
+            ++state.valid_sample_count;
+            ++channel.valid_direct_count;
+        } else {
+            ++channel.invalid_direct_count;
+        }
+        const auto nominal = nominal_attenuation.find(entry.att_code);
+        const double atten_error = nominal == nominal_attenuation.end()
+            ? entry.atten_meas_db : entry.atten_meas_db - nominal->second;
+        if (entry.freq_hz == center_frequency) {
+            state.center_atten_db = entry.atten_meas_db;
+            state.center_phase_error_deg = entry.phase_error_deg;
+            state.center_value_available = std::isfinite(entry.atten_meas_db)
+                && std::isfinite(entry.phase_error_deg);
+        }
+        if (std::isfinite(atten_error)) {
+            channel.max_atten_error_db = std::max(channel.max_atten_error_db,
+                                                   std::fabs(atten_error));
+        }
+        if (std::isfinite(entry.phase_error_deg)) {
+            channel.max_phase_error_deg = std::max(channel.max_phase_error_deg,
+                                                   std::fabs(entry.phase_error_deg));
+        }
+        if (std::isfinite(entry.repeatability_db)) {
+            channel.max_repeatability_db = std::max(channel.max_repeatability_db,
+                                                    std::fabs(entry.repeatability_db));
+        }
+        if (std::isfinite(entry.repeatability_deg)) {
+            channel.max_repeatability_deg = std::max(channel.max_repeatability_deg,
+                                                     std::fabs(entry.repeatability_deg));
+        }
+        if (std::isfinite(entry.drift_phase_deg)) {
+            channel.max_drift_phase_deg = std::max(channel.max_drift_phase_deg,
+                                                   std::fabs(entry.drift_phase_deg));
+        }
+        const double severity = std::max(std::isfinite(atten_error) ? std::fabs(atten_error) : 0.0,
+                                         std::isfinite(entry.phase_error_deg)
+                                             ? std::fabs(entry.phase_error_deg) : 0.0);
+        const double previous = std::max(std::fabs(state.worst_atten_error_db),
+                                         std::fabs(state.worst_phase_error_deg));
+        if (state.worst_frequency_hz == 0 || severity > previous) {
+            state.worst_frequency_hz = entry.freq_hz;
+            state.worst_atten_error_db = atten_error;
+            state.worst_phase_error_deg = entry.phase_error_deg;
+        }
+    }
+    for (auto& channel : pdf_info.channels) {
+        const auto expected_samples = store_.frequencyHz().size();
+        for (auto& state : channel.states) {
+            state.valid = state.completed && !state.overload
+                && state.sample_count == expected_samples
+                && state.valid_sample_count == expected_samples;
+            if (state.valid) {
+                ++channel.valid_states;
+            } else if (state.completed) {
+                ++channel.error_states;
+            }
+        }
+        std::vector<const report::ChannelStateReport*> ordered;
+        ordered.reserve(channel.states.size());
+        for (const auto& state : channel.states) {
+            if (state.completed) {
+                ordered.push_back(&state);
+            }
+        }
+        std::sort(ordered.begin(), ordered.end(), [](const auto* left, const auto* right) {
+            if (left->valid != right->valid) {
+                return !left->valid;
+            }
+            const double left_severity = std::max(std::fabs(left->worst_atten_error_db),
+                                                  std::fabs(left->worst_phase_error_deg));
+            const double right_severity = std::max(std::fabs(right->worst_atten_error_db),
+                                                   std::fabs(right->worst_phase_error_deg));
+            return left_severity > right_severity;
+        });
+        const auto count = std::min<std::size_t>(20, ordered.size());
+        channel.worst_states.reserve(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto& state = *ordered[index];
+            channel.worst_states.push_back({state.att_code, state.phase_code,
+                                            state.worst_frequency_hz,
+                                            state.worst_atten_error_db,
+                                            state.worst_phase_error_deg,
+                                            state.valid});
+        }
+    }
     pdf_info.series_path = series_.root().string();
     pdf_info.vna_idn = store_.vnaIdn();
     {
@@ -921,6 +1192,8 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
         pdf_info.vna_model = fields.model;
         pdf_info.vna_serial = fields.serial;
         pdf_info.vna_firmware = fields.firmware;
+        pdf_info.demo_mode = config_.controller.driver == "sim"
+            || (fields.model.find("C2220") != std::string::npos && fields.serial.empty());
     }
     pdf_info.max_drift_phase_deg = config_.limits.max_drift_phase_deg;
     pdf_info.max_phase_residual_deg = config_.limits.max_phase_residual_deg;
@@ -932,6 +1205,79 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
         return false;
     }
 
+    // Один рабочий калибровочный файл и один PDF на канал. Direct LUT остаётся общей
+    // диагностической таблицей, чтобы не удваивать самый большой файл серии.
+    const std::string raw_sha256 = report::sha256FileHex(series_.rawS21Path(), diagnostics);
+    if (raw_sha256.empty()) {
+        return false;
+    }
+    for (const auto& channel_info : pdf_info.channels) {
+        std::vector<report::InverseLutEntry> channel_calibration;
+        std::copy_if(inverse.begin(), inverse.end(), std::back_inserter(channel_calibration),
+                     [&channel_info](const report::InverseLutEntry& entry) {
+                         return entry.channel == channel_info.channel;
+                     });
+        const auto stem = channelArtifactStem(channel_info.channel);
+        const auto calibration_path = series_.root() / (stem + "-calibration.parquet");
+        const auto calibration_csv_path = series_.root() / (stem + "-calibration.csv");
+        if (channel_calibration.empty()
+            || !report::exportInverseLut(calibration_path, channel_calibration, diagnostics)
+            || !report::exportInverseLutCsv(calibration_csv_path, config_.run_id,
+                                            channel_calibration, diagnostics)) {
+            if (diagnostics.empty()) {
+                diagnostics = "channel calibration is empty: " + stem;
+            }
+            return false;
+        }
+        std::vector<report::InverseLutEntry> calibration_reopen;
+        std::vector<report::InverseLutEntry> calibration_csv_reopen;
+        std::string calibration_csv_run_id;
+        if (!report::readInverseLut(calibration_path, calibration_reopen, diagnostics)
+            || !report::readInverseLutCsv(calibration_csv_path, calibration_csv_run_id,
+                                          calibration_csv_reopen, diagnostics)) {
+            return false;
+        }
+        const bool same_selected_codes = calibration_reopen.size() == calibration_csv_reopen.size()
+            && std::equal(calibration_reopen.begin(), calibration_reopen.end(),
+                          calibration_csv_reopen.begin(), [](const auto& left, const auto& right) {
+                              return left.channel == right.channel
+                                  && left.freq_hz == right.freq_hz
+                                  && left.target_atten_db == right.target_atten_db
+                                  && left.target_phase_deg == right.target_phase_deg
+                                  && left.selected_att_code == right.selected_att_code
+                                  && left.selected_phase_code == right.selected_phase_code
+                                  && left.valid == right.valid;
+                          });
+        if (calibration_csv_run_id != config_.run_id || !same_selected_codes
+            || report::countValidInverse(calibration_reopen)
+                != report::countValidInverse(calibration_csv_reopen)) {
+            diagnostics = "channel AFARPQ/CSV calibration mismatch: " + stem;
+            return false;
+        }
+        auto channel_pdf = pdf_info;
+        channel_pdf.detailed_channel_report = true;
+        channel_pdf.completed_states = channel_info.completed_states;
+        channel_pdf.valid_direct_count = channel_info.valid_direct_count;
+        channel_pdf.valid_inverse_count = channel_info.valid_inverse_count;
+        auto detailed_channel = channel_info;
+        detailed_channel.calibration_filename = calibration_path.filename().string();
+        detailed_channel.calibration_sha256 = report::sha256FileHex(calibration_path, diagnostics);
+        detailed_channel.calibration_csv_filename = calibration_csv_path.filename().string();
+        detailed_channel.calibration_csv_sha256 =
+            report::sha256FileHex(calibration_csv_path, diagnostics);
+        detailed_channel.raw_filename = series_.rawS21Path().filename().string();
+        detailed_channel.raw_sha256 = raw_sha256;
+        if (detailed_channel.calibration_sha256.empty()
+            || detailed_channel.calibration_csv_sha256.empty()) {
+            return false;
+        }
+        channel_pdf.channels = {std::move(detailed_channel)};
+        if (!report::writeRunReportPdf(series_.root() / (stem + "-report.pdf"),
+                                       channel_pdf, diagnostics)) {
+            return false;
+        }
+    }
+
     // GAP-RAW-001: табличное сырьё т. 7.3 (до манифеста — файл попадёт в SHA-256).
     if (!report::exportRawS21Csv(series_.rawS21CsvPath(), store_, config_.run_id,
                                  series_.runEventsPath(), diagnostics)) {
@@ -939,6 +1285,10 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
     }
 
     // DATA-03 / AT-11: reopen LUT до Complete; совпадение числа valid с PDF.
+    direct.clear();
+    direct.shrink_to_fit();
+    inverse.clear();
+    inverse.shrink_to_fit();
     std::vector<cal::DirectLutEntry> direct_reopen;
     if (!report::readDirectLut(series_.directLutPath(), direct_reopen, diagnostics)) {
         return false;
@@ -947,11 +1297,13 @@ bool MeasurementOrchestrator::finalizeExports(std::string& diagnostics)
         diagnostics = "valid_direct_count mismatch after reopen";
         return false;
     }
+    direct_reopen.clear();
+    direct_reopen.shrink_to_fit();
     std::vector<report::InverseLutEntry> inverse_reopen;
     if (!report::readInverseLut(series_.inverseLutPath(), inverse_reopen, diagnostics)) {
         return false;
     }
-    if (report::countValidInverse(inverse_reopen) != report::countValidInverse(inverse)) {
+    if (report::countValidInverse(inverse_reopen) != expected_valid_inverse) {
         diagnostics = "valid_inverse_count mismatch after reopen";
         return false;
     }
@@ -980,6 +1332,7 @@ bool MeasurementOrchestrator::probeIdentify(std::string& idn_or_diagnostics)
     try {
         vna_->connect();
         const auto idn = vna_->identify();
+        last_vna_idn_ = idn;
         if (!idnContainsC2220(idn)) {
             idn_or_diagnostics = "VNA IDN does not contain C2220: " + idn;
             last_error_ = idn_or_diagnostics;
@@ -1095,10 +1448,19 @@ bool MeasurementOrchestrator::measurePreview(const SweepConfig& sweep, std::stri
         if (st == RunState::Idle) {
             vna_->connect();
         }
+        last_vna_idn_ = vna_->identify();
         last_sweep_ = measureAllFour(*vna_, sweep);
         has_last_sweep_ = true;
+        has_last_observed_config_ = false;
+        std::string readback_warning;
+        try {
+            last_observed_config_ = vna_->read_config();
+            has_last_observed_config_ = true;
+        } catch (const std::exception& ex) {
+            readback_warning = std::string("; readback недоступен: ") + ex.what();
+        }
         drainAndLogVnaErrors();
-        diagnostics = "measurePreview: S11/S21/S12/S22 OK";
+        diagnostics = "measurePreview: S11/S21/S12/S22 OK" + readback_warning;
         logEvent(EventLevel::Info, "MEASURE_PREVIEW_OK", diagnostics);
         return true;
     } catch (const std::exception& ex) {

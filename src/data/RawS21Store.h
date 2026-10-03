@@ -13,6 +13,9 @@ namespace afar {
 
 struct RawS21StateRecord {
     std::vector<std::complex<double>> s21;
+    /// Разброс двух независимых S21-съёмов по каждой частотной точке.
+    std::vector<double> repeatability_db;
+    std::vector<double> repeatability_deg;
     float temperature_c{0.f};
     bool overload{false};
     /// Поточечная пригодность (не vector<bool> — избегаем проблем MinGW -Werror).
@@ -30,11 +33,13 @@ struct RawS21Meta {
 };
 
 /// Собственный бинарный формат raw-s21.h5 без libhdf5 (DATA-006).
-/// Magic: "AFARH5\\1", version 1. Один слот на (ch, att, phase).
+/// Magic: "AFARH5\\1". Версия 2 добавляет поточечную повторяемость;
+/// версия 1 по-прежнему читается для recovery старых серий.
 class RawS21Store {
 public:
     static constexpr char kMagic[8] = {'A', 'F', 'A', 'R', 'H', '5', '\1', '\0'};
-    static constexpr std::uint32_t kVersion = 1;
+    static constexpr std::uint32_t kVersion = 2;
+    static constexpr std::uint32_t kLegacyVersion = 1;
 
     RawS21Store() = default;
     ~RawS21Store();
@@ -134,6 +139,7 @@ private:
     std::vector<std::uint8_t> phase_codes_;
     std::vector<std::uint64_t> frequency_hz_;
     RawS21Meta meta_;
+    std::uint32_t version_{kVersion};
     std::uint64_t states_offset_{0};
     std::uint64_t refs_offset_{0};
     std::uint64_t state_stride_{0};
@@ -144,7 +150,7 @@ private:
     bool seekRef(std::size_t flat) const;
     bool writeRecordAt(std::size_t flat, const RawS21StateRecord& record, std::string& diagnostics);
     bool readRecordAt(std::size_t flat, RawS21StateRecord& out, std::string& diagnostics) const;
-    static std::uint64_t computeStateStride(std::uint32_t n_freq);
+    static std::uint64_t computeStateStride(std::uint32_t n_freq, std::uint32_t version);
     static std::uint64_t computeRefStride(std::uint32_t n_freq);
 };
 

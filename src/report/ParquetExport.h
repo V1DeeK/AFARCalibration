@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace afar::report {
@@ -39,6 +40,12 @@ bool exportInverseLut(const std::filesystem::path& path,
                       std::span<const InverseLutEntry> rows,
                       std::string& diagnostics);
 
+/// UTF-8 CSV для проверки обратной LUT обычным табличным инструментом.
+bool exportInverseLutCsv(const std::filesystem::path& path,
+                         std::string_view run_id,
+                         std::span<const InverseLutEntry> rows,
+                         std::string& diagnostics);
+
 bool readDirectLut(const std::filesystem::path& path,
                    std::vector<cal::DirectLutEntry>& out,
                    std::string& diagnostics);
@@ -46,6 +53,11 @@ bool readDirectLut(const std::filesystem::path& path,
 bool readInverseLut(const std::filesystem::path& path,
                     std::vector<InverseLutEntry>& out,
                     std::string& diagnostics);
+
+bool readInverseLutCsv(const std::filesystem::path& path,
+                       std::string& run_id,
+                       std::vector<InverseLutEntry>& out,
+                       std::string& diagnostics);
 
 /// Собирает прямую LUT из store (нормализация по опоре + unwrap).
 bool buildDirectLutFromStore(const RawS21Store& store,

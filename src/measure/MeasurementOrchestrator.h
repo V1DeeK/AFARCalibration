@@ -72,6 +72,12 @@ public:
     [[nodiscard]] std::size_t cursor() const noexcept { return cursor_; }
     [[nodiscard]] bool hasLastMeasuredSweep() const noexcept { return has_last_sweep_; }
     [[nodiscard]] const ComplexSweep& lastMeasuredSweep() const noexcept { return last_sweep_; }
+    [[nodiscard]] const std::string& lastVnaIdn() const noexcept { return last_vna_idn_; }
+    [[nodiscard]] bool hasLastObservedConfig() const noexcept { return has_last_observed_config_; }
+    [[nodiscard]] const SweepConfig& lastObservedConfig() const noexcept
+    {
+        return last_observed_config_;
+    }
 
     /// Отключить sleep settle (ускорение тестов при ненулевом settle_ms).
     void setSleepEnabled(bool enabled) noexcept { sleep_enabled_ = enabled; }
@@ -117,6 +123,9 @@ private:
     std::vector<std::uint64_t> frequency_axis_;
     ComplexSweep last_sweep_{};
     bool has_last_sweep_{false};
+    std::string last_vna_idn_;
+    SweepConfig last_observed_config_{};
+    bool has_last_observed_config_{false};
 
     /// `stand` — снимок кодов, если он ещё приложен к тракту. Температура читается отдельно, если связь жива.
     bool transitionLogged(RunState target,

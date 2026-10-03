@@ -64,6 +64,7 @@ private slots:
     void onApplyVnaSettings();
     void onApplyControllerSettings();
     void onProbeVna();
+    void attemptAutomaticVnaConnection();
     void onProbeFinished(bool ok, const QString& idnOrError);
     void refreshDataSourceBadge(bool probeOk = false, const QString& idnOrError = {});
     void onEtaChanged(const QString& text);
@@ -105,12 +106,14 @@ private slots:
                                  int phaseCode);
     void updateCycleButtons(int state);
     void onMeasureNow();
+    void onExportTwoPort();
     void onCalibrateStep(int kind, int step, int port);
 
 private:
     void loadExampleDefaults();
     void refreshThemeButton();
     void scanUnfinishedSeries();
+    void startAutomaticVnaConnection();
     [[nodiscard]] QString defaultDataRoot() const;
 
     QString m_unfinishedSeries;
@@ -128,4 +131,6 @@ private:
     QThread* m_thread = nullptr;
     MeasureWorker* m_worker = nullptr;
     int m_state = 0;
+    bool m_autoVnaConnectActive = false;
+    int m_autoVnaConnectAttemptsLeft = 0;
 };
