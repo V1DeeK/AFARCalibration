@@ -15,7 +15,8 @@ inline std::filesystem::path writeSimGridFixtures(const std::filesystem::path& d
                                                   int channel_last,
                                                   int att_count,
                                                   int phase_last,
-                                                  int points)
+                                                  int points,
+                                                  int channel_first = 1)
 {
     std::filesystem::create_directories(dir);
     const auto cfg_path = dir / "run-config.json";
@@ -44,7 +45,9 @@ inline std::filesystem::path writeSimGridFixtures(const std::filesystem::path& d
            "  \"controller\": { \"driver\": \"sim\", \"endpoint\": \"sim\" },\n"
            "  \"dut\": {\n"
            "    \"serial\": \"FULL-SIM\",\n"
-           "    \"channels\": { \"first\": 1, \"last\": "
+           "    \"channels\": { \"first\": "
+        << channel_first
+        << ", \"last\": "
         << channel_last
         << " },\n"
            "    \"phase_codes\": { \"first\": 0, \"last\": "

@@ -94,7 +94,9 @@ $utf8 = [Text.UTF8Encoding]::new($false)
 
 # Smoke-start the deployed executable with its own plugins and DLLs.
 $oldPlatform = $env:QT_QPA_PLATFORM
+$oldDisableAutoS2Vna = $env:AFAR_DISABLE_AUTO_S2VNA
 $env:QT_QPA_PLATFORM = 'offscreen'
+$env:AFAR_DISABLE_AUTO_S2VNA = '1'
 try {
     $process = Start-Process -FilePath (Join-Path $stage 'AfarRxCalibrationStudio.exe') `
         -WorkingDirectory $stage -PassThru -WindowStyle Hidden
@@ -104,6 +106,7 @@ try {
     $process.WaitForExit()
 } finally {
     $env:QT_QPA_PLATFORM = $oldPlatform
+    $env:AFAR_DISABLE_AUTO_S2VNA = $oldDisableAutoS2Vna
 }
 
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal

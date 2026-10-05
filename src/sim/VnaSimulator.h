@@ -1,14 +1,16 @@
 #pragma once
 
 #include "afar/IVna.h"
+#include "afar/IDutController.h"
 
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-/// Программный имитатор VNA (C2220). Не знает att/phase изделия —
-/// синтетический S21 зависит только от частоты после configure.
+/// Программный имитатор VNA (C2220). Без provider сохраняет автономную модель;
+/// с provider образует связанный демостенд, зависящий от channel/att/phase.
 class VnaSimulator final : public IVna {
 public:
     enum class FailureMode {
@@ -33,8 +35,14 @@ public:
 
     void set_failure_mode(FailureMode mode);
     void fail_next_trace(SParameter parameter) noexcept { failNextTrace_ = parameter; }
+    void fail_trace(SParameter parameter) noexcept { failedTrace_ = parameter; }
+    void set_frequency_offset_hz(std::uint64_t offset) noexcept { frequencyOffsetHz_ = offset; }
     void set_identify_string(std::string idn);
     void push_instrument_error(std::string message);
+    void set_dut_state_provider(std::function<DutState()> provider)
+    {
+        dutStateProvider_ = std::move(provider);
+    }
 
     /// Прямой доступ к приёмникам (SYSTem:RECeiver:DIRect:ACCess).
     /// Запрос состояния — позже у оркестратора; здесь только флаг.
@@ -55,6 +63,8 @@ private:
     bool directAccessOn_{false};
     FailureMode failureMode_{FailureMode::None};
     std::optional<SParameter> failNextTrace_;
+    std::optional<SParameter> failedTrace_;
+    std::uint64_t frequencyOffsetHz_{0};
     std::string identifyString_{
         "PLANAR,C2220,SIM0001,1.0"};
     SweepConfig config_{};
@@ -62,4 +72,5 @@ private:
     OnePortCalibrationStep onePortStep_{OnePortCalibrationStep::Begin};
     int onePort_{1};
     std::vector<std::string> errorQueue_;
+    std::function<DutState()> dutStateProvider_;
 };

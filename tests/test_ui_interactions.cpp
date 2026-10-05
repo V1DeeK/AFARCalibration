@@ -5,13 +5,12 @@
 #include "ConnectionBar.h"
 #include "MeasureTab.h"
 #include "S21PlotWidget.h"
-#include "S2VnaRuntime.h"
 #include "StartWizard.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
-#include <QDir>
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QImage>
@@ -26,6 +25,7 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStandardItemModel>
 #include <QTemporaryDir>
 #include <QToolButton>
 #include <QGroupBox>
@@ -46,29 +46,6 @@ QApplication& application()
 }
 
 }  // namespace
-
-TEST_CASE("S2VNA socket flag is enabled without losing hardware settings", "[ui][s2vna]")
-{
-    QTemporaryDir temporary;
-    REQUIRE(temporary.isValid());
-    QDir root(temporary.path());
-    REQUIRE(root.mkpath(QStringLiteral("System")));
-    QFile executable(root.filePath(QStringLiteral("S2VNA.exe")));
-    REQUIRE(executable.open(QIODevice::WriteOnly));
-    executable.close();
-    const QString setupPath = root.filePath(QStringLiteral("System/Setup.dat"));
-    {
-        QSettings setup(setupPath, QSettings::IniFormat);
-        setup.setValue(QStringLiteral("SocketSvrSetup/SocketSvrEnabled"), 0);
-        setup.setValue(QStringLiteral("Hardware/DeviceID"), 23);
-    }
-
-    QString error;
-    REQUIRE(S2VnaRuntime::enableSocketServer(executable.fileName(), &error));
-    QSettings setup(setupPath, QSettings::IniFormat);
-    REQUIRE(setup.value(QStringLiteral("SocketSvrSetup/SocketSvrEnabled")).toInt() == 1);
-    REQUIRE(setup.value(QStringLiteral("Hardware/DeviceID")).toInt() == 23);
-}
 
 TEST_CASE("sweep parameters are saved after an operator edit", "[ui][settings]")
 {
@@ -94,6 +71,25 @@ TEST_CASE("sweep parameters are saved after an operator edit", "[ui][settings]")
     settings.remove(QStringLiteral("sweep"));
 }
 
+TEST_CASE("C2220 UI exposes the complete supported sweep range", "[ui][settings]")
+{
+    MeasureTab tab;
+    auto* points = tab.findChild<QSpinBox*>();
+    const auto pointSpins = tab.findChildren<QSpinBox*>();
+    points = nullptr;
+    for (auto* spin : pointSpins) {
+        if (spin->minimum() == 2 && spin->maximum() == 500001) {
+            points = spin;
+            break;
+        }
+    }
+    REQUIRE(points != nullptr);
+
+    auto* start = tab.findChild<QDoubleSpinBox*>(QStringLiteral("frequencyStart"));
+    REQUIRE(start != nullptr);
+    CHECK(start->maximum() == Catch::Approx(20'000.0)); // текущая единица — МГц
+}
+
 TEST_CASE("filter readiness is separate from the series controller", "[ui]")
 {
     (void)application();
@@ -106,9 +102,39 @@ TEST_CASE("filter readiness is separate from the series controller", "[ui]")
     REQUIRE(ready != nullptr);
     REQUIRE(controller != nullptr);
     REQUIRE(ready->text().contains(QStringLiteral("ГОТОВО")));
-    REQUIRE(controller->text().contains(QStringLiteral("для S-параметров не нужен")));
+    REQUIRE(controller->text().contains(QStringLiteral("для пассивных S-параметров не нужен")));
     REQUIRE(controller->text().contains(QStringLiteral("CTRL:")));
     REQUIRE_FALSE(controller->text().contains(QStringLiteral("нет связи")));
+}
+
+TEST_CASE("work modes distinguish passive demo and unavailable real calibration", "[ui][modes]")
+{
+    MeasureTab tab;
+    auto* modes = tab.findChild<QComboBox*>(QStringLiteral("measurementWorkMode"));
+    REQUIRE(modes != nullptr);
+    REQUIRE(modes->count() == 3);
+    CHECK(modes->itemText(0).contains(QStringLiteral("Двухпортовое")));
+    CHECK(modes->itemText(1).contains(QStringLiteral("Демо")));
+    CHECK(modes->itemText(2).contains(QStringLiteral("нет контроллера")));
+
+    auto* model = qobject_cast<QStandardItemModel*>(modes->model());
+    REQUIRE(model != nullptr);
+    REQUIRE(model->item(0) != nullptr);
+    CHECK(model->item(0)->isEnabled());
+    REQUIRE(model->item(2) != nullptr);
+    CHECK_FALSE(model->item(2)->isEnabled());
+    CHECK(model->item(2)->toolTip().contains(QStringLiteral("Контроллер изделия отсутствует")));
+
+    ConnectionBar bar;
+    auto* controllers = bar.findChild<QComboBox*>(QStringLiteral("controllerBackend"));
+    REQUIRE(controllers != nullptr);
+    REQUIRE(controllers->findData(0) >= 0);
+    const int realRow = controllers->findData(2);
+    REQUIRE(realRow >= 0);
+    auto* controllerModel = qobject_cast<QStandardItemModel*>(controllers->model());
+    REQUIRE(controllerModel != nullptr);
+    REQUIRE(controllerModel->item(realRow) != nullptr);
+    CHECK_FALSE(controllerModel->item(realRow)->isEnabled());
 }
 
 TEST_CASE("VNA timeouts are collapsed until the engineer expands them", "[ui]")
@@ -141,6 +167,60 @@ TEST_CASE("connection settings keep the top bar compact until expanded", "[ui]")
     REQUIRE_FALSE(body->isHidden());
     toggle->setChecked(false);
     REQUIRE(body->isHidden());
+}
+
+TEST_CASE("S2VNA demo is a distinct local socket backend", "[ui][settings][demo]")
+{
+    (void)application();
+    ConnectionBar bar;
+    auto* backend = bar.findChild<QComboBox*>(QStringLiteral("vnaBackend"));
+    auto* host = bar.findChild<QLineEdit*>(QStringLiteral("vnaHost"));
+    auto* port = bar.findChild<QSpinBox*>(QStringLiteral("vnaPort"));
+    auto* com = bar.findChild<QLineEdit*>(QStringLiteral("vnaComPort"));
+    REQUIRE(backend != nullptr);
+    REQUIRE(backend->findData(3) >= 0);
+    backend->setCurrentIndex(backend->findData(3));
+    REQUIRE(bar.vnaBackend() == 3);
+    REQUIRE(host->isEnabled());
+    REQUIRE(port->isEnabled());
+    REQUIRE_FALSE(com->isEnabled());
+}
+
+TEST_CASE("VNA settings are locked while a series owns the instrument", "[ui][settings]")
+{
+    (void)application();
+    ConnectionBar bar;
+    auto* backend = bar.findChild<QComboBox*>(QStringLiteral("vnaBackend"));
+    auto* host = bar.findChild<QLineEdit*>(QStringLiteral("vnaHost"));
+    auto* port = bar.findChild<QSpinBox*>(QStringLiteral("vnaPort"));
+    auto* com = bar.findChild<QLineEdit*>(QStringLiteral("vnaComPort"));
+    QPushButton* probe = nullptr;
+    for (auto* button : bar.findChildren<QPushButton*>()) {
+        if (button->text() == QStringLiteral("Проверить связь")) {
+            probe = button;
+            break;
+        }
+    }
+    REQUIRE(backend != nullptr);
+    REQUIRE(host != nullptr);
+    REQUIRE(port != nullptr);
+    REQUIRE(com != nullptr);
+    REQUIRE(probe != nullptr);
+
+    backend->setCurrentIndex(1);
+    bar.setVnaSettingsLocked(true);
+    REQUIRE_FALSE(backend->isEnabled());
+    REQUIRE_FALSE(host->isEnabled());
+    REQUIRE_FALSE(port->isEnabled());
+    REQUIRE_FALSE(com->isEnabled());
+    REQUIRE_FALSE(probe->isEnabled());
+
+    bar.setVnaSettingsLocked(false);
+    REQUIRE(backend->isEnabled());
+    REQUIRE(host->isEnabled());
+    REQUIRE(port->isEnabled());
+    REQUIRE_FALSE(com->isEnabled());
+    REQUIRE(probe->isEnabled());
 }
 
 TEST_CASE("plot wheel zooms and reset restores the full range", "[ui]")
@@ -325,6 +405,32 @@ TEST_CASE("two-port mode, center-span entry and report action are explicit", "[u
     REQUIRE_FALSE(exportButton->isEnabled());
     tab.setTwoPortExportEnabled(true);
     REQUIRE(exportButton->isEnabled());
+    tab.setTwoPortExportInProgress(true);
+    REQUIRE_FALSE(exportButton->isEnabled());
+    REQUIRE(exportButton->text() == QStringLiteral("Формирование отчёта…"));
+    tab.setTwoPortExportInProgress(false);
+    REQUIRE(exportButton->isEnabled());
+
+    auto* deviceName = tab.findChild<QLineEdit*>(QStringLiteral("reportDeviceName"));
+    auto* deviceSerial = tab.findChild<QLineEdit*>(QStringLiteral("reportDeviceSerial"));
+    auto* operatorName = tab.findChild<QLineEdit*>(QStringLiteral("reportOperator"));
+    auto* comment = tab.findChild<QLineEdit*>(QStringLiteral("reportComment"));
+    auto* accepted = tab.findChild<QCheckBox*>(QStringLiteral("reportAccepted"));
+    REQUIRE(deviceName != nullptr);
+    REQUIRE(deviceSerial != nullptr);
+    REQUIRE(operatorName != nullptr);
+    REQUIRE(comment != nullptr);
+    REQUIRE(accepted != nullptr);
+    deviceName->setText(QStringLiteral("Изделие А"));
+    deviceSerial->setText(QStringLiteral("SN-42"));
+    operatorName->setText(QStringLiteral("Оператор"));
+    comment->setText(QStringLiteral("Комментарий"));
+    accepted->setChecked(true);
+    REQUIRE(tab.reportDeviceName() == QStringLiteral("Изделие А"));
+    REQUIRE(tab.reportDeviceSerial() == QStringLiteral("SN-42"));
+    REQUIRE(tab.reportOperatorName() == QStringLiteral("Оператор"));
+    REQUIRE(tab.reportComment() == QStringLiteral("Комментарий"));
+    REQUIRE(tab.reportAccepted());
 }
 
 TEST_CASE("graph controls scroll after fullscreen is restored to a small window", "[ui]")

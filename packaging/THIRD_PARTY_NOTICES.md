@@ -11,4 +11,3 @@ AFAR RX Calibration Studio runtime includes the following third-party components
   `licenses/nlohmann-json-LICENSE.MIT`.
 
 Catch2 is used by the test build and is not part of the runtime archive.
-

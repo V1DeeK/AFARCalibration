@@ -10,6 +10,8 @@ class ConnectionBar;
 class DataFormatsTab;
 class MeasureTab;
 class MeasureWorker;
+class QLabel;
+class QProgressBar;
 class QPushButton;
 class QThread;
 
@@ -64,7 +66,7 @@ private slots:
     void onApplyVnaSettings();
     void onApplyControllerSettings();
     void onProbeVna();
-    void attemptAutomaticVnaConnection();
+    void onConnectAndMeasureVna();
     void onProbeFinished(bool ok, const QString& idnOrError);
     void refreshDataSourceBadge(bool probeOk = false, const QString& idnOrError = {});
     void onEtaChanged(const QString& text);
@@ -113,7 +115,8 @@ private:
     void loadExampleDefaults();
     void refreshThemeButton();
     void scanUnfinishedSeries();
-    void startAutomaticVnaConnection();
+    void beginVnaProbe(bool measureAfterSuccess);
+    void setOperationProgress(const QString& text, qint64 completed, qint64 total);
     [[nodiscard]] QString defaultDataRoot() const;
 
     QString m_unfinishedSeries;
@@ -127,10 +130,11 @@ private:
     QPushButton* m_start = nullptr;
     QPushButton* m_pause = nullptr;
     QPushButton* m_stop = nullptr;
+    QLabel* m_operationText = nullptr;
+    QProgressBar* m_operationProgress = nullptr;
 
     QThread* m_thread = nullptr;
     MeasureWorker* m_worker = nullptr;
     int m_state = 0;
-    bool m_autoVnaConnectActive = false;
-    int m_autoVnaConnectAttemptsLeft = 0;
+    bool m_measureAfterProbe = false;
 };

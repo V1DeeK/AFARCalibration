@@ -482,6 +482,33 @@ TEST_CASE("C2220Vna configure and measure_s21 against stub", "[c2220]")
     REQUIRE(errs.empty());
 }
 
+TEST_CASE("C2220Vna rejects an invalid sweep before SCPI writes", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+    const auto commandCount = stub.commands().size();
+
+    SweepConfig invalid{};
+    invalid.f_start_hz = 100'000;
+    invalid.f_stop_hz = 20'000'000'001ULL;
+    invalid.points = 500'001;
+    invalid.ifbw_hz = 1'000'000;
+    invalid.power_dbm = 10.0;
+    invalid.averages = 999;
+    REQUIRE_THROWS_AS(vna.configure(invalid), std::invalid_argument);
+    REQUIRE(stub.commands().size() == commandCount);
+
+    invalid.f_stop_hz = 20'000'000'000ULL;
+    REQUIRE_NOTHROW(vna.configure(invalid));
+    for (int i = 0; i < 50 && !stub.saw_exact("SENS:SWE:POIN 500001"); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    REQUIRE(stub.saw_exact("SENS:SWE:POIN 500001"));
+}
+
 TEST_CASE("C2220Vna configure S11 fills s11 via measure_trace", "[c2220]")
 {
     ScpiTcpStub stub;

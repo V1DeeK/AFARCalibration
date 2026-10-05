@@ -1,10 +1,17 @@
 #include "RawS21Store.h"
 
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace afar {
 namespace {
+
+constexpr std::uint32_t kMaxChannels = 16;
+constexpr std::uint32_t kMaxAttenuations = 64;
+constexpr std::uint32_t kMaxPhases = 64;
+constexpr std::uint32_t kMaxFrequencies = 500'001;
+constexpr std::uint32_t kMaxMetaBytes = 16 * 1024 * 1024;
 
 template <typename T>
 bool writePod(std::fstream& f, const T& v)
@@ -62,6 +69,9 @@ bool readUtf8(std::fstream& f, std::string& s)
     if (!readPod(f, n)) {
         return false;
     }
+    if (n > kMaxMetaBytes) {
+        return false;
+    }
     s.resize(n);
     if (n == 0) {
         return true;
@@ -84,10 +94,11 @@ bool readMeta(std::fstream& f, RawS21Meta& meta)
 
 }  // namespace
 
-std::uint64_t RawS21Store::computeStateStride(std::uint32_t n_freq)
+std::uint64_t RawS21Store::computeStateStride(std::uint32_t n_freq, std::uint32_t version)
 {
-    // re[n] f64 + im[n] f64 + temp f32 + overload u8 + valid[n] u8 + attempt u16 + completed u8
-    return static_cast<std::uint64_t>(n_freq) * 8ull * 2ull
+    // v1: re[n] + im[n]; v2: дополнительно repeatability_db[n] + repeatability_deg[n].
+    const auto vectors = version >= kVersion ? 4ull : 2ull;
+    return static_cast<std::uint64_t>(n_freq) * 8ull * vectors
         + 4ull + 1ull + static_cast<std::uint64_t>(n_freq) + 2ull + 1ull;
 }
 
@@ -124,12 +135,16 @@ RawS21Store& RawS21Store::operator=(RawS21Store&& other) noexcept
     phase_codes_ = std::move(other.phase_codes_);
     frequency_hz_ = std::move(other.frequency_hz_);
     meta_ = std::move(other.meta_);
+    version_ = other.version_;
     states_offset_ = other.states_offset_;
     refs_offset_ = other.refs_offset_;
     state_stride_ = other.state_stride_;
     ref_stride_ = other.ref_stride_;
+    completed_count_ = other.completed_count_;
     other.n_channel_ = other.n_att_ = other.n_phase_ = other.n_freq_ = 0;
     other.states_offset_ = other.refs_offset_ = other.state_stride_ = other.ref_stride_ = 0;
+    other.completed_count_ = 0;
+    other.version_ = kVersion;
     other.meta_ = {};
     return *this;
 }
@@ -156,6 +171,11 @@ bool RawS21Store::create(const std::filesystem::path& path,
         diagnostics = "RawS21Store::create: empty axes";
         return false;
     }
+    if (channels.size() > kMaxChannels || att_codes.size() > kMaxAttenuations
+        || phase_codes.size() > kMaxPhases || frequency_hz.size() > kMaxFrequencies) {
+        diagnostics = "RawS21Store::create: dimensions exceed supported limits";
+        return false;
+    }
 
     out.close();
     std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
@@ -174,7 +194,7 @@ bool RawS21Store::create(const std::filesystem::path& path,
     const std::uint32_t n_att = static_cast<std::uint32_t>(att_codes.size());
     const std::uint32_t n_ph = static_cast<std::uint32_t>(phase_codes.size());
     const std::uint32_t n_f = static_cast<std::uint32_t>(frequency_hz.size());
-    const auto state_stride = computeStateStride(n_f);
+    const auto state_stride = computeStateStride(n_f, kVersion);
     const auto ref_stride = computeRefStride(n_f);
 
     if (!f.write(kMagic, 8)) {
@@ -230,10 +250,12 @@ bool RawS21Store::create(const std::filesystem::path& path,
     out.phase_codes_ = phase_codes;
     out.frequency_hz_ = frequency_hz;
     out.meta_ = meta;
+    out.version_ = kVersion;
     out.states_offset_ = states_offset;
     out.refs_offset_ = refs_offset;
     out.state_stride_ = state_stride;
     out.ref_stride_ = ref_stride;
+    out.completed_count_ = 0;
     return true;
 }
 
@@ -257,7 +279,7 @@ bool RawS21Store::open(const std::filesystem::path& path,
     }
     std::uint32_t ver = 0;
     std::uint32_t n_ch = 0, n_att = 0, n_ph = 0, n_f = 0;
-    if (!readPod(f, ver) || ver != kVersion) {
+    if (!readPod(f, ver) || (ver != kLegacyVersion && ver != kVersion)) {
         diagnostics = "unsupported raw-s21.h5 version";
         return false;
     }
@@ -265,8 +287,10 @@ bool RawS21Store::open(const std::filesystem::path& path,
         diagnostics = "cannot read dims";
         return false;
     }
-    if (n_ch == 0 || n_att == 0 || n_ph == 0 || n_f == 0) {
-        diagnostics = "invalid zero dimension";
+    if (n_ch == 0 || n_att == 0 || n_ph == 0 || n_f == 0
+        || n_ch > kMaxChannels || n_att > kMaxAttenuations
+        || n_ph > kMaxPhases || n_f > kMaxFrequencies) {
+        diagnostics = "invalid raw-s21.h5 dimensions";
         return false;
     }
 
@@ -286,11 +310,31 @@ bool RawS21Store::open(const std::filesystem::path& path,
         return false;
     }
 
-    const auto state_stride = computeStateStride(n_f);
+    const auto state_stride = computeStateStride(n_f, ver);
     const auto ref_stride = computeRefStride(n_f);
     const auto states_offset = static_cast<std::uint64_t>(f.tellg());
     const std::size_t n_states = static_cast<std::size_t>(n_ch) * n_att * n_ph;
     const auto refs_offset = states_offset + state_stride * n_states;
+    const auto expected_size = refs_offset
+        + ref_stride * static_cast<std::uint64_t>(n_ch) * (static_cast<std::uint64_t>(n_att) + 1);
+    std::error_code size_error;
+    const auto actual_size = std::filesystem::file_size(path, size_error);
+    if (size_error || actual_size < expected_size) {
+        diagnostics = "raw-s21.h5 is truncated or has invalid dimensions";
+        return false;
+    }
+
+    std::size_t completed_count = 0;
+    for (std::size_t i = 0; i < n_states; ++i) {
+        f.clear();
+        f.seekg(static_cast<std::streamoff>(states_offset + i * state_stride + state_stride - 1));
+        std::uint8_t completed = 0;
+        if (!readPod(f, completed)) {
+            diagnostics = "cannot read raw-s21.h5 completion flags";
+            return false;
+        }
+        completed_count += completed != 0 ? 1u : 0u;
+    }
 
     out.file_ = std::move(f);
     out.path_ = path;
@@ -303,10 +347,12 @@ bool RawS21Store::open(const std::filesystem::path& path,
     out.phase_codes_ = std::move(phase_codes);
     out.frequency_hz_ = std::move(frequency_hz);
     out.meta_ = std::move(meta);
+    out.version_ = ver;
     out.states_offset_ = states_offset;
     out.refs_offset_ = refs_offset;
     out.state_stride_ = state_stride;
     out.ref_stride_ = ref_stride;
+    out.completed_count_ = completed_count;
     return true;
 }
 
@@ -349,6 +395,7 @@ std::optional<std::size_t> RawS21Store::indexOf(std::uint8_t channel,
 
 bool RawS21Store::seekState(std::size_t flat) const
 {
+    file_.clear();
     const auto off = static_cast<std::streamoff>(states_offset_ + flat * state_stride_);
     file_.seekg(off);
     file_.seekp(off);
@@ -357,6 +404,7 @@ bool RawS21Store::seekState(std::size_t flat) const
 
 bool RawS21Store::seekRef(std::size_t flat) const
 {
+    file_.clear();
     const auto off = static_cast<std::streamoff>(refs_offset_ + flat * ref_stride_);
     file_.seekg(off);
     file_.seekp(off);
@@ -367,7 +415,10 @@ bool RawS21Store::writeRecordAt(std::size_t flat,
                                 const RawS21StateRecord& record,
                                 std::string& diagnostics)
 {
-    if (record.s21.size() != n_freq_ || record.valid.size() != n_freq_) {
+    if (record.s21.size() != n_freq_ || record.valid.size() != n_freq_
+        || (version_ >= kVersion
+            && (record.repeatability_db.size() != n_freq_
+                || record.repeatability_deg.size() != n_freq_))) {
         diagnostics = "writeState: length mismatch vs n_freq";
         return false;
     }
@@ -382,6 +433,12 @@ bool RawS21Store::writeRecordAt(std::size_t flat,
     }
     if (!writeVec(file_, re) || !writeVec(file_, im)) {
         diagnostics = "writeState: s21 write failed";
+        return false;
+    }
+    if (version_ >= kVersion
+        && (!writeVec(file_, record.repeatability_db)
+            || !writeVec(file_, record.repeatability_deg))) {
+        diagnostics = "writeState: repeatability write failed";
         return false;
     }
     if (!writePod(file_, record.temperature_c)) {
@@ -431,6 +488,17 @@ bool RawS21Store::readRecordAt(std::size_t flat,
     for (std::uint32_t i = 0; i < n_freq_; ++i) {
         out.s21[i] = {re[i], im[i]};
     }
+    if (version_ >= kVersion) {
+        if (!readVec(file_, out.repeatability_db, n_freq_)
+            || !readVec(file_, out.repeatability_deg, n_freq_)) {
+            diagnostics = "readState: repeatability read failed";
+            return false;
+        }
+    } else {
+        const double unavailable = std::numeric_limits<double>::quiet_NaN();
+        out.repeatability_db.assign(n_freq_, unavailable);
+        out.repeatability_deg.assign(n_freq_, unavailable);
+    }
     if (!readPod(file_, out.temperature_c)) {
         diagnostics = "readState: temp read failed";
         return false;
@@ -463,6 +531,44 @@ bool RawS21Store::readRecordAt(std::size_t flat,
     return true;
 }
 
+bool RawS21Store::readStatusAt(std::size_t flat,
+                               RawS21StateStatus& out,
+                               std::string& diagnostics) const
+{
+    file_.clear();
+    const auto overload_offset = states_offset_ + flat * state_stride_
+        + static_cast<std::uint64_t>(n_freq_) * 8ull * (version_ >= kVersion ? 4ull : 2ull)
+        + 4ull;
+    file_.seekg(static_cast<std::streamoff>(overload_offset));
+    std::uint8_t overload = 0;
+    if (!readPod(file_, overload)) {
+        diagnostics = "readStateStatus: overload read failed";
+        return false;
+    }
+    file_.seekg(static_cast<std::streamoff>(n_freq_), std::ios::cur);
+    std::uint8_t completed = 0;
+    if (!readPod(file_, out.attempt) || !readPod(file_, completed)) {
+        diagnostics = "readStateStatus: flags read failed";
+        return false;
+    }
+    out.overload = overload != 0;
+    out.completed = completed != 0;
+    return true;
+}
+
+bool RawS21Store::writeCompletedAt(std::size_t flat, bool completed, std::string& diagnostics)
+{
+    file_.clear();
+    file_.seekp(static_cast<std::streamoff>(states_offset_ + flat * state_stride_ + state_stride_ - 1));
+    const std::uint8_t value = completed ? 1 : 0;
+    if (!writePod(file_, value)) {
+        diagnostics = "writeStateStatus: completion write failed";
+        return false;
+    }
+    file_.flush();
+    return static_cast<bool>(file_);
+}
+
 bool RawS21Store::writeState(std::uint8_t channel,
                              std::uint16_t att_code,
                              std::uint8_t phase_code,
@@ -475,15 +581,21 @@ bool RawS21Store::writeState(std::uint8_t channel,
         diagnostics = "writeState: unknown (channel,att,phase)";
         return false;
     }
-    RawS21StateRecord existing;
-    if (!readRecordAt(*idx, existing, diagnostics)) {
+    RawS21StateStatus existing;
+    if (!readStatusAt(*idx, existing, diagnostics)) {
         return false;
     }
     if (existing.completed) {
         diagnostics = "writeState: slot already completed (AT-05)";
         return false;
     }
-    return writeRecordAt(*idx, record, diagnostics);
+    if (!writeRecordAt(*idx, record, diagnostics)) {
+        return false;
+    }
+    if (record.completed) {
+        ++completed_count_;
+    }
+    return true;
 }
 
 bool RawS21Store::readState(std::uint8_t channel,
@@ -501,13 +613,28 @@ bool RawS21Store::readState(std::uint8_t channel,
     return readRecordAt(*idx, out, diagnostics);
 }
 
+bool RawS21Store::readStateStatus(std::uint8_t channel,
+                                  std::uint16_t att_code,
+                                  std::uint8_t phase_code,
+                                  RawS21StateStatus& out,
+                                  std::string& diagnostics) const
+{
+    diagnostics.clear();
+    const auto idx = indexOf(channel, att_code, phase_code);
+    if (!idx) {
+        diagnostics = "readStateStatus: unknown (channel,att,phase)";
+        return false;
+    }
+    return readStatusAt(*idx, out, diagnostics);
+}
+
 bool RawS21Store::isCompleted(std::uint8_t channel,
                               std::uint16_t att_code,
                               std::uint8_t phase_code) const
 {
-    RawS21StateRecord rec;
+    RawS21StateStatus rec;
     std::string diag;
-    if (!readState(channel, att_code, phase_code, rec, diag)) {
+    if (!readStateStatus(channel, att_code, phase_code, rec, diag)) {
         return false;
     }
     return rec.completed;
@@ -524,30 +651,34 @@ bool RawS21Store::clearCompleted(std::uint8_t channel,
         diagnostics = "clearCompleted: unknown (channel,att,phase)";
         return false;
     }
-    RawS21StateRecord rec;
-    if (!readRecordAt(*idx, rec, diagnostics)) {
+    RawS21StateStatus rec;
+    if (!readStatusAt(*idx, rec, diagnostics)) {
         return false;
     }
     if (!rec.completed) {
         return true;
     }
-    rec.completed = false;
-    return writeRecordAt(*idx, rec, diagnostics);
+    if (!writeCompletedAt(*idx, false, diagnostics)) {
+        return false;
+    }
+    --completed_count_;
+    return true;
 }
 
 std::size_t RawS21Store::completedCount() const
 {
-    std::size_t n = 0;
-    const std::size_t total =
-        static_cast<std::size_t>(n_channel_) * n_att_ * n_phase_;
-    for (std::size_t i = 0; i < total; ++i) {
-        RawS21StateRecord rec;
-        std::string diag;
-        if (readRecordAt(i, rec, diag) && rec.completed) {
-            ++n;
-        }
-    }
-    return n;
+    return completed_count_;
+}
+
+std::uint64_t RawS21Store::estimatedPayloadBytes(std::size_t channels,
+                                                 std::size_t attenuations,
+                                                 std::size_t phases,
+                                                 std::size_t frequencies)
+{
+    const auto state_stride = computeStateStride(static_cast<std::uint32_t>(frequencies), kVersion);
+    const auto ref_stride = computeRefStride(static_cast<std::uint32_t>(frequencies));
+    return state_stride * channels * attenuations * phases
+        + ref_stride * channels * (attenuations + 1);
 }
 
 std::size_t RawS21Store::totalComplexSamplesCompleted() const

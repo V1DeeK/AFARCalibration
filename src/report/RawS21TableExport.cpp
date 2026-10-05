@@ -1,5 +1,6 @@
 #include "RawS21TableExport.h"
 
+#include "FileCommit.h"
 #include "RunEventLog.h"
 
 #include <complex>
@@ -164,14 +165,7 @@ bool exportRawS21Csv(const std::filesystem::path& path,
         return false;
     }
     in.close();
-    std::filesystem::remove(path, ec);
-    ec.clear();
-    std::filesystem::rename(temporary, path, ec);
-    if (ec) {
-        diagnostics = "cannot commit raw-s21.csv: " + ec.message();
-        return false;
-    }
-    return true;
+    return replaceFile(temporary, path, diagnostics);
 }
 
 }  // namespace afar::report

@@ -2,6 +2,7 @@
 
 #include <QComboBox>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -65,7 +66,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     root->setContentsMargins(8, 6, 8, 6);
     root->setSpacing(4);
 
-    auto* row = new QHBoxLayout();
+    auto* row = new QGridLayout();
     m_vna = new QLabel(QStringLiteral("C2220: нет связи"), this);
     m_controller = new QLabel(
         QStringLiteral("CTRL: OK — ИМИТАТОР (для S-параметров не нужен)"), this);
@@ -79,24 +80,29 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_source->setStyleSheet(
         QStringLiteral("color:#664d03; font-weight:600; padding:1px 4px;"));
 
-    row->addWidget(m_source);
-    row->addWidget(m_filterReady);
-    row->addWidget(m_vna);
-    row->addWidget(m_controller);
-    row->addWidget(m_temperature);
-    row->addWidget(m_status);
-    row->addStretch(1);
+    for (auto* label : {m_source, m_filterReady, m_vna, m_controller, m_temperature, m_status}) {
+        label->setWordWrap(true);
+    }
+    row->addWidget(m_source, 0, 0);
+    row->addWidget(m_filterReady, 0, 1);
+    row->addWidget(m_vna, 0, 2);
+    row->addWidget(m_controller, 1, 0);
+    row->addWidget(m_temperature, 1, 1);
+    row->addWidget(m_status, 1, 2);
     auto* settingsToggle = new QToolButton(this);
     settingsToggle->setObjectName(QStringLiteral("connectionSettingsToggle"));
     settingsToggle->setText(QStringLiteral("Настройки подключения"));
     settingsToggle->setCheckable(true);
     settingsToggle->setArrowType(Qt::RightArrow);
     settingsToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    row->addWidget(settingsToggle);
+    row->addWidget(settingsToggle, 0, 3);
     m_theme = new QPushButton(QStringLiteral("Тема: светлая"), this);
     m_theme->setObjectName(QStringLiteral("btnTheme"));
     connect(m_theme, &QPushButton::clicked, this, &ConnectionBar::themeToggleRequested);
-    row->addWidget(m_theme);
+    row->addWidget(m_theme, 1, 3);
+    row->setColumnStretch(0, 2);
+    row->setColumnStretch(1, 1);
+    row->setColumnStretch(2, 1);
     root->addLayout(row);
 
     auto* settingsBody = new QWidget(this);
@@ -114,15 +120,16 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     auto* cfg = new QHBoxLayout();
     cfg->addWidget(new QLabel(QStringLiteral("VNA:"), this));
     m_backend = new QComboBox(this);
-    m_backend->addItem(QStringLiteral("Имитатор"), 0);
-    // QSettings vna/backend = 0/1/2 (userData); подписи меняются, ключи нет.
+    m_backend->setObjectName(QStringLiteral("vnaBackend"));
+    m_backend->addItem(QStringLiteral("Связанный демостенд (VNA + DUT)"), 0);
+    // QSettings vna/backend = 0/1/2/3 (userData); подписи меняются, ключи нет.
     // Alias «S2VNA …» в UserRole+1 — для поиска/подсказок операторам со старым именем.
     m_backend->addItem(QStringLiteral("C2220 Socket (SCPI)"), 1);
     m_backend->setItemData(1, QStringLiteral("S2VNA Socket"), Qt::UserRole + 1);
     m_backend->setItemData(
         1,
         QStringLiteral(
-            "Живой C1220/C2220 по TCP. S2VNA запускается скрыто автоматически."),
+            "Живой C1220/C2220 по TCP. Запустите S2VNA и включите Socket Server вручную."),
         Qt::ToolTipRole);
     m_backend->addItem(QStringLiteral("C2220 COM (SCPI)"), 2);
     m_backend->setItemData(2, QStringLiteral("S2VNA COM"), Qt::UserRole + 1);
@@ -131,20 +138,31 @@ ConnectionBar::ConnectionBar(QWidget* parent)
         QStringLiteral(
             "Живой C2220 по COM. Нужен запущенный SCPI-сервер S2VNA (удалённый COM)."),
         Qt::ToolTipRole);
+    m_backend->addItem(QStringLiteral("S2VNA Demo C2220 (Socket)"), 3);
+    m_backend->setItemData(3, QStringLiteral("S2VNA Demo Mode"), Qt::UserRole + 1);
+    m_backend->setItemData(
+        3,
+        QStringLiteral(
+            "Запустите S2VNA в Demo Mode и включите Socket Server вручную. "
+            "Графики и отчёты не являются метрологией."),
+        Qt::ToolTipRole);
     m_backend->setToolTip(
         QStringLiteral("S2VNA = SCPI-сервер; калибровка и измерения — из AFAR."));
     cfg->addWidget(m_backend);
     cfg->addWidget(new QLabel(QStringLiteral("Host"), this));
     m_host = new QLineEdit(QStringLiteral("127.0.0.1"), this);
+    m_host->setObjectName(QStringLiteral("vnaHost"));
     m_host->setMaximumWidth(140);
     cfg->addWidget(m_host);
     cfg->addWidget(new QLabel(QStringLiteral("Port"), this));
     m_port = new QSpinBox(this);
+    m_port->setObjectName(QStringLiteral("vnaPort"));
     m_port->setRange(1, 65535);
     m_port->setValue(5025);
     cfg->addWidget(m_port);
     cfg->addWidget(new QLabel(QStringLiteral("COM"), this));
     m_com = new QLineEdit(QStringLiteral("COM3"), this);
+    m_com->setObjectName(QStringLiteral("vnaComPort"));
     m_com->setMaximumWidth(80);
     cfg->addWidget(m_com);
     m_probe = new QPushButton(QStringLiteral("Проверить связь"), this);
@@ -153,14 +171,13 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     cfg->addStretch(1);
     settingsLayout->addLayout(cfg);
 
-    // DUT-UI-001: слоты контроллера до кадров т. 14 (серия по умолчанию — DutSimulator).
+    // Контроллер изделия отсутствует: доступен только честно обозначенный деморежим.
     auto* dutCfg = new QHBoxLayout();
     dutCfg->addWidget(new QLabel(QStringLiteral("CTRL:"), this));
     m_ctrlBackend = new QComboBox(this);
     m_ctrlBackend->setObjectName(QStringLiteral("controllerBackend"));
-    m_ctrlBackend->addItem(QStringLiteral("DutSimulator"), 0);
-    m_ctrlBackend->addItem(QStringLiteral("Stub (т.14 не передан)"), 1);
-    m_ctrlBackend->addItem(QStringLiteral("Боевой COM/TCP (ожидает т.14)"), 2);
+    m_ctrlBackend->addItem(QStringLiteral("Демо-контроллер (DutSimulator)"), 0);
+    m_ctrlBackend->addItem(QStringLiteral("Реальный контроллер — отсутствует"), 2);
     dutCfg->addWidget(m_ctrlBackend);
     dutCfg->addWidget(new QLabel(QStringLiteral("Host"), this));
     m_dutHost = new QLineEdit(QStringLiteral("192.168.0.10"), this);
@@ -295,10 +312,10 @@ void ConnectionBar::onControllerBackendChanged(int)
     const int mode = controllerBackend();
     if (mode == 2) {
         QMessageBox::information(
-            this, QStringLiteral("Боевой контроллер недоступен"),
+            this, QStringLiteral("Контроллер изделия отсутствует"),
             QStringLiteral(
-                "Боевой COM/TCP ожидает протокол контроллера (т. 14 ТЗ).\n"
-                "Выбор откатан на Stub / DutSimulator. Серии по умолчанию — DutSimulator."));
+                "Реальная автоматическая калибровка 64×64 недоступна.\n"
+                "Используйте деморежим или подключите поддерживаемый контроллер."));
         m_ctrlBackend->blockSignals(true);
         m_ctrlBackend->setCurrentIndex(m_lastCtrlBackendIndex);
         m_ctrlBackend->blockSignals(false);
@@ -314,15 +331,17 @@ void ConnectionBar::onControllerBackendChanged(int)
 void ConnectionBar::disableCombatControllerItem()
 {
     auto* model = qobject_cast<QStandardItemModel*>(m_ctrlBackend->model());
-    if (!model || model->rowCount() < 3) {
+    const int row = m_ctrlBackend->findData(2);
+    if (!model || row < 0) {
         return;
     }
-    QStandardItem* item = model->item(2);
+    QStandardItem* item = model->item(row);
     if (!item) {
         return;
     }
     item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
-    item->setToolTip(QStringLiteral("нужен протокол т.14"));
+    item->setToolTip(QStringLiteral(
+        "Контроллер изделия и его цифровой интерфейс отсутствуют"));
 }
 
 void ConnectionBar::updateDutEndpointEnabled()
@@ -331,7 +350,8 @@ void ConnectionBar::updateDutEndpointEnabled()
     m_dutHost->setEnabled(false);
     m_dutPort->setEnabled(false);
     m_dutCom->setEnabled(false);
-    const QString tip = QStringLiteral("нужен протокол т.14");
+    const QString tip = QStringLiteral(
+        "Контроллер изделия и его цифровой интерфейс отсутствуют");
     m_dutHost->setToolTip(tip);
     m_dutPort->setToolTip(tip);
     m_dutCom->setToolTip(tip);
@@ -340,16 +360,18 @@ void ConnectionBar::updateDutEndpointEnabled()
 void ConnectionBar::updateFieldsEnabled()
 {
     const int b = vnaBackend();
-    m_host->setEnabled(b == 1);
-    m_port->setEnabled(b == 1);
-    m_com->setEnabled(b == 2);
+    const bool settingsEnabled = !m_timeoutsLocked;
+    m_backend->setEnabled(settingsEnabled);
+    m_host->setEnabled(settingsEnabled && (b == 1 || b == 3));
+    m_port->setEnabled(settingsEnabled && (b == 1 || b == 3));
+    m_com->setEnabled(settingsEnabled && b == 2);
+    m_probe->setEnabled(settingsEnabled);
     if (m_scpiSimulate) {
         m_scpiSimulate->setVisible(b == 0);
     }
-    const bool toEnabled = !m_timeoutsLocked;
-    m_connectMs->setEnabled(toEnabled);
-    m_sweepMs->setEnabled(toEnabled);
-    m_retries->setEnabled(toEnabled);
+    m_connectMs->setEnabled(settingsEnabled);
+    m_sweepMs->setEnabled(settingsEnabled);
+    m_retries->setEnabled(settingsEnabled);
     updateDutEndpointEnabled();
     updateScpiQueueVisibility();
 }
@@ -367,7 +389,8 @@ void ConnectionBar::loadSettings()
 {
     QSettings s;
     const int backend = s.value(QStringLiteral("vna/backend"), 1).toInt();
-    m_backend->setCurrentIndex(qBound(0, backend, 2));
+    const int backendIndex = m_backend->findData(backend);
+    m_backend->setCurrentIndex(backendIndex >= 0 ? backendIndex : m_backend->findData(1));
     m_host->setText(s.value(QStringLiteral("vna/host"), QStringLiteral("127.0.0.1")).toString());
     m_port->setValue(s.value(QStringLiteral("vna/port"), 5025).toInt());
     m_com->setText(s.value(QStringLiteral("vna/com"), QStringLiteral("COM3")).toString());
@@ -381,12 +404,9 @@ void ConnectionBar::loadSettings()
     m_sweepMs->blockSignals(false);
     m_retries->blockSignals(false);
 
-    int ctrl = s.value(QStringLiteral("dut/backend"), 0).toInt();
-    if (ctrl == 2) {
-        ctrl = 1;  // боевой недоступен до т. 14
-    }
+    const int ctrl = 0;  // реальный контроллер отсутствует; старые настройки не активируем
     m_ctrlBackend->blockSignals(true);
-    m_ctrlBackend->setCurrentIndex(qBound(0, ctrl, 1));
+    m_ctrlBackend->setCurrentIndex(m_ctrlBackend->findData(ctrl));
     m_ctrlBackend->blockSignals(false);
     m_lastCtrlBackendIndex = m_ctrlBackend->currentIndex();
     m_dutHost->setText(
@@ -473,7 +493,7 @@ QString ConnectionBar::dutComPort() const
     return m_dutCom->text().trimmed();
 }
 
-void ConnectionBar::setVnaTimeoutsLocked(bool locked)
+void ConnectionBar::setVnaSettingsLocked(bool locked)
 {
     m_timeoutsLocked = locked;
     updateFieldsEnabled();
@@ -545,8 +565,14 @@ void ConnectionBar::setControllerInfo(const QString& iface, bool connected)
     }
     if (simulator) {
         m_controller->setText(
-            QStringLiteral("CTRL: OK — ИМИТАТОР (для S-параметров не нужен)"));
+            QStringLiteral("CTRL: ДЕМО — DutSimulator (для пассивных S-параметров не нужен)"));
         m_controller->setStyleSheet(QStringLiteral("color:#9a6700; font-weight:600;"));
+        return;
+    }
+    if (iface.contains(QStringLiteral("отсутств"), Qt::CaseInsensitive)) {
+        m_controller->setText(QStringLiteral(
+            "CTRL: НЕТ КОНТРОЛЛЕРА — реальная калибровка 64×64 недоступна"));
+        m_controller->setStyleSheet(QStringLiteral("color:#8a1f11; font-weight:600;"));
         return;
     }
     if (connected) {

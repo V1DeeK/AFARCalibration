@@ -1,5 +1,13 @@
 #include "TwoPortExport.h"
 
+#if __has_include("AfarBuildInfo.h")
+#include "AfarBuildInfo.h"
+#endif
+
+#ifndef AFAR_SOFTWARE_VERSION
+#define AFAR_SOFTWARE_VERSION "0.1.0"
+#endif
+
 #include <QFile>
 #include <QDateTime>
 #include <QFont>
@@ -337,10 +345,11 @@ void drawMagnitudeChart(QPainter& painter,
                      Qt::AlignCenter, QStringLiteral("Частота, ГГц"));
 
     QPolygonF line;
-    line.reserve(static_cast<int>(values.size()));
+    line.reserve(static_cast<int>(std::min<std::size_t>(values.size(), 3001)));
     const double f0 = static_cast<double>(frequency.front());
     const double df = std::max(1.0, static_cast<double>(frequency.back() - frequency.front()));
-    for (std::size_t i = 0; i < values.size(); ++i) {
+    const std::size_t step = std::max<std::size_t>(1, values.size() / 3000);
+    for (std::size_t i = 0; i < values.size(); i += step) {
         if (!std::isfinite(values[i])) {
             continue;
         }
@@ -349,6 +358,13 @@ void drawMagnitudeChart(QPainter& painter,
         const double y = plot.bottom()
             - (values[i] - y_min) / (y_max - y_min) * plot.height();
         line << QPointF(x, y);
+    }
+    if (std::isfinite(values.back()) && (values.size() - 1) % step != 0) {
+        const std::size_t i = values.size() - 1;
+        line << QPointF(plot.left()
+                            + (static_cast<double>(frequency[i]) - f0) / df * plot.width(),
+                        plot.bottom()
+                            - (values[i] - y_min) / (y_max - y_min) * plot.height());
     }
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(QPen(color, 1.8));
@@ -398,6 +414,148 @@ void drawMagnitudeChart(QPainter& painter,
                          Qt::AlignCenter, QStringLiteral("M%1").arg(marker + 1));
     }
     painter.restore();
+}
+
+void drawModeBadge(QPainter& painter, const QRectF& area, bool demoMode)
+{
+    painter.save();
+    const QColor color = demoMode ? QColor(181, 43, 43) : QColor(33, 126, 78);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color);
+    painter.drawRoundedRect(area, 5, 5);
+    painter.setPen(Qt::white);
+    painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::Bold));
+    painter.drawText(area, Qt::AlignCenter,
+                     demoMode ? QStringLiteral("DEMO · НЕ МЕТРОЛОГИЯ")
+                              : QStringLiteral("LIVE · ЖИВОЙ VNA"));
+    painter.restore();
+}
+
+void drawValueChart(QPainter& painter,
+                    const QRectF& area,
+                    const std::vector<std::uint64_t>& frequency,
+                    const std::vector<double>& values,
+                    const std::vector<std::uint64_t>& markers,
+                    const QString& title,
+                    const QString& unit,
+                    const QColor& color)
+{
+    painter.save();
+    painter.setPen(QPen(QColor(205, 214, 226), 1.0));
+    painter.setBrush(Qt::white);
+    painter.drawRoundedRect(area, 7, 7);
+    const QRectF plot = area.adjusted(64, 34, -20, -34);
+
+    double minimum = std::numeric_limits<double>::infinity();
+    double maximum = -std::numeric_limits<double>::infinity();
+    for (const double value : values) {
+        if (std::isfinite(value)) {
+            minimum = std::min(minimum, value);
+            maximum = std::max(maximum, value);
+        }
+    }
+    painter.setPen(QColor(56, 68, 84));
+    painter.setFont(QFont(QStringLiteral("Sans Serif"), 7, QFont::Bold));
+    painter.drawText(QRectF(plot.left(), area.top() + 7, plot.width(), 17),
+                     Qt::AlignLeft | Qt::AlignVCenter, title);
+    if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
+        painter.drawText(plot, Qt::AlignCenter, QStringLiteral("Нет конечных данных"));
+        painter.restore();
+        return;
+    }
+    if (maximum <= minimum) {
+        minimum -= 0.5;
+        maximum += 0.5;
+    }
+    const double margin = std::max(0.05, (maximum - minimum) * 0.08);
+    minimum -= margin;
+    maximum += margin;
+
+    const QColor grid(145, 158, 175, 85);
+    painter.setFont(QFont(QStringLiteral("Sans Serif"), 6));
+    for (int i = 0; i <= 6; ++i) {
+        const double t = static_cast<double>(i) / 6.0;
+        const double x = plot.left() + t * plot.width();
+        painter.setPen(QPen(grid, 0.7, Qt::DashLine));
+        painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
+        painter.setPen(Qt::black);
+        const double ghz = (static_cast<double>(frequency.front())
+                            + t * static_cast<double>(frequency.back() - frequency.front())) / 1e9;
+        painter.drawText(QRectF(x - 32, plot.bottom() + 2, 64, 13), Qt::AlignCenter,
+                         QString::number(ghz, 'f', 3));
+    }
+    for (int i = 0; i <= 4; ++i) {
+        const double t = static_cast<double>(i) / 4.0;
+        const double y = plot.bottom() - t * plot.height();
+        painter.setPen(QPen(grid, 0.7, Qt::DashLine));
+        painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
+        painter.setPen(Qt::black);
+        painter.drawText(QRectF(area.left() + 2, y - 7, 48, 14), Qt::AlignRight,
+                         QString::number(minimum + t * (maximum - minimum), 'f', 2));
+    }
+
+    const double f0 = static_cast<double>(frequency.front());
+    const double df = std::max(1.0, static_cast<double>(frequency.back() - frequency.front()));
+    const auto pointFor = [&](std::size_t index) {
+        return QPointF(plot.left()
+                           + (static_cast<double>(frequency[index]) - f0) / df * plot.width(),
+                       plot.bottom()
+                           - (values[index] - minimum) / (maximum - minimum) * plot.height());
+    };
+    QPolygonF line;
+    const std::size_t step = std::max<std::size_t>(1, values.size() / 3000);
+    for (std::size_t i = 0; i < values.size(); i += step) {
+        if (std::isfinite(values[i])) {
+            line << pointFor(i);
+        }
+    }
+    if (std::isfinite(values.back()) && (values.size() - 1) % step != 0) {
+        line << pointFor(values.size() - 1);
+    }
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(color, 1.5));
+    painter.drawPolyline(line);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color.darker(120));
+    for (const auto marker : markers) {
+        if (marker < frequency.front() || marker > frequency.back()) {
+            continue;
+        }
+        const auto index = nearestFrequencyIndex(frequency, marker);
+        if (std::isfinite(values[index])) {
+            painter.drawEllipse(pointFor(index), 3.0, 3.0);
+        }
+    }
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.setPen(Qt::black);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(plot);
+    painter.setFont(QFont(QStringLiteral("Sans Serif"), 6));
+    painter.drawText(QRectF(plot.left(), plot.bottom() + 15, plot.width(), 13),
+                     Qt::AlignCenter, QStringLiteral("Частота, ГГц"));
+    painter.drawText(QRectF(area.left() + 4, area.top() + 7, 54, 17),
+                     Qt::AlignRight | Qt::AlignVCenter, unit);
+    painter.restore();
+}
+
+std::vector<double> vswrValues(const std::vector<std::complex<double>>& trace)
+{
+    std::vector<double> result;
+    result.reserve(trace.size());
+    for (const auto& value : trace) {
+        const double gamma = std::abs(value);
+        result.push_back(std::isfinite(gamma) && gamma < 1.0
+                             ? (1.0 + gamma) / (1.0 - gamma)
+                             : std::numeric_limits<double>::infinity());
+    }
+    return result;
+}
+
+std::string touchstoneComment(std::string value)
+{
+    std::replace(value.begin(), value.end(), '\r', ' ');
+    std::replace(value.begin(), value.end(), '\n', ' ');
+    return value;
 }
 
 }  // namespace
@@ -452,6 +610,14 @@ bool writeTouchstoneS2p(const std::filesystem::path& path,
     body << "! AFAR RX Calibration Studio\n"
          << "! measured_utc=" << measurement.measured_utc << "\n"
          << "! vna_idn=" << measurement.vna_idn << "\n"
+         << "! source_mode="
+         << (measurement.demo_mode ? "S2VNA_DEMO_NON_METROLOGICAL" : "LIVE_VNA") << "\n"
+         << "! device_name=" << touchstoneComment(measurement.device_name) << "\n"
+         << "! device_serial=" << touchstoneComment(measurement.device_serial) << "\n"
+         << "! operator=" << touchstoneComment(measurement.operator_name) << "\n"
+         << "! operator_assessment="
+         << (measurement.operator_accepted ? "ACCEPTED" : "NOT_ASSESSED") << "\n"
+         << "! comment=" << touchstoneComment(measurement.comment) << "\n"
          << "! settings_source="
          << (measurement.applied_readback ? "instrument_readback" : "requested") << "\n"
          << "# Hz S RI R " << std::setprecision(12) << measurement.reference_ohm << "\n";
@@ -511,7 +677,7 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
         constexpr std::array<const char*, 4> names{"S11", "S21", "S12", "S22"};
         const std::array<QColor, 4> colors{QColor(47, 128, 237), QColor(39, 174, 96),
                                           QColor(242, 153, 74), QColor(187, 107, 217)};
-        constexpr int pageCount = 5;
+        constexpr int pageCount = 6;
 
         // Титульный лист: только идентификация и общие условия измерения.
         QRectF page = writer.pageLayout().paintRectPixels(writer.resolution());
@@ -533,6 +699,8 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
         painter.drawText(banner.adjusted(34, 166, -34, -18),
                          Qt::AlignLeft | Qt::AlignTop,
                          QStringLiteral("Полный двухпортовый свип S11 / S21 / S12 / S22"));
+        drawModeBadge(painter, QRectF(page.right() - 216, page.top() + 22, 182, 28),
+                      measurement.demo_mode);
 
         painter.setPen(QColor(28, 57, 91));
         painter.setFont(QFont(QStringLiteral("Sans Serif"), 11, QFont::Bold));
@@ -553,10 +721,12 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
                  {
                      QStringLiteral("Анализатор цепей: %1")
                          .arg(instrumentName.isEmpty() ? QStringLiteral("не указан") : instrumentName),
-                     QStringLiteral("Серийный номер: %1")
-                         .arg(instrument.serial.isEmpty() ? QStringLiteral("не указан") : instrument.serial),
-                     QStringLiteral("Версия ПО прибора: %1")
-                         .arg(instrument.firmware.isEmpty() ? QStringLiteral("не указана") : instrument.firmware),
+                     measurement.demo_mode
+                         ? QStringLiteral("Источник: S2VNA DEMO — имитация, не метрология")
+                         : QStringLiteral("Источник: живой VNA"),
+                      QStringLiteral("Серийный номер: %1; версия S2VNA/прибора: %2")
+                         .arg(instrument.serial.isEmpty() ? QStringLiteral("не указан") : instrument.serial,
+                              instrument.firmware.isEmpty() ? QStringLiteral("не указана") : instrument.firmware),
                      QStringLiteral("Идентификация *IDN?: %1")
                          .arg(QString::fromStdString(measurement.vna_idn))
                  });
@@ -579,20 +749,33 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
                                   : QStringLiteral("задано оператором")),
                      QStringLiteral("Частотная ось: общая для всех четырёх трасс")
                  });
-        drawCard(painter, QRectF(left, page.top() + 650, width, 125),
-                 QStringLiteral("Состав протокола"),
+        drawCard(painter, QRectF(left, page.top() + 650, width, 165),
+                 QStringLiteral("Изделие и оформление отчёта"),
                  {
-                     QStringLiteral("Страницы 2-5: по одному полноразмерному графику на страницу"),
-                     QStringLiteral("Для каждой трассы: MIN, MAX, AVG, размах, фаза и параметры свипа"),
-                     measurement.marker_frequency_hz.empty()
-                         ? QStringLiteral("Пользовательские маркеры: не установлены")
-                         : QStringLiteral("Пользовательских маркеров: %1")
-                               .arg(static_cast<qulonglong>(measurement.marker_frequency_hz.size())),
-                     QStringLiteral("Формат исходных комплексных данных: Touchstone S2P, RI")
+                     QStringLiteral("Название: %1")
+                         .arg(measurement.device_name.empty()
+                                  ? QStringLiteral("не указано")
+                                  : QString::fromStdString(measurement.device_name)),
+                     QStringLiteral("Серийный номер: %1")
+                         .arg(measurement.device_serial.empty()
+                                  ? QStringLiteral("не указан")
+                                  : QString::fromStdString(measurement.device_serial)),
+                     QStringLiteral("Оператор: %1")
+                         .arg(measurement.operator_name.empty()
+                                  ? QStringLiteral("не указан")
+                                  : QString::fromStdString(measurement.operator_name)),
+                     QStringLiteral("Комментарий: %1")
+                         .arg(measurement.comment.empty()
+                                  ? QStringLiteral("нет")
+                                  : QString::fromStdString(measurement.comment)),
+                     QStringLiteral("Версия AFAR: %1; оценка: %2")
+                         .arg(QStringLiteral(AFAR_SOFTWARE_VERSION),
+                              measurement.operator_accepted ? QStringLiteral("ПРИНЯТО")
+                                                            : QStringLiteral("БЕЗ ОЦЕНКИ"))
                  });
         painter.setPen(QColor(102, 112, 125));
         painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
-        painter.drawText(QRectF(left, page.top() + 798, width, 58),
+        painter.drawText(QRectF(left, page.top() + 835, width, 58),
                          Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
                          QStringLiteral("Протокол сформирован автоматически из одного согласованного "
                                         "набора комплексных отсчётов. Повторное измерение при экспорте "
@@ -612,20 +795,39 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
             painter.fillRect(QRectF(page.left() + 24, page.top() + 16, 6, 46), color);
             painter.setPen(QColor(24, 34, 48));
             painter.setFont(QFont(QStringLiteral("Sans Serif"), 18, QFont::Bold));
-            painter.drawText(QRectF(page.left() + 44, page.top() + 14, page.width() - 70, 28),
+            painter.drawText(QRectF(page.left() + 44, page.top() + 14, page.width() - 260, 28),
                              Qt::AlignLeft | Qt::AlignVCenter,
-                             QStringLiteral("%1 - модуль и контрольные значения").arg(name));
+                             QStringLiteral("%1 — модуль и фаза").arg(name));
+            drawModeBadge(painter, QRectF(page.right() - 204, page.top() + 17, 180, 28),
+                          measurement.demo_mode);
             painter.setPen(QColor(91, 102, 116));
             painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
             painter.drawText(QRectF(page.left() + 44, page.top() + 43, page.width() - 70, 18),
                              Qt::AlignLeft | Qt::AlignVCenter,
                              traceDescription(traceIndex));
 
-            const QRectF chart(page.left() + 24, page.top() + 76, page.width() - 48, 445);
+            const QRectF chart(page.left() + 24, page.top() + 76, page.width() - 48, 250);
             drawMagnitudeChart(painter, chart, measurement.sweep.frequency_hz, trace,
                                summary, measurement.marker_frequency_hz, color);
 
-            const qreal metricsTop = page.top() + 535;
+            const bool reflection = traceIndex == 0 || traceIndex == 3;
+            const QRectF phaseChart(page.left() + 24, page.top() + 338, page.width() - 48,
+                                    reflection ? 205 : 367);
+            drawValueChart(painter, phaseChart, measurement.sweep.frequency_hz, phase,
+                           measurement.marker_frequency_hz,
+                           QStringLiteral("Фаза unwrap"), QStringLiteral("град."), color);
+            if (reflection) {
+                const auto vswr = vswrValues(trace);
+                drawValueChart(painter,
+                               QRectF(page.left() + 24, page.top() + 555,
+                                      page.width() - 48, 150),
+                               measurement.sweep.frequency_hz, vswr,
+                               measurement.marker_frequency_hz,
+                               QStringLiteral("КСВН (расчёт из %1)").arg(name),
+                               QStringLiteral("КСВН"), QColor(198, 58, 58));
+            }
+
+            const qreal metricsTop = page.top() + 717;
             const qreal metricsGap = 10;
             const qreal metricWidth = (page.width() - 48 - metricsGap * 2) / 3.0;
             drawMetricCard(painter,
@@ -653,7 +855,7 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
                                 .arg(*phaseMinMax.first, 0, 'f', 2)
                                 .arg(*phaseMinMax.second, 0, 'f', 2)
                                 .arg(static_cast<qulonglong>(trace.size()));
-            if (traceIndex == 0 || traceIndex == 3) {
+            if (reflection) {
                 const double vswr = maximumVswr(trace);
                 extra += QStringLiteral("; максимальный КСВН: %1")
                     .arg(std::isfinite(vswr) ? QString::number(vswr, 'f', 3)
@@ -661,12 +863,12 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
             }
             painter.setPen(QColor(55, 65, 78));
             painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
-            painter.drawText(QRectF(page.left() + 28, page.top() + 622,
+            painter.drawText(QRectF(page.left() + 28, page.top() + 801,
                                     page.width() - 56, 36),
                              Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, extra);
             painter.setPen(QColor(92, 103, 117));
             painter.setFont(QFont(QStringLiteral("Sans Serif"), 7));
-            painter.drawText(QRectF(page.left() + 28, page.top() + 656,
+            painter.drawText(QRectF(page.left() + 28, page.top() + 834,
                                     page.width() - 56, 18),
                              Qt::AlignLeft | Qt::AlignVCenter,
                              QStringLiteral("Свип: %1 - %2 ГГц | IFBW %3 Гц | %4 дБм | AVG %5 | R %6 Ом")
@@ -679,7 +881,7 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
                                  .arg(static_cast<qulonglong>(settings.averages))
                                  .arg(measurement.reference_ohm, 0, 'f', 1));
 
-            const qreal tableTop = page.top() + 690;
+            const qreal tableTop = page.top() + 862;
             painter.setPen(QColor(28, 57, 91));
             painter.setFont(QFont(QStringLiteral("Sans Serif"), 9, QFont::Bold));
             painter.drawText(QRectF(page.left() + 24, tableTop, page.width() - 48, 20),
@@ -769,6 +971,126 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
             }
             drawFooter(painter, page, traceIndex + 2, pageCount);
         }
+
+        writer.newPage();
+        page = writer.pageLayout().paintRectPixels(writer.resolution());
+        painter.fillRect(page, Qt::white);
+        painter.fillRect(QRectF(page.left(), page.top(), page.width(), 112), QColor(25, 51, 82));
+        painter.setPen(Qt::white);
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 21, QFont::Bold));
+        painter.drawText(QRectF(page.left() + 34, page.top() + 28, page.width() - 260, 38),
+                         Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("ИТОГ ИЗМЕРЕНИЯ"));
+        drawModeBadge(painter, QRectF(page.right() - 216, page.top() + 32, 182, 28),
+                      measurement.demo_mode);
+
+        const auto s2pPath = [&path] {
+            auto result = path;
+            result.replace_extension(".s2p");
+            return result;
+        }();
+        const QString s2pName = pathToQString(s2pPath.filename());
+        drawCard(painter, QRectF(page.left() + 34, page.top() + 140, page.width() - 68, 165),
+                 QStringLiteral("Результат"),
+                 {
+                     QStringLiteral("Измерение: ВЫПОЛНЕНО — получены S11, S21, S12 и S22"),
+                     QStringLiteral("Оценка оператора: %1")
+                         .arg(measurement.operator_accepted ? QStringLiteral("ПРИНЯТО")
+                                                           : QStringLiteral("БЕЗ ОЦЕНКИ")),
+                     QStringLiteral("Комплексные отсчёты: %1").arg(s2pName),
+                     QStringLiteral("Источник: %1")
+                         .arg(measurement.demo_mode
+                                  ? QStringLiteral("DEMO — неметрологическая имитация")
+                                  : QStringLiteral("LIVE — живой VNA")),
+                     QStringLiteral("Повторное измерение при экспорте: не выполнялось")
+                 });
+        drawCard(painter, QRectF(page.left() + 34, page.top() + 320, page.width() - 68, 145),
+                 QStringLiteral("Изделие и оператор"),
+                 {
+                     QStringLiteral("Изделие: %1; серийный №: %2")
+                         .arg(measurement.device_name.empty()
+                                  ? QStringLiteral("не указано")
+                                  : QString::fromStdString(measurement.device_name),
+                              measurement.device_serial.empty()
+                                  ? QStringLiteral("не указан")
+                                  : QString::fromStdString(measurement.device_serial)),
+                     QStringLiteral("Оператор: %1")
+                         .arg(measurement.operator_name.empty()
+                                  ? QStringLiteral("не указан")
+                                  : QString::fromStdString(measurement.operator_name)),
+                     QStringLiteral("Дата: %1").arg(humanDateTime(measurement.measured_utc))
+                 });
+
+        painter.setPen(QColor(28, 57, 91));
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 11, QFont::Bold));
+        painter.drawText(QRectF(page.left() + 34, page.top() + 490, page.width() - 68, 24),
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         QStringLiteral("Сводка по S-параметрам"));
+        const qreal tableLeft = page.left() + 34;
+        const qreal tableTop = page.top() + 525;
+        const qreal tableWidth = page.width() - 68;
+        const std::array<qreal, 6> columns{
+            tableLeft, tableLeft + tableWidth * 0.12, tableLeft + tableWidth * 0.30,
+            tableLeft + tableWidth * 0.48, tableLeft + tableWidth * 0.66,
+            tableLeft + tableWidth
+        };
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(225, 235, 247));
+        painter.drawRect(QRectF(tableLeft, tableTop, tableWidth, 30));
+        painter.setPen(QColor(39, 52, 69));
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::Bold));
+        const std::array<QString, 5> summaryHeaders{
+            QStringLiteral("Парам."), QStringLiteral("MIN, дБ"), QStringLiteral("MAX, дБ"),
+            QStringLiteral("AVG, дБ"), QStringLiteral("Макс. КСВН")};
+        for (int column = 0; column < 5; ++column) {
+            painter.drawText(QRectF(columns[static_cast<std::size_t>(column)], tableTop,
+                                    columns[static_cast<std::size_t>(column + 1)]
+                                        - columns[static_cast<std::size_t>(column)], 30),
+                             Qt::AlignCenter, summaryHeaders[static_cast<std::size_t>(column)]);
+        }
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
+        for (int traceIndex = 0; traceIndex < 4; ++traceIndex) {
+            const auto& trace = traceFor(measurement.sweep, traceIndex);
+            const TraceSummary summary = summarize(trace);
+            const bool reflection = traceIndex == 0 || traceIndex == 3;
+            const double vswr = reflection ? maximumVswr(trace) : 0.0;
+            const std::array<QString, 5> cells{
+                QString::fromLatin1(names[static_cast<std::size_t>(traceIndex)]),
+                QString::number(summary.minimum_db, 'f', 3),
+                QString::number(summary.maximum_db, 'f', 3),
+                QString::number(summary.average_db, 'f', 3),
+                reflection ? (std::isfinite(vswr) ? QString::number(vswr, 'f', 3)
+                                                  : QStringLiteral("не ограничен"))
+                           : QStringLiteral("—")
+            };
+            const qreal rowTop = tableTop + 30 + traceIndex * 34;
+            if (traceIndex % 2 == 1) {
+                painter.fillRect(QRectF(tableLeft, rowTop, tableWidth, 34),
+                                 QColor(248, 250, 253));
+            }
+            painter.setPen(QColor(52, 61, 73));
+            for (int column = 0; column < 5; ++column) {
+                painter.drawText(QRectF(columns[static_cast<std::size_t>(column)], rowTop,
+                                        columns[static_cast<std::size_t>(column + 1)]
+                                            - columns[static_cast<std::size_t>(column)], 34),
+                                 Qt::AlignCenter, cells[static_cast<std::size_t>(column)]);
+            }
+        }
+
+        painter.setPen(QColor(28, 57, 91));
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 10, QFont::Bold));
+        painter.drawText(QRectF(page.left() + 34, page.top() + 715, page.width() - 68, 22),
+                         Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Комментарий"));
+        painter.setPen(QPen(QColor(211, 219, 230), 1.0));
+        painter.setBrush(QColor(247, 249, 252));
+        const QRectF commentArea(page.left() + 34, page.top() + 745, page.width() - 68, 120);
+        painter.drawRoundedRect(commentArea, 7, 7);
+        painter.setPen(QColor(40, 48, 60));
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 9));
+        painter.drawText(commentArea.adjusted(14, 12, -14, -12),
+                         Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                         measurement.comment.empty() ? QStringLiteral("Комментарий не указан.")
+                                                     : QString::fromStdString(measurement.comment));
+        drawFooter(painter, page, pageCount, pageCount);
         painter.end();
     }
     if (!file.commit()) {
