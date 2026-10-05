@@ -13,11 +13,20 @@ namespace afar {
 
 struct RawS21StateRecord {
     std::vector<std::complex<double>> s21;
+    /// Разброс двух независимых S21-съёмов по каждой частотной точке.
+    std::vector<double> repeatability_db;
+    std::vector<double> repeatability_deg;
     float temperature_c{0.f};
     bool overload{false};
     /// Поточечная пригодность (не vector<bool> — избегаем проблем MinGW -Werror).
     std::vector<std::uint8_t> valid;
     std::uint16_t attempt{0};
+    bool completed{false};
+};
+
+struct RawS21StateStatus {
+    std::uint16_t attempt{0};
+    bool overload{false};
     bool completed{false};
 };
 
@@ -30,11 +39,13 @@ struct RawS21Meta {
 };
 
 /// Собственный бинарный формат raw-s21.h5 без libhdf5 (DATA-006).
-/// Magic: "AFARH5\\1", version 1. Один слот на (ch, att, phase).
+/// Magic: "AFARH5\\1". Версия 2 добавляет поточечную повторяемость;
+/// версия 1 по-прежнему читается для recovery старых серий.
 class RawS21Store {
 public:
     static constexpr char kMagic[8] = {'A', 'F', 'A', 'R', 'H', '5', '\1', '\0'};
-    static constexpr std::uint32_t kVersion = 1;
+    static constexpr std::uint32_t kVersion = 2;
+    static constexpr std::uint32_t kLegacyVersion = 1;
 
     RawS21Store() = default;
     ~RawS21Store();
@@ -97,6 +108,12 @@ public:
                    RawS21StateRecord& out,
                    std::string& diagnostics) const;
 
+    bool readStateStatus(std::uint8_t channel,
+                         std::uint16_t att_code,
+                         std::uint8_t phase_code,
+                         RawS21StateStatus& out,
+                         std::string& diagnostics) const;
+
     [[nodiscard]] bool isCompleted(std::uint8_t channel,
                                    std::uint16_t att_code,
                                    std::uint8_t phase_code) const;
@@ -108,6 +125,11 @@ public:
                         std::string& diagnostics);
 
     [[nodiscard]] std::size_t completedCount() const;
+
+    [[nodiscard]] static std::uint64_t estimatedPayloadBytes(std::size_t channels,
+                                                              std::size_t attenuations,
+                                                              std::size_t phases,
+                                                              std::size_t frequencies);
 
     /// Опора: слот [ch_idx][att_row] где att_row in 0..n_att (N_A+1).
     bool writeReference(std::uint8_t channel,
@@ -134,17 +156,21 @@ private:
     std::vector<std::uint8_t> phase_codes_;
     std::vector<std::uint64_t> frequency_hz_;
     RawS21Meta meta_;
+    std::uint32_t version_{kVersion};
     std::uint64_t states_offset_{0};
     std::uint64_t refs_offset_{0};
     std::uint64_t state_stride_{0};
     std::uint64_t ref_stride_{0};
+    std::size_t completed_count_{0};
 
     [[nodiscard]] std::size_t flatIndex(std::size_t ch_i, std::size_t att_i, std::size_t ph_i) const;
     bool seekState(std::size_t flat) const;
     bool seekRef(std::size_t flat) const;
     bool writeRecordAt(std::size_t flat, const RawS21StateRecord& record, std::string& diagnostics);
     bool readRecordAt(std::size_t flat, RawS21StateRecord& out, std::string& diagnostics) const;
-    static std::uint64_t computeStateStride(std::uint32_t n_freq);
+    bool readStatusAt(std::size_t flat, RawS21StateStatus& out, std::string& diagnostics) const;
+    bool writeCompletedAt(std::size_t flat, bool completed, std::string& diagnostics);
+    static std::uint64_t computeStateStride(std::uint32_t n_freq, std::uint32_t version);
     static std::uint64_t computeRefStride(std::uint32_t n_freq);
 };
 

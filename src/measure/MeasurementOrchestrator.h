@@ -11,6 +11,7 @@
 #include "afar/IVna.h"
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -95,7 +96,10 @@ public:
 
     /// UI-MEAS-001: один цикл configure+measureAllFour без DUT/серии.
     /// Только Idle или Ready; Running — отказ. Пишет lastMeasuredSweep.
-    bool measurePreview(const SweepConfig& sweep, std::string& diagnostics);
+    bool measurePreview(
+        const SweepConfig& sweep,
+        std::string& diagnostics,
+        const std::function<void(const ComplexSweep&, SParameter)>& trace_ready = {});
 
     /// CAL-UI: один шаг SOLT через IVna::calibrate_two_port. Idle или Ready.
     bool calibrateTwoPortStep(TwoPortCalibrationStep step, std::string& diagnostics);

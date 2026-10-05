@@ -4,6 +4,7 @@
 
 #include "../cal/PhaseMath.h"
 #include "../measure/RunStateMachine.h"
+#include "afar/C2220Limits.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -26,6 +27,8 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStandardItem>
+#include <QStandardItemModel>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -87,7 +90,16 @@ MeasureTab::MeasureTab(QWidget* parent)
     m_workMode = new QComboBox(navigation);
     m_workMode->setObjectName(QStringLiteral("measurementWorkMode"));
     m_workMode->addItem(QStringLiteral("Двухпортовое устройство"));
-    m_workMode->addItem(QStringLiteral("Калибровка канала 64×64"));
+    m_workMode->addItem(QStringLiteral("Демо: калибровка канала 64×64"));
+    m_workMode->addItem(
+        QStringLiteral("Реальная калибровка 64×64 — нет контроллера"));
+    if (auto* model = qobject_cast<QStandardItemModel*>(m_workMode->model())) {
+        if (auto* realMode = model->item(2)) {
+            realMode->setFlags(realMode->flags() & ~Qt::ItemIsEnabled);
+            realMode->setToolTip(QStringLiteral(
+                "Контроллер изделия отсутствует. Используйте деморежим."));
+        }
+    }
     navigationLayout->addWidget(modeLabel);
     navigationLayout->addWidget(m_workMode);
 
@@ -349,7 +361,8 @@ QWidget* MeasureTab::makeSweepPage()
     m_fSpan->setObjectName(QStringLiteral("frequencySpan"));
 
     m_points = new QSpinBox(params);
-    m_points->setRange(2, 10001);
+    m_points->setRange(static_cast<int>(afar::c2220::kPointsMin),
+                       static_cast<int>(afar::c2220::kPointsMax));
 
     auto* ifbwRow = new QWidget(params);
     {
@@ -366,12 +379,12 @@ QWidget* MeasureTab::makeSweepPage()
     }
 
     m_power = new QDoubleSpinBox(params);
-    m_power->setRange(-60.0, 10.0);
+    m_power->setRange(afar::c2220::kPowerMinDbm, afar::c2220::kPowerMaxDbm);
     m_power->setDecimals(1);
     m_power->setSuffix(QStringLiteral(" дБм"));
     m_averages = new QSpinBox(params);
     m_averages->setObjectName(QStringLiteral("sweepAverages"));
-    m_averages->setRange(1, 999);
+    m_averages->setRange(afar::c2220::kAveragesMin, afar::c2220::kAveragesMax);
     m_averages->setValue(1);
     m_averages->setToolTip(QStringLiteral("S2VNA: SENS:AVER / SENS:AVER:COUN, диапазон 1…999"));
 
@@ -579,6 +592,28 @@ QWidget* MeasureTab::makeGraphsPage()
     m_graphDataStatus->setWordWrap(true);
     m_graphDataStatus->setObjectName(QStringLiteral("hintLabel"));
 
+    auto* reportFields = new QGroupBox(QStringLiteral("Поля PDF-отчёта"), side);
+    auto* reportForm = new QFormLayout(reportFields);
+    m_reportDeviceName = new QLineEdit(reportFields);
+    m_reportDeviceName->setObjectName(QStringLiteral("reportDeviceName"));
+    m_reportDeviceName->setPlaceholderText(QStringLiteral("Название изделия"));
+    m_reportDeviceSerial = new QLineEdit(reportFields);
+    m_reportDeviceSerial->setObjectName(QStringLiteral("reportDeviceSerial"));
+    m_reportDeviceSerial->setPlaceholderText(QStringLiteral("Серийный номер"));
+    m_reportOperator = new QLineEdit(reportFields);
+    m_reportOperator->setObjectName(QStringLiteral("reportOperator"));
+    m_reportOperator->setPlaceholderText(QStringLiteral("ФИО или табельный номер"));
+    m_reportComment = new QLineEdit(reportFields);
+    m_reportComment->setObjectName(QStringLiteral("reportComment"));
+    m_reportComment->setPlaceholderText(QStringLiteral("Необязательно"));
+    m_reportAccepted = new QCheckBox(QStringLiteral("Принято оператором"), reportFields);
+    m_reportAccepted->setObjectName(QStringLiteral("reportAccepted"));
+    reportForm->addRow(QStringLiteral("Изделие:"), m_reportDeviceName);
+    reportForm->addRow(QStringLiteral("Серийный №:"), m_reportDeviceSerial);
+    reportForm->addRow(QStringLiteral("Оператор:"), m_reportOperator);
+    reportForm->addRow(QStringLiteral("Комментарий:"), m_reportComment);
+    reportForm->addRow(m_reportAccepted);
+
     auto* formatBox = new QGroupBox(QStringLiteral("Формат отображения"), side);
     auto* formatLayout = new QVBoxLayout(formatBox);
     m_graphDisplayFormat = new QComboBox(formatBox);
@@ -691,6 +726,7 @@ QWidget* MeasureTab::makeGraphsPage()
     sideLayout->addWidget(m_exportTwoPort);
     sideLayout->addWidget(openSweepSettings);
     sideLayout->addWidget(m_graphDataStatus);
+    sideLayout->addWidget(reportFields);
     sideLayout->addWidget(formatBox);
     sideLayout->addWidget(traces);
     sideLayout->addWidget(markers);
@@ -1372,8 +1408,20 @@ void MeasureTab::setMeasureNowEnabled(bool enabled)
 
 void MeasureTab::setTwoPortExportEnabled(bool enabled)
 {
+    m_twoPortExportAvailable = enabled;
     if (m_exportTwoPort) {
-        m_exportTwoPort->setEnabled(enabled);
+        m_exportTwoPort->setEnabled(enabled && !m_twoPortExportInProgress);
+    }
+}
+
+void MeasureTab::setTwoPortExportInProgress(bool inProgress)
+{
+    m_twoPortExportInProgress = inProgress;
+    if (m_exportTwoPort) {
+        m_exportTwoPort->setEnabled(m_twoPortExportAvailable && !inProgress);
+        m_exportTwoPort->setText(inProgress
+                                     ? QStringLiteral("Формирование отчёта…")
+                                     : QStringLiteral("Сохранить .s2p + PDF-отчёт"));
     }
 }
 
@@ -1663,6 +1711,31 @@ int MeasureTab::averages() const
     return m_averages->value();
 }
 
+QString MeasureTab::reportDeviceName() const
+{
+    return m_reportDeviceName ? m_reportDeviceName->text().trimmed() : QString{};
+}
+
+QString MeasureTab::reportDeviceSerial() const
+{
+    return m_reportDeviceSerial ? m_reportDeviceSerial->text().trimmed() : QString{};
+}
+
+QString MeasureTab::reportOperatorName() const
+{
+    return m_reportOperator ? m_reportOperator->text().trimmed() : QString{};
+}
+
+QString MeasureTab::reportComment() const
+{
+    return m_reportComment ? m_reportComment->text().trimmed() : QString{};
+}
+
+bool MeasureTab::reportAccepted() const
+{
+    return m_reportAccepted && m_reportAccepted->isChecked();
+}
+
 double MeasureTab::freqUnitScale(int unitIndex)
 {
     switch (unitIndex) {
@@ -1686,10 +1759,10 @@ double MeasureTab::ifbwUnitScale(int unitIndex)
 
 void MeasureTab::applyFreqSpinLimits(QDoubleSpinBox* spin, int unitIndex) const
 {
-    // 100 кГц … 40 ГГц в выбранных единицах.
+    // Пределы C2220 в выбранных единицах.
     const double scale = freqUnitScale(unitIndex);
-    const double minHz = 1e5;
-    const double maxHz = 40e9;
+    const double minHz = static_cast<double>(afar::c2220::kFrequencyMinHz);
+    const double maxHz = static_cast<double>(afar::c2220::kFrequencyMaxHz);
     spin->setRange(minHz / scale, maxHz / scale);
     switch (unitIndex) {
     case 0:
@@ -1717,7 +1790,9 @@ void MeasureTab::syncFreqSpinsFromHz()
     applyFreqSpinLimits(m_fStop, m_fStopUnit->currentIndex());
     applyFreqSpinLimits(m_fCenter, m_fCenterUnit->currentIndex());
     const double spanScale = freqUnitScale(m_fSpanUnit->currentIndex());
-    m_fSpan->setRange(1.0 / spanScale, (40e9 - 1e5) / spanScale);
+    m_fSpan->setRange(1.0 / spanScale,
+                      static_cast<double>(afar::c2220::kFrequencyMaxHz
+                                          - afar::c2220::kFrequencyMinHz) / spanScale);
     m_fSpan->setDecimals(m_fSpanUnit->currentIndex() == 0 ? 0
                          : (m_fSpanUnit->currentIndex() == 3 ? 6 : 3));
     m_fStart->setValue(m_fStartHz / freqUnitScale(m_fStartUnit->currentIndex()));
@@ -1733,7 +1808,8 @@ void MeasureTab::syncIfbwSpinFromHz()
 {
     m_freqUiGuard = true;
     const double scale = ifbwUnitScale(m_ifbwUnit->currentIndex());
-    m_ifbw->setRange(1.0 / scale, 1e6 / scale);
+    m_ifbw->setRange(static_cast<double>(afar::c2220::kIfbwMinHz) / scale,
+                     static_cast<double>(afar::c2220::kIfbwMaxHz) / scale);
     m_ifbw->setDecimals(m_ifbwUnit->currentIndex() == 0 ? 0 : 3);
     m_ifbw->setValue(static_cast<double>(m_ifbwHz) / scale);
     m_freqUiGuard = false;
@@ -1767,8 +1843,8 @@ void MeasureTab::onCenterSpanSpinChanged()
     const double centerHz = m_fCenter->value()
         * freqUnitScale(m_fCenterUnit->currentIndex());
     const double spanHz = m_fSpan->value() * freqUnitScale(m_fSpanUnit->currentIndex());
-    constexpr double kMinimumHz = 1e5;
-    constexpr double kMaximumHz = 40e9;
+    constexpr double kMinimumHz = static_cast<double>(afar::c2220::kFrequencyMinHz);
+    constexpr double kMaximumHz = static_cast<double>(afar::c2220::kFrequencyMaxHz);
     m_fStartHz = std::max(kMinimumHz, centerHz - spanHz / 2.0);
     m_fStopHz = std::min(kMaximumHz, centerHz + spanHz / 2.0);
     if (m_fStopHz <= m_fStartHz) {

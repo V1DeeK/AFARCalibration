@@ -58,6 +58,8 @@ TEST_CASE("RawS21Store create/write/reopen/completed", "[hdf5_store][DATA-006][T
 
     afar::RawS21StateRecord rec;
     rec.s21 = {{1.0, 2.0}, {3.0, 4.0}, {5.0, 6.0}};
+    rec.repeatability_db = {0.01, 0.02, 0.03};
+    rec.repeatability_deg = {0.1, 0.2, 0.3};
     rec.valid = {1, 1, 0};
     rec.temperature_c = 25.5f;
     rec.overload = false;
@@ -66,6 +68,11 @@ TEST_CASE("RawS21Store create/write/reopen/completed", "[hdf5_store][DATA-006][T
     REQUIRE(store.writeState(1, 0, 0, rec, diag));
     REQUIRE(store.isCompleted(1, 0, 0));
     REQUIRE(store.completedCount() == 1);
+    afar::RawS21StateStatus status;
+    REQUIRE(store.readStateStatus(1, 0, 0, status, diag));
+    REQUIRE(status.completed);
+    REQUIRE(status.attempt == 1);
+    REQUIRE_FALSE(status.overload);
 
     // completed=true нельзя переписать
     rec.attempt = 2;
@@ -85,6 +92,8 @@ TEST_CASE("RawS21Store create/write/reopen/completed", "[hdf5_store][DATA-006][T
     REQUIRE(got.s21.size() == 3);
     REQUIRE(got.s21[0].real() == Catch::Approx(1.0));
     REQUIRE(got.s21[2].imag() == Catch::Approx(6.0));
+    REQUIRE(got.repeatability_db[1] == Catch::Approx(0.02));
+    REQUIRE(got.repeatability_deg[2] == Catch::Approx(0.3));
     REQUIRE(reopened.completedCount() == 1);
 
     // clearCompleted снимает AT-05 блок и позволяет переписать слот
@@ -105,6 +114,20 @@ TEST_CASE("RawS21Store create/write/reopen/completed", "[hdf5_store][DATA-006][T
     rec2.completed = true;
     REQUIRE(reopened.writeState(1, 1, 1, rec2, diag));
     REQUIRE(reopened.completedCount() == 2);
+}
+
+TEST_CASE("RawS21Store rejects a truncated recovery file", "[hdf5_store][recovery]")
+{
+    const auto path = std::filesystem::temp_directory_path() / "afar_raw_s21_truncated.h5";
+    std::filesystem::remove(path);
+    afar::RawS21Store store;
+    std::string diag;
+    REQUIRE(afar::RawS21Store::create(path, {1}, {0}, {0}, {1000, 2000}, {}, store, diag));
+    store.close();
+    const auto size = std::filesystem::file_size(path);
+    std::filesystem::resize_file(path, size - 1);
+    REQUIRE_FALSE(afar::RawS21Store::open(path, store, diag));
+    REQUIRE(diag.find("truncated") != std::string::npos);
 }
 
 TEST_CASE("RunEventLog append JSONL without S21 arrays", "[hdf5_store][DATA-007]")

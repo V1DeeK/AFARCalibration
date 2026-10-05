@@ -1,5 +1,7 @@
 #include "ParquetExport.h"
 
+#include "FileCommit.h"
+
 #include "InverseLut.h"
 #include "Normalize.h"
 #include "PhaseMath.h"
@@ -12,6 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <locale>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -22,7 +25,7 @@
 namespace afar::report {
 namespace {
 
-bool beginAfarPqWrite(const std::filesystem::path& path,
+bool beginAtomicWrite(const std::filesystem::path& path,
                       std::filesystem::path& temporary,
                       std::ofstream& out,
                       std::string& diagnostics)
@@ -36,11 +39,22 @@ bool beginAfarPqWrite(const std::filesystem::path& path,
         diagnostics = "cannot open for write: " + temporary.string();
         return false;
     }
-    out.write(kAfarPqMagic, static_cast<std::streamsize>(sizeof(kAfarPqMagic)));
     return true;
 }
 
-bool commitAfarPqWrite(const std::filesystem::path& path,
+bool beginAfarPqWrite(const std::filesystem::path& path,
+                      std::filesystem::path& temporary,
+                      std::ofstream& out,
+                      std::string& diagnostics)
+{
+    if (!beginAtomicWrite(path, temporary, out, diagnostics)) {
+        return false;
+    }
+    out.write(kAfarPqMagic, static_cast<std::streamsize>(sizeof(kAfarPqMagic)));
+    return static_cast<bool>(out);
+}
+
+bool commitAtomicWrite(const std::filesystem::path& path,
                        const std::filesystem::path& temporary,
                        std::ofstream& out,
                        std::string& diagnostics)
@@ -51,15 +65,7 @@ bool commitAfarPqWrite(const std::filesystem::path& path,
         return false;
     }
     out.close();
-    std::error_code ec;
-    std::filesystem::remove(path, ec);
-    ec.clear();
-    std::filesystem::rename(temporary, path, ec);
-    if (ec) {
-        diagnostics = "cannot commit AFARPQ file: " + ec.message();
-        return false;
-    }
-    return true;
+    return replaceFile(temporary, path, diagnostics);
 }
 
 bool openAfarPqRead(const std::filesystem::path& path,
@@ -80,18 +86,18 @@ bool openAfarPqRead(const std::filesystem::path& path,
     return true;
 }
 
-std::vector<std::string_view> splitTsvLine(std::string_view line)
+std::vector<std::string_view> splitLine(std::string_view line, char separator)
 {
     std::vector<std::string_view> cols;
     std::size_t start = 0;
     while (start <= line.size()) {
-        const auto tab = line.find('\t', start);
-        if (tab == std::string_view::npos) {
+        const auto delimiter = line.find(separator, start);
+        if (delimiter == std::string_view::npos) {
             cols.push_back(line.substr(start));
             break;
         }
-        cols.push_back(line.substr(start, tab - start));
-        start = tab + 1;
+        cols.push_back(line.substr(start, delimiter - start));
+        start = delimiter + 1;
     }
     return cols;
 }
@@ -136,8 +142,27 @@ std::string formatDouble(double v)
         return "nan";
     }
     std::ostringstream oss;
+    oss.imbue(std::locale::classic());
     oss << std::setprecision(17) << v;
     return oss.str();
+}
+
+bool parseInverseColumns(std::span<const std::string_view> cols,
+                         std::size_t offset,
+                         InverseLutEntry& entry)
+{
+    return cols.size() >= offset + 11
+        && parseNum(cols[offset], entry.channel)
+        && parseNum(cols[offset + 1], entry.freq_hz)
+        && parseNum(cols[offset + 2], entry.target_atten_db)
+        && parseNum(cols[offset + 3], entry.target_phase_deg)
+        && parseNum(cols[offset + 4], entry.selected_att_code)
+        && parseNum(cols[offset + 5], entry.selected_phase_code)
+        && parseNum(cols[offset + 6], entry.measured_atten_db)
+        && parseNum(cols[offset + 7], entry.measured_phase_deg)
+        && parseNum(cols[offset + 8], entry.atten_residual_db)
+        && parseNum(cols[offset + 9], entry.phase_residual_deg)
+        && parseBool(cols[offset + 10], entry.valid);
 }
 
 std::optional<std::uint32_t> referenceAttRow(const RawS21Store& store, std::uint16_t att_code)
@@ -353,7 +378,7 @@ bool exportDirectLut(const std::filesystem::path& path,
             << '\t' << formatDouble(e.repeatability_db) << '\t'
             << formatDouble(e.repeatability_deg) << '\t' << (e.valid ? 1 : 0) << '\n';
     }
-    return commitAfarPqWrite(path, temporary, out, diagnostics);
+    return commitAtomicWrite(path, temporary, out, diagnostics);
 }
 
 bool exportInverseLut(const std::filesystem::path& path,
@@ -376,7 +401,35 @@ bool exportInverseLut(const std::filesystem::path& path,
             << formatDouble(e.measured_phase_deg) << '\t' << formatDouble(e.atten_residual_db)
             << '\t' << formatDouble(e.phase_residual_deg) << '\t' << (e.valid ? 1 : 0) << '\n';
     }
-    return commitAfarPqWrite(path, temporary, out, diagnostics);
+    return commitAtomicWrite(path, temporary, out, diagnostics);
+}
+
+bool exportInverseLutCsv(const std::filesystem::path& path,
+                         std::string_view run_id,
+                         std::span<const InverseLutEntry> rows,
+                         std::string& diagnostics)
+{
+    if (run_id.empty() || run_id.find_first_of(",\r\n") != std::string_view::npos) {
+        diagnostics = "run_id cannot be represented in calibration CSV";
+        return false;
+    }
+    std::filesystem::path temporary;
+    std::ofstream out;
+    if (!beginAtomicWrite(path, temporary, out, diagnostics)) {
+        return false;
+    }
+    out << "run_id,channel,freq_hz,target_atten_db,target_phase_deg,selected_att_code,"
+           "selected_phase_code,measured_atten_db,measured_phase_deg,atten_residual_db,"
+           "phase_residual_deg,valid\n";
+    for (const auto& e : rows) {
+        out << run_id << ',' << static_cast<unsigned>(e.channel) << ',' << e.freq_hz << ','
+            << formatDouble(e.target_atten_db) << ',' << formatDouble(e.target_phase_deg) << ','
+            << e.selected_att_code << ',' << static_cast<unsigned>(e.selected_phase_code) << ','
+            << formatDouble(e.measured_atten_db) << ',' << formatDouble(e.measured_phase_deg)
+            << ',' << formatDouble(e.atten_residual_db) << ','
+            << formatDouble(e.phase_residual_deg) << ',' << (e.valid ? 1 : 0) << '\n';
+    }
+    return commitAtomicWrite(path, temporary, out, diagnostics);
 }
 
 bool readDirectLut(const std::filesystem::path& path,
@@ -408,7 +461,7 @@ bool readDirectLut(const std::filesystem::path& path,
         if (line.empty()) {
             continue;
         }
-        const auto cols = splitTsvLine(line);
+        const auto cols = splitLine(line, '\t');
         if (cols.size() < 14) {
             diagnostics = "direct lut row too short";
             return false;
@@ -458,23 +511,69 @@ bool readInverseLut(const std::filesystem::path& path,
         if (line.empty()) {
             continue;
         }
-        const auto cols = splitTsvLine(line);
+        const auto cols = splitLine(line, '\t');
         if (cols.size() < 11) {
             diagnostics = "inverse lut row too short";
             return false;
         }
         InverseLutEntry e;
-        bool ok = parseNum(cols[0], e.channel) && parseNum(cols[1], e.freq_hz)
-            && parseNum(cols[2], e.target_atten_db) && parseNum(cols[3], e.target_phase_deg)
-            && parseNum(cols[4], e.selected_att_code) && parseNum(cols[5], e.selected_phase_code)
-            && parseNum(cols[6], e.measured_atten_db) && parseNum(cols[7], e.measured_phase_deg)
-            && parseNum(cols[8], e.atten_residual_db) && parseNum(cols[9], e.phase_residual_deg)
-            && parseBool(cols[10], e.valid);
-        if (!ok) {
+        if (!parseInverseColumns(cols, 0, e)) {
             diagnostics = "inverse lut parse error";
             return false;
         }
         out.push_back(e);
+    }
+    return true;
+}
+
+bool readInverseLutCsv(const std::filesystem::path& path,
+                       std::string& run_id,
+                       std::vector<InverseLutEntry>& out,
+                       std::string& diagnostics)
+{
+    run_id.clear();
+    out.clear();
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        diagnostics = "cannot open for read: " + path.string();
+        return false;
+    }
+    std::string line;
+    if (!std::getline(in, line)) {
+        diagnostics = "empty inverse lut csv";
+        return false;
+    }
+    if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+    }
+    constexpr std::string_view expectedHeader =
+        "run_id,channel,freq_hz,target_atten_db,target_phase_deg,selected_att_code,"
+        "selected_phase_code,measured_atten_db,measured_phase_deg,atten_residual_db,"
+        "phase_residual_deg,valid";
+    if (line != expectedHeader) {
+        diagnostics = "unexpected inverse lut csv header";
+        return false;
+    }
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.empty()) {
+            continue;
+        }
+        const auto cols = splitLine(line, ',');
+        InverseLutEntry entry;
+        if (cols.size() != 12 || cols[0].empty() || !parseInverseColumns(cols, 1, entry)) {
+            diagnostics = "inverse lut csv parse error";
+            return false;
+        }
+        if (run_id.empty()) {
+            run_id.assign(cols[0]);
+        } else if (cols[0] != run_id) {
+            diagnostics = "inverse lut csv contains multiple run_id values";
+            return false;
+        }
+        out.push_back(entry);
     }
     return true;
 }
@@ -534,17 +633,20 @@ bool buildDirectLutFromStore(const RawS21Store& store,
                     in.drift_phase_deg = att_row
                         ? driftAgainstPreviousReference(refs, *att_row, fi)
                         : std::numeric_limits<double>::quiet_NaN();
-                    // В слоте хранится только последний свип: истории повторных attempt нет.
-                    const auto repeatability = cal::repeatability_from_attempts({});
-                    if (repeatability) {
-                        in.repeatability_db = repeatability->db;
-                        in.repeatability_deg = repeatability->deg;
-                    } else {
-                        in.repeatability_db = std::numeric_limits<double>::quiet_NaN();
-                        in.repeatability_deg = std::numeric_limits<double>::quiet_NaN();
-                    }
+                    in.repeatability_db = fi < rec.repeatability_db.size()
+                        ? rec.repeatability_db[fi]
+                        : std::numeric_limits<double>::quiet_NaN();
+                    in.repeatability_deg = fi < rec.repeatability_deg.size()
+                        ? rec.repeatability_deg[fi]
+                        : std::numeric_limits<double>::quiet_NaN();
                     in.sample_valid = (fi < rec.valid.size()) && (rec.valid[fi] != 0)
                         && (fi < norm.size()) && norm[fi].valid && !rec.overload;
+                    qc::QualityInputs repeatability_qc;
+                    repeatability_qc.repeatability_db = in.repeatability_db;
+                    repeatability_qc.repeatability_deg = in.repeatability_deg;
+                    if (!qc::evaluate_valid(repeatability_qc)) {
+                        in.sample_valid = false;
+                    }
                     if (std::isfinite(in.drift_phase_deg)
                         && std::fabs(in.drift_phase_deg) > drift_limit) {
                         in.sample_valid = false;

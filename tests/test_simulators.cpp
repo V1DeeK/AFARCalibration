@@ -126,6 +126,45 @@ TEST_CASE("dut apply/readback roundtrip", "[simulators]")
     REQUIRE(back.phase_code == st.phase_code);
 }
 
+TEST_CASE("linked demo stand changes S21 with channel attenuation and phase", "[simulators][demo]")
+{
+    DutSimulator dut;
+    VnaSimulator vna;
+    dut.connect();
+    vna.connect();
+    vna.set_dut_state_provider([&dut] { return dut.current_state(); });
+
+    SweepConfig cfg{};
+    cfg.f_start_hz = 1'200'000'000ULL;
+    cfg.f_stop_hz = 1'300'000'000ULL;
+    cfg.points = 3;
+    cfg.ifbw_hz = 1000;
+    cfg.power_dbm = -20.0;
+    cfg.averages = 1;
+    cfg.s_parameter = SParameter::S21;
+    vna.configure(cfg);
+
+    dut.apply({1, 0, 0});
+    const auto reference = vna.measure_s21().s21;
+    REQUIRE(reference.size() == 3);
+    REQUIRE(vna.measure_s21().s21 == reference);
+
+    dut.apply({1, 20, 0});
+    const auto attenuated = vna.measure_s21().s21;
+    CHECK(std::abs(attenuated[1]) < std::abs(reference[1]));
+
+    dut.apply({1, 20, 16});
+    const auto phaseShifted = vna.measure_s21().s21;
+    const double phaseDeltaDeg = std::arg(phaseShifted[1] / attenuated[1]) * 180.0
+        / 3.14159265358979323846;
+    CHECK(phaseDeltaDeg == Approx(90.0).margin(1.0));
+
+    dut.apply({2, 20, 16});
+    const auto otherChannel = vna.measure_s21().s21;
+    CHECK(otherChannel[1] != phaseShifted[1]);
+    CHECK(otherChannel == vna.measure_s21().s21);
+}
+
 TEST_CASE("stub connect fails without opening transport", "[simulators]")
 {
     StubDutController stub;

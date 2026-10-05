@@ -114,7 +114,8 @@ target_link_libraries(test_c2220_driver PRIVATE
 afar_enable_warnings(test_c2220_driver)
 add_test(NAME c2220_driver COMMAND test_c2220_driver)
 
-# TEST-012 / AT-04: компактная сетка по умолчанию; полный 65536 при AFAR_RUN_AT04=1 + [full]
+# TEST-012 / AT-04 + этап 7: компактная сетка и обязательный канал 7 × 64 × 64;
+# полный 65536 остаётся опциональным при AFAR_RUN_AT04=1 + [full].
 add_executable(test_full_sim_run test_full_sim_run.cpp)
 target_link_libraries(test_full_sim_run PRIVATE
     Catch2::Catch2WithMain
@@ -177,8 +178,6 @@ add_executable(test_ui_interactions
     ${PROJECT_SOURCE_DIR}/src/ui/MeasureTab.h
     ${PROJECT_SOURCE_DIR}/src/ui/StartWizard.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/StartWizard.h
-    ${PROJECT_SOURCE_DIR}/src/ui/S2VnaRuntime.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/S2VnaRuntime.h
 )
 target_include_directories(test_ui_interactions PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
 target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_cal)

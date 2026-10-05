@@ -11,8 +11,7 @@
 #include "ScpiSocketTransport.h"
 
 #include "afar/ScpiIdn.h"
-#include "StubDutController.h"
-
+#include "afar/C2220Limits.h"
 #include <QDateTime>
 #include <QThread>
 #include <QTimer>
@@ -28,6 +27,20 @@
 #include <vector>
 
 namespace {
+
+QString controllerUnavailableMessage()
+{
+    return QStringLiteral(
+        "Контроллер изделия отсутствует. Реальная автоматическая калибровка 64×64 "
+        "недоступна. Используйте деморежим или подключите поддерживаемый контроллер.");
+}
+
+QString linkedDemoStandRequiredMessage()
+{
+    return QStringLiteral(
+        "Для демонстрационной калибровки канала выберите VNA «Связанный демостенд "
+        "(VNA + DUT)». S2VNA Demo используется для двухпортовых измерений.");
+}
 
 struct DiskSnippet {
     qint64 count{-1};
@@ -211,6 +224,7 @@ void MeasureWorker::rebuildVna()
     m_simVna.reset();
     m_vna = nullptr;
     m_lastIdn.clear();
+    m_demoVerified = false;
 
     C2220Vna::Profile profile;
     profile.allow_direct_access = m_allowDirect;
@@ -220,7 +234,7 @@ void MeasureWorker::rebuildVna()
         m_sweepTimeoutMs > 0 ? m_sweepTimeoutMs : 30000);
     profile.measure_retries = m_measureRetries >= 0 ? m_measureRetries : 2;
 
-    if (m_backend == BackendSocket) {
+    if (m_backend == BackendSocket || m_backend == BackendS2VnaDemo) {
         m_socket = std::make_unique<ScpiSocketTransport>(m_host.toStdString(),
                                                           static_cast<std::uint16_t>(m_port));
         m_c2220 = std::make_unique<C2220Vna>(*m_socket, profile);
@@ -231,6 +245,7 @@ void MeasureWorker::rebuildVna()
         m_vna = m_c2220.get();
     } else {
         m_simVna = std::make_unique<VnaSimulator>();
+        m_simVna->set_dut_state_provider([this] { return m_dut.current_state(); });
         m_vna = m_simVna.get();
     }
 }
@@ -274,6 +289,17 @@ void MeasureWorker::configureVna(int backend,
                                  int sweepTimeoutMs,
                                  int measureRetries)
 {
+    if (m_orch) {
+        const auto state = m_orch->state();
+        const bool mayReconfigure = state == afar::RunState::Idle
+            || state == afar::RunState::Complete || state == afar::RunState::Error
+            || state == afar::RunState::Aborted;
+        if (!mayReconfigure) {
+            emit diagnostic(QStringLiteral(
+                "Настройки VNA заблокированы: серия подготовлена или выполняется"));
+            return;
+        }
+    }
     m_timer->stop();
     m_orch.reset();
     m_backend = backend;
@@ -297,33 +323,20 @@ void MeasureWorker::configureController(int backend,
                                         int port,
                                         const QString& comPort)
 {
-    // Серия / оркестратор остаются на DutSimulator — Stub только для диагностики т. 14.
     if (backend == CtrlCombat) {
-        emit diagnostic(QStringLiteral(
-            "Боевой COM/TCP недоступен: протокол контроллера не передан (т. 14 ТЗ)"));
-        m_ctrlBackend = CtrlStub;
+        m_ctrlBackend = CtrlCombat;
+        emit diagnostic(controllerUnavailableMessage());
     } else if (backend == CtrlStub) {
         m_ctrlBackend = CtrlStub;
+        emit diagnostic(controllerUnavailableMessage());
     } else {
         m_ctrlBackend = CtrlSimulator;
+        emit diagnostic(QString());
     }
     m_dutHost = host.trimmed().isEmpty() ? QStringLiteral("192.168.0.10") : host.trimmed();
     m_dutPort = (port > 0 && port < 65536) ? port : 4001;
     m_dutComPort = comPort.trimmed().isEmpty() ? QStringLiteral("COM4") : comPort.trimmed();
 
-    if (m_ctrlBackend == CtrlStub) {
-        try {
-            StubDutController stub;
-            stub.connect();
-            emit diagnostic(QStringLiteral("StubDutController: неожиданный успех connect"));
-        } catch (const std::exception& ex) {
-            emit diagnostic(QString::fromUtf8(ex.what()));
-        } catch (...) {
-            emit diagnostic(QStringLiteral("протокол не передан (т. 14 ТЗ); COM/TCP не открываются"));
-        }
-    } else {
-        emit diagnostic(QString());
-    }
     emitConnection();
 }
 
@@ -347,7 +360,26 @@ void MeasureWorker::probeVna()
         m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
     }
     std::string idn;
-    const bool ok = m_orch->probeIdentify(idn);
+    if (m_backend == BackendS2VnaDemo) {
+        m_demoVerified = false;
+    }
+    bool ok = m_orch->probeIdentify(idn);
+    if (ok && m_backend == BackendS2VnaDemo) {
+        const auto fields = parse_scpi_idn(idn);
+        m_demoVerified = fields.model.find("C2220") != std::string::npos
+            && fields.serial.empty();
+        if (!m_demoVerified) {
+            idn = "S2VNA Demo не подтверждён: ожидался C2220 с пустым серийным номером, *IDN?="
+                + idn;
+            ok = false;
+            m_vna->abort();
+        }
+    } else if (ok && m_backend == BackendSocket
+               && parse_scpi_idn(idn).serial.empty()) {
+        idn = "S2VNA Demo обнаружен вместо живого VNA; выберите backend «S2VNA Demo C2220»";
+        ok = false;
+        m_vna->abort();
+    }
     if (ok) {
         m_lastIdn = QString::fromStdString(idn);
         if (m_c2220) {
@@ -403,6 +435,18 @@ void MeasureWorker::runProbeCodes(double fStartHz,
         emit probeCodesFinished(false, QStringLiteral("VNA не сконфигурирован"));
         return;
     }
+    if (m_ctrlBackend != CtrlSimulator) {
+        const QString message = controllerUnavailableMessage();
+        emit probeCodesFinished(false, message);
+        emit diagnostic(message);
+        return;
+    }
+    if (m_backend != BackendSimulator) {
+        const QString message = linkedDemoStandRequiredMessage();
+        emit probeCodesFinished(false, message);
+        emit diagnostic(message);
+        return;
+    }
     using afar::RunState;
     const auto st = m_orch->state();
     if (st == RunState::Running || st == RunState::Pausing || st == RunState::Paused
@@ -424,10 +468,20 @@ void MeasureWorker::runProbeCodes(double fStartHz,
     SweepConfig sweep{};
     sweep.f_start_hz = static_cast<std::uint64_t>(fStartHz + 0.5);
     sweep.f_stop_hz = static_cast<std::uint64_t>(fStopHz + 0.5);
-    sweep.points = static_cast<std::uint32_t>(points > 1 ? points : 11);
-    sweep.ifbw_hz = static_cast<std::uint32_t>(ifbwHz > 0 ? ifbwHz : 1000);
+    sweep.points = points >= 0 ? static_cast<std::uint32_t>(points) : 0;
+    sweep.ifbw_hz = ifbwHz >= 0 ? static_cast<std::uint32_t>(ifbwHz) : 0;
     sweep.power_dbm = powerDbm;
-    sweep.averages = static_cast<std::uint16_t>(averages > 0 ? averages : 1);
+    sweep.averages = averages >= 0 && averages <= 65'535
+        ? static_cast<std::uint16_t>(averages) : 0;
+
+    std::string validation;
+    if (!afar::c2220::validateSweep(sweep, validation)) {
+        const QString message = QStringLiteral("Некорректные параметры C2220: %1")
+                                    .arg(QString::fromStdString(validation));
+        emit probeCodesFinished(false, message);
+        emit diagnostic(message);
+        return;
+    }
 
     // Короткий набор: att 0 и последний «типичный» enabled (1), фазы 0 и 63.
     constexpr std::uint16_t kAttLast = 1;
@@ -453,6 +507,11 @@ void MeasureWorker::measureNow(double fStartHz,
         emit measureNowFinished(false, QStringLiteral("VNA не сконфигурирован"));
         return;
     }
+    if (m_backend == BackendS2VnaDemo && !m_demoVerified) {
+        emit measureNowFinished(
+            false, QStringLiteral("Сначала подтвердите подключение S2VNA Demo C2220"));
+        return;
+    }
     if (!std::isfinite(fStartHz) || !std::isfinite(fStopHz) || fStartHz >= fStopHz) {
         emit measureNowFinished(
             false, QStringLiteral("Некорректный диапазон: f нач. должна быть меньше f кон.; "
@@ -476,13 +535,43 @@ void MeasureWorker::measureNow(double fStartHz,
     SweepConfig sweep{};
     sweep.f_start_hz = static_cast<std::uint64_t>(fStartHz + 0.5);
     sweep.f_stop_hz = static_cast<std::uint64_t>(fStopHz + 0.5);
-    sweep.points = static_cast<std::uint32_t>(points > 1 ? points : 11);
-    sweep.ifbw_hz = static_cast<std::uint32_t>(ifbwHz > 0 ? ifbwHz : 1000);
+    sweep.points = points >= 0 ? static_cast<std::uint32_t>(points) : 0;
+    sweep.ifbw_hz = ifbwHz >= 0 ? static_cast<std::uint32_t>(ifbwHz) : 0;
     sweep.power_dbm = powerDbm;
-    sweep.averages = static_cast<std::uint16_t>(averages > 0 ? averages : 1);
+    sweep.averages = averages >= 0 && averages <= 65'535
+        ? static_cast<std::uint16_t>(averages) : 0;
 
+    std::string validation;
+    if (!afar::c2220::validateSweep(sweep, validation)) {
+        const QString message = QStringLiteral("Некорректные параметры C2220: %1")
+                                    .arg(QString::fromStdString(validation));
+        emit measureNowFinished(false, message);
+        emit diagnostic(message);
+        return;
+    }
+
+    emit operationProgress(QStringLiteral("Измеряется S11"), 0, 4);
+    int readyCount = 0;
     std::string diag;
-    const bool ok = m_orch->measurePreview(sweep, diag);
+    const bool ok = m_orch->measurePreview(
+        sweep, diag, [this, &readyCount](const ComplexSweep& partial, SParameter parameter) {
+            emitSweepPreview(partial);
+            const QString name = QString::fromLatin1(
+                parameter == SParameter::S11 ? "S11"
+                : parameter == SParameter::S21 ? "S21"
+                : parameter == SParameter::S12 ? "S12"
+                                              : "S22");
+            ++readyCount;
+            emit operationProgress(
+                readyCount < 4
+                    ? QStringLiteral("%1 готов; измеряется %2")
+                          .arg(name, readyCount == 1 ? QStringLiteral("S21")
+                                     : readyCount == 2 ? QStringLiteral("S12")
+                                                       : QStringLiteral("S22"))
+                    : QStringLiteral("S11/S21/S12/S22 готовы"),
+                readyCount, 4);
+            emit diagnostic(QStringLiteral("Получен %1 — график обновлён").arg(name));
+        });
     emitConnection();
     emitState();
     if (ok) {
@@ -496,6 +585,7 @@ void MeasureWorker::measureNow(double fStartHz,
         }
         measurement.sweep = m_orch->lastMeasuredSweep();
         measurement.vna_idn = m_orch->lastVnaIdn();
+        measurement.demo_mode = m_backend == BackendS2VnaDemo;
         measurement.measured_utc = QDateTime::currentDateTimeUtc()
                                        .toString(Qt::ISODateWithMs)
                                        .toStdString();
@@ -512,15 +602,23 @@ void MeasureWorker::measureNow(double fStartHz,
         emit measureNowFinished(true, QString::fromStdString(diag));
         emit diagnostic(QStringLiteral("Измерить сейчас: OK"));
     } else {
+        emit operationProgress(QStringLiteral("Ошибка измерения"), readyCount, 4);
         emit twoPortExportAvailable(m_lastTwoPortMeasurement.has_value());
         emit measureNowFinished(false, QString::fromStdString(diag));
         emit diagnostic(QString::fromStdString(diag));
     }
 }
 
-void MeasureWorker::exportTwoPort(const QString& basePath)
+void MeasureWorker::exportTwoPort(const QString& basePath,
+                                  const QVector<double>& markerFrequenciesGhz,
+                                  const QString& deviceName,
+                                  const QString& deviceSerial,
+                                  const QString& operatorName,
+                                  const QString& comment,
+                                  bool operatorAccepted)
 {
     if (!m_lastTwoPortMeasurement) {
+        emit operationProgress(QStringLiteral("Отчёт: нет полного измерения"), 0, 2);
         emit exportTwoPortFinished(false, {}, {},
                                    QStringLiteral("Нет полного измерения S11/S21/S12/S22"));
         return;
@@ -539,18 +637,38 @@ void MeasureWorker::exportTwoPort(const QString& basePath)
     s2p.replace_extension(".s2p");
     pdf.replace_extension(".pdf");
 
+    m_lastTwoPortMeasurement->marker_frequency_hz.clear();
+    for (const double frequencyGhz : markerFrequenciesGhz) {
+        if (std::isfinite(frequencyGhz) && frequencyGhz > 0.0) {
+            m_lastTwoPortMeasurement->marker_frequency_hz.push_back(
+                static_cast<std::uint64_t>(std::llround(frequencyGhz * 1e9)));
+        }
+    }
+    m_lastTwoPortMeasurement->device_name = deviceName.trimmed().toStdString();
+    m_lastTwoPortMeasurement->device_serial = deviceSerial.trimmed().toStdString();
+    m_lastTwoPortMeasurement->operator_name = operatorName.trimmed().toStdString();
+    m_lastTwoPortMeasurement->comment = comment.trimmed().toStdString();
+    m_lastTwoPortMeasurement->operator_accepted = operatorAccepted;
+
+    emit operationProgress(QStringLiteral("Формируется S2P"), 0, 2);
     std::string diagnostics;
     if (!afar::report::writeTouchstoneS2p(s2p, *m_lastTwoPortMeasurement, diagnostics)) {
+        emit operationProgress(QStringLiteral("Ошибка формирования S2P"), 0, 2);
         emit exportTwoPortFinished(false, {}, {}, QString::fromStdString(diagnostics));
         return;
     }
+    emit operationProgress(QStringLiteral("S2P готов; формируется PDF"), 1, 2);
     if (!afar::report::writeTwoPortReportPdf(pdf, *m_lastTwoPortMeasurement, diagnostics)) {
 #ifdef _WIN32
         const QString s2pText = QString::fromStdWString(s2p.wstring());
 #else
         const QString s2pText = QString::fromStdString(s2p.string());
 #endif
-        emit exportTwoPortFinished(false, s2pText, {}, QString::fromStdString(diagnostics));
+        emit operationProgress(QStringLiteral("S2P готов; ошибка PDF"), 1, 2);
+        emit exportTwoPortFinished(
+            false, s2pText, {},
+            QStringLiteral("Touchstone сохранён: %1\nPDF не сохранён: %2")
+                .arg(s2pText, QString::fromStdString(diagnostics)));
         return;
     }
 #ifdef _WIN32
@@ -560,6 +678,7 @@ void MeasureWorker::exportTwoPort(const QString& basePath)
     const QString s2pText = QString::fromStdString(s2p.string());
     const QString pdfText = QString::fromStdString(pdf.string());
 #endif
+    emit operationProgress(QStringLiteral("S2P и PDF-отчёт готовы"), 2, 2);
     emit exportTwoPortFinished(true, s2pText, pdfText,
                                QStringLiteral("Touchstone и PDF сохранены"));
 }
@@ -789,7 +908,10 @@ void MeasureWorker::emitConnection()
     bool tempOk = false;
     bool vnaOk = false;
     bool dutOk = false;
-    if (m_ctrlBackend == CtrlStub) {
+    if (m_ctrlBackend == CtrlCombat) {
+        iface = QStringLiteral("Контроллер изделия отсутствует");
+        dutOk = false;
+    } else if (m_ctrlBackend == CtrlStub) {
         iface = QStringLiteral("Stub");
         dutOk = false;
     } else if (m_dut.connected()) {
@@ -808,7 +930,7 @@ void MeasureWorker::emitConnection()
     } else if (m_c2220) {
         vnaOk = m_c2220->connected();
         model = QStringLiteral("PLANAR C2220");
-        if (m_backend == BackendSocket) {
+        if (m_backend == BackendSocket || m_backend == BackendS2VnaDemo) {
             address = QStringLiteral("%1:%2").arg(m_host).arg(m_port);
         } else {
             address = m_comPort;
@@ -1101,11 +1223,11 @@ void MeasureWorker::emitMatrix(int channel, int attCode)
             overloads.push_back(0);
             continue;
         }
-        afar::RawS21StateRecord rec;
+        afar::RawS21StateStatus rec;
         std::string diag;
-        if (!store.readState(static_cast<std::uint8_t>(channel),
-                             static_cast<std::uint16_t>(attCode),
-                             static_cast<std::uint8_t>(phase), rec, diag)) {
+        if (!store.readStateStatus(static_cast<std::uint8_t>(channel),
+                                   static_cast<std::uint16_t>(attCode),
+                                   static_cast<std::uint8_t>(phase), rec, diag)) {
             statuses.push_back(CellWaiting);
             attempts.push_back(0);
             overloads.push_back(0);
@@ -1136,6 +1258,25 @@ void MeasureWorker::prepare(const QString& dataRoot,
     resetEta();
     m_sweepThrottleArmed = false;
     m_artifactPreviewSent = false;
+    if (m_ctrlBackend != CtrlSimulator) {
+        const QString message = controllerUnavailableMessage();
+        emit prepareFinished(false, message);
+        emit diagnostic(message);
+        return;
+    }
+    if (m_backend != BackendSimulator) {
+        const QString message = linkedDemoStandRequiredMessage();
+        emit prepareFinished(false, message);
+        emit diagnostic(message);
+        return;
+    }
+    if (m_backend == BackendS2VnaDemo && !m_demoVerified) {
+        const QString message =
+            QStringLiteral("Сначала подтвердите подключение S2VNA Demo C2220");
+        emit prepareFinished(false, message);
+        emit diagnostic(message);
+        return;
+    }
     if (forceSafeState) {
         m_dut.set_safe_state();
     }
@@ -1199,6 +1340,25 @@ void MeasureWorker::prepareRecovery(const QString& seriesDir)
     resetEta();
     m_sweepThrottleArmed = false;
     m_artifactPreviewSent = false;
+    if (m_ctrlBackend != CtrlSimulator) {
+        const QString message = controllerUnavailableMessage();
+        emit prepareFinished(false, message);
+        emit diagnostic(message);
+        return;
+    }
+    if (m_backend != BackendSimulator) {
+        const QString message = linkedDemoStandRequiredMessage();
+        emit prepareFinished(false, message);
+        emit diagnostic(message);
+        return;
+    }
+    if (m_backend == BackendS2VnaDemo && !m_demoVerified) {
+        const QString message =
+            QStringLiteral("Сначала подтвердите подключение S2VNA Demo C2220");
+        emit prepareFinished(false, message);
+        emit diagnostic(message);
+        return;
+    }
     m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
     m_orch->setSleepEnabled(false);
     std::string diag;

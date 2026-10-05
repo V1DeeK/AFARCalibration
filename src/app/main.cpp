@@ -48,7 +48,7 @@ int main(int argc, char* argv[])
 
     applyAppTheme(app, loadAppTheme());
 
-    // Локальная S2VNA запускается скрыто и работает как драйвер Socket/SCPI.
+    // S2VNA всегда запускает и настраивает оператор; приложение — только SCPI-клиент.
     int result = 0;
     {
         MainWindow window;

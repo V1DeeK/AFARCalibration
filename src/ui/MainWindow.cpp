@@ -8,12 +8,13 @@
 #include "MeasureWorker.h"
 #include "RunConfig.h"
 #include "RunStateMachine.h"
-#include "S2VnaRuntime.h"
 #include "StartWizard.h"
+#include "afar/C2220Limits.h"
 #include "Theme.h"
 
 #include <QApplication>
 #include <QDir>
+#include <QDebug>
 #include <QFrame>
 #include <QFileDialog>
 #include <QHBoxLayout>
@@ -21,12 +22,14 @@
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPushButton>
+#include <QProgressBar>
+#include <QScreen>
+#include <QScrollArea>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QThread>
-#include <QTimer>
 #include <QVBoxLayout>
 
 #include <cmath>
@@ -41,9 +44,18 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     setWindowTitle(QStringLiteral("AFAR RX Calibration Studio"));
-    resize(1280, 800);
 
-    auto* root = new QWidget(this);
+    const QRect workArea = screen() ? screen()->availableGeometry()
+                                    : QGuiApplication::primaryScreen()->availableGeometry();
+    resize(qMin(1000, qMax(1, workArea.width() - 32)),
+           qMin(620, qMax(1, workArea.height() - 32)));
+    move(workArea.center() - rect().center());
+
+    auto* viewport = new QScrollArea(this);
+    viewport->setWidgetResizable(true);
+    viewport->setFrameShape(QFrame::NoFrame);
+
+    auto* root = new QWidget(viewport);
     auto* rootLayout = new QVBoxLayout(root);
     rootLayout->setContentsMargins(6, 6, 6, 6);
     rootLayout->setSpacing(4);
@@ -89,7 +101,19 @@ MainWindow::MainWindow(QWidget* parent)
     rootLayout->addWidget(m_connections);
     rootLayout->addWidget(tabs, 1);
     rootLayout->addWidget(cycle);
-    setCentralWidget(root);
+    viewport->setWidget(root);
+    setCentralWidget(viewport);
+
+    m_operationText = new QLabel(QStringLiteral("Готово"), this);
+    m_operationText->setObjectName(QStringLiteral("operationStatusText"));
+    m_operationText->setMinimumWidth(300);
+    m_operationProgress = new QProgressBar(this);
+    m_operationProgress->setObjectName(QStringLiteral("operationProgressBar"));
+    m_operationProgress->setRange(0, 100);
+    m_operationProgress->setValue(100);
+    m_operationProgress->setFixedWidth(220);
+    statusBar()->addPermanentWidget(m_operationText, 1);
+    statusBar()->addPermanentWidget(m_operationProgress);
 
     const auto applyWorkMode = [tabs, cycle](bool channelMode) {
         cycle->setVisible(channelMode);
@@ -124,6 +148,10 @@ MainWindow::MainWindow(QWidget* parent)
                 m_matrix->setChannelAttChoices(ch, att);
             });
     connect(m_worker, &MeasureWorker::diagnostic, this, &MainWindow::onDiagnostic);
+    connect(m_worker, &MeasureWorker::operationProgress, this,
+            [this](const QString& text, int completed, int total) {
+                setOperationProgress(text, completed, total);
+            });
     connect(m_worker, &MeasureWorker::scpiErrorsReceived, this,
             [this](const QStringList& entries) { m_connections->appendScpiErrors(entries); });
     connect(m_matrix, &CodeMatrixTab::selectionChanged, this,
@@ -159,7 +187,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_measure, &MeasureTab::resumeSeriesRequested, this, &MainWindow::onResumeSeries);
     connect(m_measure, &MeasureTab::measureNowRequested, this, &MainWindow::onMeasureNow);
     connect(m_measure, &MeasureTab::exportTwoPortRequested, this, &MainWindow::onExportTwoPort);
-    connect(m_measure, &MeasureTab::connectAndMeasureRequested, this, &MainWindow::onProbeVna);
+    connect(m_measure, &MeasureTab::connectAndMeasureRequested, this,
+            &MainWindow::onConnectAndMeasureVna);
     connect(m_measure, &MeasureTab::calibrateStepRequested, this, &MainWindow::onCalibrateStep);
     connect(m_measure, &MeasureTab::selectCalibrationKitRequested, this,
             [this](int index) {
@@ -184,14 +213,17 @@ MainWindow::MainWindow(QWidget* parent)
             &MeasureTab::setTwoPortExportEnabled, Qt::QueuedConnection);
     connect(m_worker, &MeasureWorker::exportTwoPortFinished, this,
             [this](bool ok, const QString& s2p, const QString& pdf, const QString& message) {
+                m_measure->setTwoPortExportInProgress(false);
                 if (!ok) {
+                    statusBar()->showMessage(QStringLiteral("Отчёт не сохранён"), 15000);
                     QMessageBox::warning(this, QStringLiteral("Экспорт измерения"), message);
                     return;
                 }
                 m_connections->setDiagnostic(message);
+                statusBar()->showMessage(QStringLiteral("Отчёт сохранён: %1").arg(pdf), 30000);
                 QMessageBox::information(
                     this, QStringLiteral("Экспорт измерения"),
-                    QStringLiteral("Сохранено:\n%1\n%2").arg(s2p, pdf));
+                    QStringLiteral("Файлы сохранены:\n\nS2P: %1\nPDF: %2").arg(s2p, pdf));
             });
 
     statusBar()->showMessage(
@@ -203,7 +235,6 @@ MainWindow::MainWindow(QWidget* parent)
     scanUnfinishedSeries();
     onApplyVnaSettings();
     onApplyControllerSettings();
-    QTimer::singleShot(0, this, &MainWindow::startAutomaticVnaConnection);
 }
 
 MainWindow::~MainWindow()
@@ -217,8 +248,8 @@ MainWindow::~MainWindow()
             || state == RunState::Paused
             || state == RunState::Stopping || state == RunState::Finalizing;
         if (!m_thread->wait(seriesActive ? 30000 : 5000)) {
-            m_thread->terminate();
-            m_thread->wait(1000);
+            qWarning() << "Worker shutdown is taking longer than expected; waiting to avoid data corruption";
+            m_thread->wait();
         }
     }
 }
@@ -252,7 +283,9 @@ void MainWindow::loadExampleDefaults()
         const double fStart = saved.value(QStringLiteral("sweep/f_start_hz")).toDouble();
         const double fStop = saved.value(QStringLiteral("sweep/f_stop_hz")).toDouble();
         if (std::isfinite(fStart) && std::isfinite(fStop)
-            && fStart >= 1e5 && fStop <= 40e9 && fStart < fStop) {
+            && fStart >= static_cast<double>(afar::c2220::kFrequencyMinHz)
+            && fStop <= static_cast<double>(afar::c2220::kFrequencyMaxHz)
+            && fStart < fStop) {
             m_measure->applyRunConfigDefaults(
                 fStart, fStop,
                 saved.value(QStringLiteral("sweep/points"), m_measure->points()).toInt(),
@@ -363,10 +396,10 @@ void MainWindow::onStateChanged(int state, const QString& russianText, const QSt
     m_measure->setRunStateGuide(state);
     using afar::RunState;
     const auto st = static_cast<RunState>(state);
-    const bool lockTimeouts = st == RunState::Running || st == RunState::Pausing
+    const bool lockSettings = st == RunState::Running || st == RunState::Pausing
         || st == RunState::Paused || st == RunState::Stopping || st == RunState::Finalizing
         || st == RunState::Connecting || st == RunState::SelfTest || st == RunState::Ready;
-    m_connections->setVnaTimeoutsLocked(lockTimeouts);
+    m_connections->setVnaSettingsLocked(lockSettings);
     if (st == RunState::Running) {
         m_measure->setStageHighlight(3);
     } else if (st == RunState::Complete) {
@@ -406,6 +439,7 @@ void MainWindow::onMeasureNow()
             "Для 1,160 ГГц введите 1160 МГц или 1,160 ГГц."));
         return;
     }
+    setOperationProgress(QStringLiteral("Подготовка измерения S11/S21/S12/S22"), 0, 4);
     QMetaObject::invokeMethod(m_worker, "measureNow", Qt::QueuedConnection,
                               Q_ARG(double, m_measure->fStartHz()),
                               Q_ARG(double, m_measure->fStopHz()), Q_ARG(int, m_measure->points()),
@@ -422,8 +456,24 @@ void MainWindow::onExportTwoPort()
     if (selected.isEmpty()) {
         return;
     }
-    QMetaObject::invokeMethod(m_worker, "exportTwoPort", Qt::QueuedConnection,
-                              Q_ARG(QString, selected));
+    m_measure->setTwoPortExportInProgress(true);
+    setOperationProgress(QStringLiteral("Подготовка S2P и PDF-отчёта"), 0, 2);
+    statusBar()->showMessage(
+        QStringLiteral("Формирование S2P и PDF-отчёта… Не закрывайте программу."));
+    const QVector<double> markers = m_measure->graphMarkerFrequenciesGhz();
+    const QString deviceName = m_measure->reportDeviceName();
+    const QString deviceSerial = m_measure->reportDeviceSerial();
+    const QString operatorName = m_measure->reportOperatorName();
+    const QString comment = m_measure->reportComment();
+    const bool accepted = m_measure->reportAccepted();
+    QMetaObject::invokeMethod(
+        m_worker,
+        [worker = m_worker, selected, markers, deviceName, deviceSerial, operatorName,
+         comment, accepted] {
+            worker->exportTwoPort(selected, markers, deviceName, deviceSerial,
+                                  operatorName, comment, accepted);
+        },
+        Qt::QueuedConnection);
 }
 
 void MainWindow::onCalibrateStep(int kind, int step, int port)
@@ -456,6 +506,24 @@ void MainWindow::onConnectionChanged(const QString& vnaModel,
 void MainWindow::onProgress(qint64 completed, qint64 total, int channel, int attCode, int phaseCode)
 {
     m_measure->setProgress(completed, total, channel, attCode, phaseCode);
+    if (total > 0) {
+        setOperationProgress(
+            completed >= total
+                ? QStringLiteral("Серия измерений завершена")
+                : QStringLiteral("Серия: канал %1, ATT %2, PH %3")
+                      .arg(channel).arg(attCode).arg(phaseCode),
+            completed, total);
+    }
+}
+
+void MainWindow::setOperationProgress(const QString& text, qint64 completed, qint64 total)
+{
+    m_operationText->setText(text);
+    const int percent = total > 0
+        ? static_cast<int>(qBound(qint64{0}, completed * 100 / total, qint64{100}))
+        : 0;
+    m_operationProgress->setValue(percent);
+    m_operationProgress->setFormat(QStringLiteral("%1%").arg(percent));
 }
 
 void MainWindow::onEtaChanged(const QString& text)
@@ -647,45 +715,23 @@ void MainWindow::onApplyControllerSettings()
 
 void MainWindow::onProbeVna()
 {
-    m_autoVnaConnectActive = false;
-    onApplyVnaSettings();
-    onApplyControllerSettings();
-    QMetaObject::invokeMethod(m_worker, "probeVna", Qt::QueuedConnection);
+    beginVnaProbe(false);
 }
 
-void MainWindow::startAutomaticVnaConnection()
+void MainWindow::onConnectAndMeasureVna()
 {
-    const QString host = m_connections->vnaHost().trimmed();
-    const bool localSocket = m_connections->vnaBackend() == 1
-                             && (host == QStringLiteral("127.0.0.1")
-                                 || host.compare(QStringLiteral("localhost"),
-                                                 Qt::CaseInsensitive)
-                                        == 0
-                                 || host == QStringLiteral("::1"));
-    if (!localSocket || qEnvironmentVariableIsSet("AFAR_DISABLE_AUTO_S2VNA")) {
-        return;
-    }
-
-    const auto result = S2VnaRuntime::ensureRunningHidden(S2VnaRuntime::defaultExecutablePath());
-    if (!result.ok) {
-        m_connections->setDiagnostic(result.message);
-        return;
-    }
-    m_connections->setDiagnostic(result.message);
-    m_autoVnaConnectActive = true;
-    m_autoVnaConnectAttemptsLeft = 20;
-    QTimer::singleShot(result.started ? 1000 : 0, this,
-                       &MainWindow::attemptAutomaticVnaConnection);
+    beginVnaProbe(true);
 }
 
-void MainWindow::attemptAutomaticVnaConnection()
+void MainWindow::beginVnaProbe(bool measureAfterSuccess)
 {
-    if (!m_autoVnaConnectActive || m_autoVnaConnectAttemptsLeft <= 0) {
-        return;
-    }
-    S2VnaRuntime::hideRunningWindows();
+    m_measureAfterProbe = measureAfterSuccess;
     onApplyVnaSettings();
     onApplyControllerSettings();
+    m_connections->setDiagnostic(
+        QStringLiteral("Подключение к %1:%2…")
+            .arg(m_connections->vnaHost())
+            .arg(m_connections->vnaPort()));
     QMetaObject::invokeMethod(m_worker, "probeVna", Qt::QueuedConnection);
 }
 
@@ -697,6 +743,13 @@ void MainWindow::refreshDataSourceBadge(bool probeOk, const QString& idnOrError)
         idn.contains(QStringLiteral("SIM"), Qt::CaseInsensitive)
         || idn.contains(QStringLiteral("VnaSimulator"), Qt::CaseInsensitive);
 
+    if (backend == 3) {
+        m_connections->setDataSourceText(
+            probeOk
+                ? QStringLiteral("Источник: S2VNA DEMO C2220 (не метрология)")
+                : QStringLiteral("Источник: S2VNA DEMO (связь не проверена)"));
+        return;
+    }
     if (backend == 0 || (probeOk && idnLooksSim)) {
         m_connections->setDataSourceText(
             QStringLiteral("Источник: имитатор (не метрология стенда)"));
@@ -719,36 +772,31 @@ void MainWindow::refreshDataSourceBadge(bool probeOk, const QString& idnOrError)
 
 void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
 {
+    const bool measureAfterSuccess = m_measureAfterProbe;
+    m_measureAfterProbe = false;
     refreshDataSourceBadge(ok, idnOrError);
     if (ok) {
-        m_autoVnaConnectActive = false;
-        S2VnaRuntime::hideRunningWindows();
         m_connections->setDiagnostic(QStringLiteral("Связь OK: %1").arg(idnOrError));
         statusBar()->showMessage(QStringLiteral("VNA IDN: %1").arg(idnOrError), 8000);
-        onMeasureNow();
+        if (measureAfterSuccess) {
+            onMeasureNow();
+        }
     } else {
-        if (m_autoVnaConnectActive && --m_autoVnaConnectAttemptsLeft > 0) {
-            m_connections->setDiagnostic(
-                QStringLiteral("S2VNA запускается скрыто, ожидание связи… (%1)")
-                    .arg(m_autoVnaConnectAttemptsLeft));
-            QTimer::singleShot(1000, this, &MainWindow::attemptAutomaticVnaConnection);
-            return;
-        }
-        if (m_autoVnaConnectActive) {
-            m_autoVnaConnectActive = false;
-            m_connections->setDiagnostic(
-                QStringLiteral("S2VNA запущена, но Socket 127.0.0.1:5025 не ответил: %1")
-                    .arg(idnOrError));
-            return;
-        }
         m_connections->setDiagnostic(QStringLiteral("Нет связи: %1").arg(idnOrError));
+        const bool demoMode = m_connections->vnaBackend() == 3;
         QMessageBox::warning(
             this, QStringLiteral("Проверка VNA"),
-            QStringLiteral(
-                "Не удалось подключиться к C2220 через SCPI-сервер S2VNA.\n\n%1\n\n"
-                "Проверьте: S2VNA запущена, Socket Server включён (порт), "
-                "прибор подключен. Пока нет прибора — режим «Имитатор».")
-                .arg(idnOrError));
+            demoMode
+                ? QStringLiteral(
+                      "Не удалось подключить S2VNA Demo C2220.\n\n%1\n\n"
+                      "Запустите S2VNA вручную в Demo Mode, включите Socket Server "
+                      "и повторите проверку. Физический анализатор не требуется.")
+                      .arg(idnOrError)
+                : QStringLiteral(
+                      "Не удалось подключиться к C2220 через SCPI-сервер S2VNA.\n\n%1\n\n"
+                      "Проверьте: S2VNA запущена, Socket Server включён (порт), "
+                      "прибор подключен. Пока нет прибора — выберите «S2VNA Demo C2220».")
+                      .arg(idnOrError));
     }
 }
 

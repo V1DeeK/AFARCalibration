@@ -95,6 +95,7 @@ public:
     void setVnaCalibrationIdHint(const QString& id);
     void setMeasureNowEnabled(bool enabled);
     void setTwoPortExportEnabled(bool enabled);
+    void setTwoPortExportInProgress(bool inProgress);
     void onCalibrateStepFinished(bool ok, int step, const QString& message);
 
     [[nodiscard]] double fStartHz() const;
@@ -103,6 +104,15 @@ public:
     [[nodiscard]] int ifbwHz() const;
     [[nodiscard]] double powerDbm() const;
     [[nodiscard]] int averages() const;
+    [[nodiscard]] QString reportDeviceName() const;
+    [[nodiscard]] QString reportDeviceSerial() const;
+    [[nodiscard]] QString reportOperatorName() const;
+    [[nodiscard]] QString reportComment() const;
+    [[nodiscard]] bool reportAccepted() const;
+    [[nodiscard]] QVector<double> graphMarkerFrequenciesGhz() const
+    {
+        return m_graphMarkers;
+    }
 
 signals:
     void openWizardRequested();
@@ -210,6 +220,13 @@ private:
     bool m_soltBusy = false;
     QPushButton* m_measureNow = nullptr;
     QPushButton* m_exportTwoPort = nullptr;
+    bool m_twoPortExportAvailable = false;
+    bool m_twoPortExportInProgress = false;
+    QLineEdit* m_reportDeviceName = nullptr;
+    QLineEdit* m_reportDeviceSerial = nullptr;
+    QLineEdit* m_reportOperator = nullptr;
+    QLineEdit* m_reportComment = nullptr;
+    QCheckBox* m_reportAccepted = nullptr;
     QLabel* m_linText = nullptr;
     QLabel* m_directSummary = nullptr;
     QLabel* m_directFragment = nullptr;

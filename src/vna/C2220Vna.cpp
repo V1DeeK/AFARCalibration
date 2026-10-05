@@ -1,5 +1,7 @@
 #include "C2220Vna.h"
 
+#include "afar/C2220Limits.h"
+
 #include <charconv>
 #include <cmath>
 #include <sstream>
@@ -237,14 +239,9 @@ std::string C2220Vna::identify()
 void C2220Vna::configure(const SweepConfig& config)
 {
     require_connected("configure");
-    if (config.points < 2) {
-        throw std::invalid_argument("C2220Vna: points must be >= 2");
-    }
-    if (config.f_stop_hz < config.f_start_hz) {
-        throw std::invalid_argument("C2220Vna: f_stop_hz < f_start_hz");
-    }
-    if (config.averages < 1 || config.averages > 999) {
-        throw std::invalid_argument("C2220Vna: averages must be in 1..999");
+    std::string diagnostics;
+    if (!afar::c2220::validateSweep(config, diagnostics)) {
+        throw std::invalid_argument("C2220Vna: " + diagnostics);
     }
 
     write_cmd("SENS:FREQ:STAR " + std::to_string(config.f_start_hz));

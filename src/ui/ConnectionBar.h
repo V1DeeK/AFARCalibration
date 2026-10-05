@@ -36,8 +36,8 @@ public:
     void appendScpiErrors(const QStringList& entries);
     void clearScpiErrorQueue();
 
-    /// UI-TO-001: после старта серии спинбоксы тайм-аутов неизменяемы.
-    void setVnaTimeoutsLocked(bool locked);
+    /// После подготовки серии настройки VNA неизменяемы до терминального состояния.
+    void setVnaSettingsLocked(bool locked);
 
     void loadSettings();
     void saveSettings() const;

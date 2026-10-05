@@ -1,5 +1,7 @@
 #include "StartWizard.h"
 
+#include "afar/C2220Limits.h"
+
 #include <QCheckBox>
 #include <QDate>
 #include <QDateEdit>
@@ -43,7 +45,6 @@ StartWizard::StartWizard(QWidget* parent)
     : QWizard(parent)
 {
     setWindowTitle(QStringLiteral("Мастер запуска серии"));
-    setMinimumWidth(560);
     setWizardStyle(QWizard::ModernStyle);
     setOption(QWizard::HaveHelpButton, true);
     setOption(QWizard::NoBackButtonOnStartPage, true);
@@ -54,6 +55,11 @@ StartWizard::StartWizard(QWidget* parent)
     setButtonText(QWizard::HelpButton, QStringLiteral("Как пользоваться"));
     connect(this, &QWizard::helpRequested, this, &StartWizard::onHelpRequested);
     buildPages();
+
+    if (parentWidget()) {
+        resize(qMin(560, qMax(1, parentWidget()->width() - 48)),
+               qMin(700, qMax(1, parentWidget()->height() - 48)));
+    }
 }
 
 void StartWizard::onHelpRequested()
@@ -369,7 +375,7 @@ void StartWizard::buildPages()
         lab->setWordWrap(true);
         layout->addWidget(lab);
         m_power = new QDoubleSpinBox(page);
-        m_power->setRange(-60.0, 10.0);
+        m_power->setRange(afar::c2220::kPowerMinDbm, afar::c2220::kPowerMaxDbm);
         m_power->setDecimals(1);
         m_power->setValue(-30.0);
         m_power->setSuffix(QStringLiteral(" дБм"));

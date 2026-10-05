@@ -26,8 +26,13 @@ class MeasureWorker final : public QObject {
     Q_OBJECT
 
 public:
-    /// 0 = имитатор, 1 = TCP Socket (S2VNA), 2 = COM.
-    enum VnaBackend : int { BackendSimulator = 0, BackendSocket = 1, BackendCom = 2 };
+    /// 0 = имитатор, 1 = TCP Socket, 2 = COM, 3 = S2VNA Demo C2220 по Socket.
+    enum VnaBackend : int {
+        BackendSimulator = 0,
+        BackendSocket = 1,
+        BackendCom = 2,
+        BackendS2VnaDemo = 3,
+    };
     /// 0 = DutSimulator (серия), 1 = Stub (диагностика т.14), 2 = боевой (не реализован).
     enum CtrlBackend : int { CtrlSimulator = 0, CtrlStub = 1, CtrlCombat = 2 };
 
@@ -82,7 +87,13 @@ public slots:
                     double powerDbm,
                     int averages);
     /// Сохраняет последний полный снимок без повторного измерения прибора.
-    void exportTwoPort(const QString& basePath);
+    void exportTwoPort(const QString& basePath,
+                       const QVector<double>& markerFrequenciesGhz,
+                       const QString& deviceName,
+                       const QString& deviceSerial,
+                       const QString& operatorName,
+                       const QString& comment,
+                       bool operatorAccepted);
     /// CAL-UI: шаг TwoPortCalibrationStep как int (Begin…Apply).
     void calibrateTwoPort(int step);
     /// CAL-UI: шаг OnePortCalibrationStep как int + порт 1|2.
@@ -107,6 +118,7 @@ signals:
     void vnaCalibrationDetected(const QString& calibrationId, bool correctionEnabled);
     void probeCodesFinished(bool ok, const QString& message);
     void measureNowFinished(bool ok, const QString& message);
+    void operationProgress(const QString& text, int completed, int total);
     void twoPortExportAvailable(bool available);
     void exportTwoPortFinished(bool ok,
                                const QString& s2pPath,
@@ -216,6 +228,7 @@ private:
     int m_connectTimeoutMs{3000};
     int m_sweepTimeoutMs{30000};
     int m_measureRetries{2};
+    bool m_demoVerified{false};
 
     int m_ctrlBackend{CtrlSimulator};
     QString m_dutHost{QStringLiteral("192.168.0.10")};

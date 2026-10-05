@@ -21,6 +21,8 @@ public:
 
     void set_temperature_c(double t_c) noexcept { temperatureC_ = t_c; }
     bool connected() const noexcept { return connected_; }
+    /// Текущее состояние демостенда без I/O; используется связанной моделью VNA.
+    [[nodiscard]] DutState current_state() const noexcept { return state_; }
 
 private:
     void ensure_connected(const char* op) const;
@@ -28,6 +30,6 @@ private:
     bool connected_{false};
     bool rejectNextApply_{false};
     double temperatureC_{25.0};
-    DutState state_{};
+    DutState state_{1, 0, 0};
 };
 

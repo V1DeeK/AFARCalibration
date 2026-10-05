@@ -32,4 +32,3 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 
 [Run]
 Filename: "{app}\AfarRxCalibrationStudio.exe"; Description: "Запустить {#AppName}"; Flags: nowait postinstall skipifsilent
-
