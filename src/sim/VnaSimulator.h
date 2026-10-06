@@ -1,0 +1,76 @@
+#pragma once
+
+#include "afar/IVna.h"
+#include "afar/IDutController.h"
+
+#include <functional>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+/// Программный имитатор VNA (C2220). Без provider сохраняет автономную модель;
+/// с provider образует связанный демостенд, зависящий от channel/att/phase.
+class VnaSimulator final : public IVna {
+public:
+    enum class FailureMode {
+        None,
+        Timeout,
+        Disconnect,
+        Overload,
+        Nan,
+        WrongModel,
+    };
+
+    void connect() override;
+    std::string identify() override;
+    void configure(const SweepConfig& config) override;
+    SweepConfig read_config() override;
+    ComplexSweep measure_trace() override;
+    ComplexSweep measure_s21() override;
+    void calibrate_one_port(OnePortCalibrationStep step, int port) override;
+    void calibrate_two_port(TwoPortCalibrationStep step) override;
+    std::vector<std::string> drain_errors() override;
+    void abort() noexcept override;
+
+    void set_failure_mode(FailureMode mode);
+    void fail_next_trace(SParameter parameter) noexcept { failNextTrace_ = parameter; }
+    void fail_trace(SParameter parameter) noexcept { failedTrace_ = parameter; }
+    void set_frequency_offset_hz(std::uint64_t offset) noexcept { frequencyOffsetHz_ = offset; }
+    void set_identify_string(std::string idn);
+    void push_instrument_error(std::string message);
+    void set_dut_state_provider(std::function<DutState()> provider)
+    {
+        dutStateProvider_ = std::move(provider);
+    }
+
+    /// Прямой доступ к приёмникам (SYSTem:RECeiver:DIRect:ACCess).
+    /// Запрос состояния — позже у оркестратора; здесь только флаг.
+    bool direct_access_on() const noexcept { return directAccessOn_; }
+    void set_direct_access_on(bool on) noexcept { directAccessOn_ = on; }
+
+    bool connected() const noexcept { return connected_; }
+    const SweepConfig& last_config() const noexcept { return config_; }
+    TwoPortCalibrationStep last_calibration_step() const noexcept { return calibrationStep_; }
+    OnePortCalibrationStep last_one_port_step() const noexcept { return onePortStep_; }
+    int last_one_port() const noexcept { return onePort_; }
+
+private:
+    void throw_if_failure_on_io(const char* op);
+
+    bool connected_{false};
+    bool configured_{false};
+    bool directAccessOn_{false};
+    FailureMode failureMode_{FailureMode::None};
+    std::optional<SParameter> failNextTrace_;
+    std::optional<SParameter> failedTrace_;
+    std::uint64_t frequencyOffsetHz_{0};
+    std::string identifyString_{
+        "PLANAR,C2220,SIM0001,1.0"};
+    SweepConfig config_{};
+    TwoPortCalibrationStep calibrationStep_{TwoPortCalibrationStep::Begin};
+    OnePortCalibrationStep onePortStep_{OnePortCalibrationStep::Begin};
+    int onePort_{1};
+    std::vector<std::string> errorQueue_;
+    std::function<DutState()> dutStateProvider_;
+};

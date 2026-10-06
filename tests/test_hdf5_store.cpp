@@ -1,0 +1,208 @@
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+#include "RawS21Store.h"
+#include "RunEventLog.h"
+#include "SeriesDirectory.h"
+#include "probe_fixtures.h"
+
+#include <complex>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
+TEST_CASE("SeriesDirectory create copies config and forbids escape", "[hdf5_store][DATA-005]")
+{
+    const auto root = std::filesystem::temp_directory_path() / "afar_series_dir_test";
+    std::filesystem::remove_all(root);
+    const auto fixtures = root / "fixtures";
+    afar::test::writeProbeFixtures(fixtures, "RX16-20260922-001");
+
+    afar::SeriesDirectory series;
+    std::string diag;
+    REQUIRE(afar::SeriesDirectory::create(root / "data", "RX16-20260922-001",
+                                          fixtures / "run-config.json",
+                                          fixtures / "attenuator-codes.csv", series, diag));
+    REQUIRE(std::filesystem::exists(series.runConfigPath()));
+    REQUIRE(std::filesystem::exists(series.attenuatorCodesPath()));
+    REQUIRE(series.rawS21Path().filename() == "raw-s21.h5");
+    REQUIRE(series.runEventsPath().filename() == "run-events.jsonl");
+
+    afar::SeriesDirectory bad;
+    REQUIRE_FALSE(afar::SeriesDirectory::create(root / "data", "../escape",
+                                                fixtures / "run-config.json",
+                                                fixtures / "attenuator-codes.csv", bad, diag));
+}
+
+TEST_CASE("RawS21Store create/write/reopen/completed", "[hdf5_store][DATA-006][TEST-003]")
+{
+    const auto path =
+        std::filesystem::temp_directory_path() / "afar_raw_s21_store_test.h5";
+    std::filesystem::remove(path);
+
+    std::vector<std::uint8_t> channels{1};
+    std::vector<std::uint16_t> atts{0, 1};
+    std::vector<std::uint8_t> phases{0, 1};
+    std::vector<std::uint64_t> freqs{1000, 2000, 3000};
+
+    afar::RawS21Store store;
+    std::string diag;
+    afar::RawS21Meta meta;
+    meta.run_config_json = R"({"schema":"afar.stage1.run-config.v1","run_id":"meta-test"})";
+    meta.vna_idn = "Planar,C2220,SIM,1.0";
+    meta.vna_calibration_id.clear();
+    REQUIRE(afar::RawS21Store::create(path, channels, atts, phases, freqs, meta, store, diag));
+    REQUIRE(store.runConfigJson() == meta.run_config_json);
+    REQUIRE(store.vnaIdn() == meta.vna_idn);
+    REQUIRE(store.vnaCalibrationId().empty());
+
+    afar::RawS21StateRecord rec;
+    rec.s21 = {{1.0, 2.0}, {3.0, 4.0}, {5.0, 6.0}};
+    rec.repeatability_db = {0.01, 0.02, 0.03};
+    rec.repeatability_deg = {0.1, 0.2, 0.3};
+    rec.valid = {1, 1, 0};
+    rec.temperature_c = 25.5f;
+    rec.overload = false;
+    rec.attempt = 1;
+    rec.completed = true;
+    REQUIRE(store.writeState(1, 0, 0, rec, diag));
+    REQUIRE(store.isCompleted(1, 0, 0));
+    REQUIRE(store.completedCount() == 1);
+    afar::RawS21StateStatus status;
+    REQUIRE(store.readStateStatus(1, 0, 0, status, diag));
+    REQUIRE(status.completed);
+    REQUIRE(status.attempt == 1);
+    REQUIRE_FALSE(status.overload);
+
+    // completed=true нельзя переписать
+    rec.attempt = 2;
+    REQUIRE_FALSE(store.writeState(1, 0, 0, rec, diag));
+
+    store.close();
+
+    afar::RawS21Store reopened;
+    REQUIRE(afar::RawS21Store::open(path, reopened, diag));
+    REQUIRE(reopened.runConfigJson() == meta.run_config_json);
+    REQUIRE(reopened.vnaIdn() == meta.vna_idn);
+    REQUIRE(reopened.vnaCalibrationId().empty());
+    afar::RawS21StateRecord got;
+    REQUIRE(reopened.readState(1, 0, 0, got, diag));
+    REQUIRE(got.completed);
+    REQUIRE(got.attempt == 1);
+    REQUIRE(got.s21.size() == 3);
+    REQUIRE(got.s21[0].real() == Catch::Approx(1.0));
+    REQUIRE(got.s21[2].imag() == Catch::Approx(6.0));
+    REQUIRE(got.repeatability_db[1] == Catch::Approx(0.02));
+    REQUIRE(got.repeatability_deg[2] == Catch::Approx(0.3));
+    REQUIRE(reopened.completedCount() == 1);
+
+    // clearCompleted снимает AT-05 блок и позволяет переписать слот
+    REQUIRE(reopened.clearCompleted(1, 0, 0, diag));
+    REQUIRE_FALSE(reopened.isCompleted(1, 0, 0));
+    rec.attempt = 2;
+    rec.completed = true;
+    REQUIRE(reopened.writeState(1, 0, 0, rec, diag));
+    REQUIRE(reopened.isCompleted(1, 0, 0));
+    REQUIRE(reopened.completedCount() == 1);
+
+    // incomplete можно переписать
+    afar::RawS21StateRecord rec2 = rec;
+    rec2.completed = false;
+    rec2.attempt = 1;
+    REQUIRE(reopened.writeState(1, 1, 1, rec2, diag));
+    rec2.attempt = 2;
+    rec2.completed = true;
+    REQUIRE(reopened.writeState(1, 1, 1, rec2, diag));
+    REQUIRE(reopened.completedCount() == 2);
+}
+
+TEST_CASE("RawS21Store rejects a truncated recovery file", "[hdf5_store][recovery]")
+{
+    const auto path = std::filesystem::temp_directory_path() / "afar_raw_s21_truncated.h5";
+    std::filesystem::remove(path);
+    afar::RawS21Store store;
+    std::string diag;
+    REQUIRE(afar::RawS21Store::create(path, {1}, {0}, {0}, {1000, 2000}, {}, store, diag));
+    store.close();
+    const auto size = std::filesystem::file_size(path);
+    std::filesystem::resize_file(path, size - 1);
+    REQUIRE_FALSE(afar::RawS21Store::open(path, store, diag));
+    REQUIRE(diag.find("truncated") != std::string::npos);
+}
+
+TEST_CASE("RunEventLog append JSONL without S21 arrays", "[hdf5_store][DATA-007]")
+{
+    const auto path =
+        std::filesystem::temp_directory_path() / "afar_run_events_test.jsonl";
+    std::filesystem::remove(path);
+
+    afar::RunEventLog log;
+    std::string diag;
+    REQUIRE(afar::RunEventLog::openAppend(path, log, diag));
+
+    afar::RunEvent ev;
+    ev.timestamp_utc = "2026-09-22T12:00:00.000Z";
+    ev.level = afar::EventLevel::Info;
+    ev.component = "test";
+    ev.event_code = "UNIT";
+    ev.run_id = "RX16-20260922-001";
+    ev.channel = 1;
+    ev.att_code = 0;
+    ev.phase_code = 2;
+    ev.attempt = 1;
+    ev.text = "hello";
+    REQUIRE(log.append(ev, diag));
+    log.close();
+
+    std::ifstream in(path);
+    std::string line;
+    REQUIRE(std::getline(in, line));
+    REQUIRE(line.find("\"timestamp_utc\":\"2026-09-22T12:00:00.000Z\"") != std::string::npos);
+    REQUIRE(line.find("\"text\":\"hello\"") != std::string::npos);
+    REQUIRE(line.find("time_utc") == std::string::npos);
+    REQUIRE(line.find("\"message\"") == std::string::npos);
+    REQUIRE(line.find("s21") == std::string::npos);
+
+    afar::RunEvent parsed;
+    REQUIRE(afar::RunEventLog::parseLine(line, parsed, diag));
+    REQUIRE(parsed.timestamp_utc == "2026-09-22T12:00:00.000Z");
+    REQUIRE(parsed.text == "hello");
+
+    const std::string legacy =
+        R"({"time_utc":"2020-01-01T00:00:00.000Z","message":"old","level":"info"})";
+    afar::RunEvent legacy_ev;
+    REQUIRE(afar::RunEventLog::parseLine(legacy, legacy_ev, diag));
+    REQUIRE(legacy_ev.timestamp_utc == "2020-01-01T00:00:00.000Z");
+    REQUIRE(legacy_ev.text == "old");
+}
+
+TEST_CASE("RunEventLog rotates and loads all segments in order", "[hdf5_store][DATA-007][LOG-01]")
+{
+    const auto dir = std::filesystem::temp_directory_path() / "afar_run_events_rotation_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "run-events.jsonl";
+
+    afar::RunEventLog log;
+    std::string diag;
+    REQUIRE(afar::RunEventLog::openAppend(path, log, diag, 300));
+    for (int i = 0; i < 20; ++i) {
+        afar::RunEvent event;
+        event.timestamp_utc = "2026-09-22T12:00:00.000Z";
+        event.component = "rotation-test";
+        event.event_code = "EVENT-" + std::to_string(i);
+        event.run_id = "RX16-20260922-001";
+        event.text = "journal rotation payload";
+        REQUIRE(log.append(event, diag));
+    }
+    log.close();
+
+    REQUIRE(std::filesystem::exists(dir / "run-events.0001.jsonl"));
+    std::vector<afar::RunEvent> events;
+    REQUIRE(afar::RunEventLog::load(path, events, diag));
+    REQUIRE(events.size() == 20);
+    for (int i = 0; i < 20; ++i) {
+        REQUIRE(events[static_cast<std::size_t>(i)].event_code
+                == "EVENT-" + std::to_string(i));
+    }
+}
