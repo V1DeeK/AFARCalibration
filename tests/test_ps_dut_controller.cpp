@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
+#include <system_error>
 
 using Catch::Matchers::ContainsSubstring;
 namespace ps = afar::ps;
@@ -170,7 +171,8 @@ TEST_CASE("PS-контроллер в серии AT-03: оркестратор �
     app();
     SimThread sim;
     const auto root = std::filesystem::temp_directory_path() / "afar_ps_probe_run";
-    std::filesystem::remove_all(root);
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
     const auto fixtures = root / "fixtures";
     afar::test::writeProbeFixtures(fixtures, "RX16-20261012-001", 11);
     afar::RunConfig cfg;
@@ -178,24 +180,28 @@ TEST_CASE("PS-контроллер в серии AT-03: оркестратор �
     std::string diag;
     REQUIRE(afar::test::loadProbeConfig(fixtures, cfg, att, diag));
 
-    VnaSimulator vna;
-    PsDutController dut(optionsFor(sim));
-    afar::MeasurementOrchestrator orch(&vna, &dut);
-    orch.setConfig(cfg, att);
-    orch.setSleepEnabled(false);
-    REQUIRE(orch.prepare(root / "data", fixtures / "run-config.json",
-                         fixtures / "attenuator-codes.csv", diag));
-    CHECK(dut.connected());
-    REQUIRE(orch.start(diag));
-    orch.runUntilDone();
+    // Оркестратор держит raw-s21.h5 открытым до разрушения; на Windows
+    // каталог удаляется только после этого.
+    {
+        VnaSimulator vna;
+        PsDutController dut(optionsFor(sim));
+        afar::MeasurementOrchestrator orch(&vna, &dut);
+        orch.setConfig(cfg, att);
+        orch.setSleepEnabled(false);
+        REQUIRE(orch.prepare(root / "data", fixtures / "run-config.json",
+                             fixtures / "attenuator-codes.csv", diag));
+        CHECK(dut.connected());
+        REQUIRE(orch.start(diag));
+        orch.runUntilDone();
 
-    REQUIRE(orch.state() == afar::RunState::Complete);
-    CHECK(orch.store().completedCount() == 8);
-    // После серии решётка в безопасном состоянии: 63/0 на всех каналах.
-    const auto codes = sim.call([](PsSimulator& s) { return s.codes(); });
-    for (const auto& c : codes) {
-        CHECK(c.att == 63);
-        CHECK(c.ph == 0);
+        REQUIRE(orch.state() == afar::RunState::Complete);
+        CHECK(orch.store().completedCount() == 8);
+        // После серии решётка в безопасном состоянии: 63/0 на всех каналах.
+        const auto codes = sim.call([](PsSimulator& s) { return s.codes(); });
+        for (const auto& c : codes) {
+            CHECK(c.att == 63);
+            CHECK(c.ph == 0);
+        }
     }
-    std::filesystem::remove_all(root);
+    std::filesystem::remove_all(root, ec);
 }
