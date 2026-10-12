@@ -6,6 +6,12 @@ target_link_libraries(test_smoke PRIVATE Catch2::Catch2WithMain)
 afar_enable_warnings(test_smoke)
 add_test(NAME smoke COMMAND test_smoke)
 
+# Переносимость Linux/macOS/Windows: числа без локали, телеметрия процесса.
+add_executable(test_portability test_portability.cpp)
+target_link_libraries(test_portability PRIVATE Catch2::Catch2WithMain afar_core)
+afar_enable_warnings(test_portability)
+add_test(NAME portability COMMAND test_portability)
+
 # TEST-002 / AT-02: валидация run-config и attenuator CSV (без железа)
 add_executable(test_run_config test_run_config.cpp)
 target_link_libraries(test_run_config PRIVATE
@@ -150,9 +156,6 @@ target_link_libraries(test_at12_soak PRIVATE
     afar_sim
     afar_dut
 )
-if(WIN32)
-    target_link_libraries(test_at12_soak PRIVATE Psapi)
-endif()
 target_include_directories(test_at12_soak PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 afar_enable_warnings(test_at12_soak)
 add_test(NAME at12_soak COMMAND test_at12_soak)
@@ -180,10 +183,7 @@ add_executable(test_ui_interactions
     ${PROJECT_SOURCE_DIR}/src/ui/StartWizard.h
 )
 target_include_directories(test_ui_interactions PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
-target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_cal)
-if(WIN32)
-    target_link_libraries(test_ui_interactions PRIVATE Psapi)
-endif()
+target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_cal afar_core)
 set_target_properties(test_ui_interactions PROPERTIES AUTOMOC ON)
 afar_enable_warnings(test_ui_interactions)
 add_test(NAME ui_interactions COMMAND test_ui_interactions)

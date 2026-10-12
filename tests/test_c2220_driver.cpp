@@ -57,12 +57,24 @@ void stub_close(StubSocket s)
         ::closesocket(s);
     }
 }
+void stub_shutdown(StubSocket s)
+{
+    if (s != kStubInvalid) {
+        ::shutdown(s, SD_BOTH);
+    }
+}
 #else
 void ensure_stub_winsock() {}
 void stub_close(StubSocket s)
 {
     if (s != kStubInvalid) {
         ::close(s);
+    }
+}
+void stub_shutdown(StubSocket s)
+{
+    if (s != kStubInvalid) {
+        ::shutdown(s, SHUT_RDWR);
     }
 }
 #endif
@@ -112,13 +124,16 @@ public:
     void stop()
     {
         running_ = false;
-        stub_close(listen_);
-        listen_ = kStubInvalid;
-        stub_close(client_);
-        client_ = kStubInvalid;
         if (thread_.joinable()) {
+            // На Linux/macOS close() не будит поток в accept()/recv():
+            // рвём клиента shutdown() и будим accept() пустым подключением.
+            stub_shutdown(client_);
+            wake_accept();
             thread_.join();
         }
+        stub_close(listen_);
+        listen_ = kStubInvalid;
+        client_ = kStubInvalid;
         port_ = 0;
     }
 
@@ -290,11 +305,32 @@ private:
         }
     }
 
+    void wake_accept() const
+    {
+        if (port_ == 0) {
+            return;
+        }
+        const StubSocket s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (s == kStubInvalid) {
+            return;
+        }
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port_);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        (void)::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        stub_close(s);
+    }
+
     void serve()
     {
         while (running_) {
             StubSocket c = ::accept(listen_, nullptr, nullptr);
             if (c == kStubInvalid) {
+                break;
+            }
+            if (!running_) {
+                stub_close(c);
                 break;
             }
             client_ = c;

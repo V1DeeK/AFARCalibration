@@ -12,7 +12,7 @@
 
 namespace {
 
-std::string ensure_newline(std::string line)
+[[maybe_unused]] std::string ensure_newline(std::string line)
 {
     if (line.empty() || line.back() != '\n') {
         line.push_back('\n');

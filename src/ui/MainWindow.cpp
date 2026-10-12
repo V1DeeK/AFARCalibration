@@ -17,6 +17,7 @@
 #include <QDebug>
 #include <QFrame>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
@@ -39,6 +40,29 @@
 #ifndef AFAR_EXAMPLES_DIR
 #define AFAR_EXAMPLES_DIR ""
 #endif
+
+namespace {
+
+/// Каталог примеров: рядом с exe (Windows/Linux-поставка), в Resources
+/// бандла macOS, в share/ после установки; иначе — исходники сборки.
+std::filesystem::path examplesDirectory()
+{
+    const QDir appDir(QCoreApplication::applicationDirPath());
+    for (const auto* relative : {"examples", "../Resources/examples",
+                                 "../share/AfarRxCalibrationStudio/examples"}) {
+        const QString candidate = QDir::cleanPath(appDir.filePath(QString::fromLatin1(relative)));
+        if (QFileInfo(candidate).isDir()) {
+#ifdef _WIN32
+            return std::filesystem::path(candidate.toStdWString());
+#else
+            return std::filesystem::path(candidate.toStdString());
+#endif
+        }
+    }
+    return std::filesystem::path(AFAR_EXAMPLES_DIR);
+}
+
+}  // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -256,7 +280,7 @@ MainWindow::~MainWindow()
 
 void MainWindow::loadExampleDefaults()
 {
-    const std::filesystem::path examples(AFAR_EXAMPLES_DIR);
+    const std::filesystem::path examples = examplesDirectory();
     const auto cfg1296 = examples / "run-config.c2220-1296.example.json";
     const auto cfgDefault = examples / "run-config.example.json";
     afar::RunConfig cfg;

@@ -39,7 +39,9 @@ QApplication& application()
     static int argc = 1;
     static char name[] = "test_ui_interactions";
     static char* argv[] = {name, nullptr};
-    static QApplication app(argc, argv);
+    // Намеренно не уничтожается: статический QApplication разрушался бы после
+    // внутренних статиков Qt и ронял процесс при выходе (Linux, Qt 6.4+).
+    static QApplication& app = *new QApplication(argc, argv);
     app.setOrganizationName(QStringLiteral("AFAR Tests"));
     app.setApplicationName(QStringLiteral("AFAR UI Interactions Tests"));
     return app;

@@ -1,6 +1,7 @@
 #include "C2220Vna.h"
 
 #include "afar/C2220Limits.h"
+#include "NumberText.h"
 
 #include <charconv>
 #include <cmath>
@@ -85,20 +86,8 @@ std::vector<double> parse_ascii_doubles(const std::string& line)
             continue;
         }
         double value = 0.0;
-        const char* first = token.data();
-        const char* last = token.data() + token.size();
-        const auto [ptr, ec] = std::from_chars(first, last, value);
-        if (ec != std::errc{} || ptr != last) {
-            // from_chars может не принять экспоненту на libstdc++ — fallback.
-            try {
-                std::size_t consumed = 0;
-                value = std::stod(token, &consumed);
-                if (consumed != token.size()) {
-                    throw std::runtime_error("bad token");
-                }
-            } catch (...) {
-                throw std::runtime_error("C2220Vna: cannot parse number '" + token + "'");
-            }
+        if (!afar::parse_double(token, value)) {
+            throw std::runtime_error("C2220Vna: cannot parse number '" + token + "'");
         }
         out.push_back(value);
     }

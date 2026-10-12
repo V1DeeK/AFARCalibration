@@ -19,58 +19,11 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-#ifdef Q_OS_WIN
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <psapi.h>
-#include <tlhelp32.h>
-#endif
+#include "ProcessMetrics.h"
 
 namespace {
 constexpr auto kOrg = "at_acceptance";
 constexpr int kAt12SampleIntervalMs = 60'000;
-
-struct ProcessMetrics {
-    quint64 rssBytes{};
-    quint64 privateBytes{};
-    quint32 handleCount{};
-    quint32 threadCount{};
-};
-
-ProcessMetrics processMetrics()
-{
-    ProcessMetrics result;
-#ifdef Q_OS_WIN
-    PROCESS_MEMORY_COUNTERS_EX memory{};
-    if (GetProcessMemoryInfo(GetCurrentProcess(),
-                             reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),
-                             sizeof(memory))) {
-        result.rssBytes = memory.WorkingSetSize;
-        result.privateBytes = memory.PrivateUsage;
-    }
-    DWORD handles = 0;
-    if (GetProcessHandleCount(GetCurrentProcess(), &handles)) {
-        result.handleCount = handles;
-    }
-    const DWORD processId = GetCurrentProcessId();
-    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snapshot != INVALID_HANDLE_VALUE) {
-        THREADENTRY32 entry{};
-        entry.dwSize = sizeof(entry);
-        if (Thread32First(snapshot, &entry)) {
-            do {
-                if (entry.th32OwnerProcessID == processId) {
-                    ++result.threadCount;
-                }
-            } while (Thread32Next(snapshot, &entry));
-        }
-        CloseHandle(snapshot);
-    }
-#endif
-    return result;
-}
 }
 
 AcceptanceAtTab::AcceptanceAtTab(QWidget* parent)
@@ -290,12 +243,12 @@ void AcceptanceAtTab::appendAt12Sample()
         m_at12Status->setText(QStringLiteral("Не удалось дописать CSV AT-12: %1").arg(path));
         return;
     }
-    const auto metrics = processMetrics();
+    const auto metrics = afar::current_process_metrics();
     QStorageInfo storage(QFileInfo(path).absolutePath());
     storage.refresh();
     QTextStream(&file) << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) << ','
-                       << metrics.rssBytes << ',' << metrics.privateBytes << ','
-                       << metrics.handleCount << ',' << metrics.threadCount << ','
+                       << metrics.rss_bytes << ',' << metrics.private_bytes << ','
+                       << metrics.handle_count << ',' << metrics.thread_count << ','
                        << storage.bytesAvailable() << '\n';
     s.setValue(QStringLiteral("at12/sample_count"), ++sampleCount);
     s.endGroup();
@@ -306,16 +259,13 @@ void AcceptanceAtTab::appendAt12Sample()
 void AcceptanceAtTab::onAt12FixRss()
 {
     QString mbText = m_at12RssMb->text().trimmed();
-#ifdef Q_OS_WIN
     if (mbText.isEmpty()) {
-        PROCESS_MEMORY_COUNTERS pmc{};
-        if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
-            const auto mb = static_cast<qint64>(pmc.WorkingSetSize / (1024ull * 1024ull));
-            mbText = QString::number(mb);
+        const auto rssBytes = afar::current_process_metrics().rss_bytes;
+        if (rssBytes > 0) {
+            mbText = QString::number(rssBytes / (1024ull * 1024ull));
             m_at12RssMb->setText(mbText);
         }
     }
-#endif
     const QString stamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
     const QString note = mbText.isEmpty()
         ? QStringLiteral("%1 UTC — RSS не указан (оценка оператора)").arg(stamp)

@@ -30,3 +30,19 @@ enable_testing()
 
 add_subdirectory(src)
 add_subdirectory(tests)
+
+# Архив поставки: cpack --config build/CPackConfig.cmake
+# (Windows — ZIP, macOS — DMG, Linux — TGZ). Боевая Windows-поставка с SBOM —
+# tools/package-windows.ps1.
+set(CPACK_PACKAGE_NAME "AfarRxCalibrationStudio")
+set(CPACK_PACKAGE_VENDOR "AFAR")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "AFAR RX Calibration Studio")
+if(WIN32)
+    set(CPACK_GENERATOR "ZIP")
+elseif(APPLE)
+    set(CPACK_GENERATOR "DragNDrop")
+else()
+    set(CPACK_GENERATOR "TGZ")
+endif()
+include(CPack)

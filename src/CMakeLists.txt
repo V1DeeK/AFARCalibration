@@ -1,17 +1,17 @@
+include(${PROJECT_SOURCE_DIR}/cmake/AfarWarnings.cmake)
+
 function(afar_add_interface_module stem)
     add_library(afar_${stem} INTERFACE)
     target_include_directories(afar_${stem} INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/${stem}
         ${PROJECT_SOURCE_DIR}/include
     )
-    if(MINGW)
-        target_compile_options(afar_${stem} INTERFACE -Wall -Wextra -Wpedantic -Werror)
+    if(AFAR_WARNING_FLAGS)
+        target_compile_options(afar_${stem} INTERFACE ${AFAR_WARNING_FLAGS})
     endif()
 endfunction()
 
 afar_add_interface_module(ui)
-
-include(${PROJECT_SOURCE_DIR}/cmake/AfarWarnings.cmake)
 include(${PROJECT_SOURCE_DIR}/cmake/Json.cmake)
 
 add_library(afar_interfaces INTERFACE)
@@ -27,22 +27,30 @@ target_include_directories(afar_vna PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/vna
     ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(afar_vna PUBLIC afar_interfaces)
-if(WIN32)
-    target_link_libraries(afar_vna PUBLIC ws2_32)
-endif()
 afar_enable_warnings(afar_vna)
 
 add_library(afar_core STATIC
     core/RunId.cpp
     core/RunId.h
+    core/NumberText.cpp
+    core/NumberText.h
+    core/ProcessMetrics.cpp
+    core/ProcessMetrics.h
 )
 target_include_directories(afar_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core
     ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(afar_core PUBLIC afar_interfaces)
+if(WIN32)
+    target_link_libraries(afar_core PRIVATE Psapi)
+endif()
 afar_enable_warnings(afar_core)
+
+target_link_libraries(afar_vna PUBLIC afar_interfaces afar_core)
+if(WIN32)
+    target_link_libraries(afar_vna PUBLIC ws2_32)
+endif()
 
 add_library(afar_data STATIC
     data/RunConfig.cpp
@@ -183,7 +191,7 @@ configure_file(
 )
 target_include_directories(afar_report PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/report)
 
-add_executable(AfarRxCalibrationStudio WIN32
+add_executable(AfarRxCalibrationStudio WIN32 MACOSX_BUNDLE
     app/main.cpp
     ui/Theme.cpp
     ui/Theme.h
@@ -228,7 +236,48 @@ target_link_libraries(AfarRxCalibrationStudio PRIVATE
     afar_cal
     afar_qc
 )
-if(WIN32)
-    target_link_libraries(AfarRxCalibrationStudio PRIVATE Psapi)
-endif()
 afar_enable_warnings(AfarRxCalibrationStudio)
+
+# macOS: .app с понятным именем; примеры кладутся в Contents/Resources.
+if(APPLE)
+    set_target_properties(AfarRxCalibrationStudio PROPERTIES
+        MACOSX_BUNDLE_BUNDLE_NAME "AFAR RX Calibration Studio"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "ru.afar.rxcalibrationstudio"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    )
+endif()
+
+# Установка: cmake --install build --prefix <каталог>. Qt-библиотеки рядом с
+# программой разворачивает скрипт Qt (Windows/macOS с Qt 6.3, Linux с Qt 6.5);
+# на более старом Qt для Linux берутся системные пакеты Qt 6.
+include(GNUInstallDirs)
+install(TARGETS AfarRxCalibrationStudio
+    BUNDLE DESTINATION .
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+if(APPLE)
+    install(DIRECTORY ${PROJECT_SOURCE_DIR}/examples/
+        DESTINATION AfarRxCalibrationStudio.app/Contents/Resources/examples)
+elseif(WIN32)
+    install(DIRECTORY ${PROJECT_SOURCE_DIR}/examples/
+        DESTINATION ${CMAKE_INSTALL_BINDIR}/examples)
+else()
+    install(DIRECTORY ${PROJECT_SOURCE_DIR}/examples/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/AfarRxCalibrationStudio/examples)
+endif()
+if(Qt6_VERSION VERSION_GREATER_EQUAL 6.5)
+    qt_generate_deploy_app_script(
+        TARGET AfarRxCalibrationStudio
+        OUTPUT_SCRIPT _afar_deploy_script
+        NO_UNSUPPORTED_PLATFORM_ERROR
+    )
+    install(SCRIPT ${_afar_deploy_script})
+elseif(Qt6_VERSION VERSION_GREATER_EQUAL 6.3 AND (WIN32 OR APPLE))
+    qt_generate_deploy_app_script(
+        TARGET AfarRxCalibrationStudio
+        FILENAME_VARIABLE _afar_deploy_script
+        NO_UNSUPPORTED_PLATFORM_ERROR
+    )
+    install(SCRIPT ${_afar_deploy_script})
+endif()
