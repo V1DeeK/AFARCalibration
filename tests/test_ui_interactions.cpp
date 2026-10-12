@@ -131,12 +131,13 @@ TEST_CASE("work modes distinguish passive demo and unavailable real calibration"
     auto* controllers = bar.findChild<QComboBox*>(QStringLiteral("controllerBackend"));
     REQUIRE(controllers != nullptr);
     REQUIRE(controllers->findData(0) >= 0);
-    const int realRow = controllers->findData(2);
-    REQUIRE(realRow >= 0);
+    // Реальный контроллер — PS изделия, он доступен.
+    const int psRow = controllers->findData(3);
+    REQUIRE(psRow >= 0);
     auto* controllerModel = qobject_cast<QStandardItemModel*>(controllers->model());
     REQUIRE(controllerModel != nullptr);
-    REQUIRE(controllerModel->item(realRow) != nullptr);
-    CHECK_FALSE(controllerModel->item(realRow)->isEnabled());
+    REQUIRE(controllerModel->item(psRow) != nullptr);
+    CHECK(controllerModel->item(psRow)->isEnabled());
 }
 
 TEST_CASE("VNA timeouts are collapsed until the engineer expands them", "[ui]")

@@ -210,7 +210,7 @@ MeasureWorker::MeasureWorker(QObject* parent)
     m_timer->setInterval(10);
     connect(m_timer, &QTimer::timeout, this, &MeasureWorker::onTick);
     rebuildVna();
-    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
 }
 
 MeasureWorker::~MeasureWorker() = default;
@@ -313,7 +313,7 @@ void MeasureWorker::configureVna(int backend,
     m_lastTwoPortMeasurement.reset();
     emit twoPortExportAvailable(false);
     rebuildVna();
-    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
     emitConnection();
     emit diagnostic(QString());
 }
@@ -323,7 +323,22 @@ void MeasureWorker::configureController(int backend,
                                         int port,
                                         const QString& comPort)
 {
-    if (backend == CtrlCombat) {
+    // Оркестратор держит указатель на контроллер: менять его только вне серии.
+    if (m_orch) {
+        using afar::RunState;
+        const auto st = m_orch->state();
+        if (st != RunState::Idle && st != RunState::Complete && st != RunState::Aborted
+            && st != RunState::Error) {
+            emit diagnostic(QStringLiteral("Контроллер меняется только вне серии"));
+            return;
+        }
+    }
+    m_orch.reset();
+    m_psDut.reset();
+    if (backend == CtrlPs) {
+        m_ctrlBackend = CtrlPs;
+        emit diagnostic(QString());
+    } else if (backend == CtrlCombat) {
         m_ctrlBackend = CtrlCombat;
         emit diagnostic(controllerUnavailableMessage());
     } else if (backend == CtrlStub) {
@@ -336,6 +351,14 @@ void MeasureWorker::configureController(int backend,
     m_dutHost = host.trimmed().isEmpty() ? QStringLiteral("192.168.0.10") : host.trimmed();
     m_dutPort = (port > 0 && port < 65536) ? port : 4001;
     m_dutComPort = comPort.trimmed().isEmpty() ? QStringLiteral("COM4") : comPort.trimmed();
+    if (m_ctrlBackend == CtrlPs) {
+        PsDutController::Options o;
+        o.host = m_dutHost.toStdString();
+        o.port = static_cast<std::uint16_t>(m_dutPort);
+        o.timeout_ms = m_connectTimeoutMs > 0 ? m_connectTimeoutMs : 2000;
+        m_psDut = std::make_unique<PsDutController>(std::move(o));
+    }
+    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
 
     emitConnection();
 }
@@ -357,7 +380,7 @@ void MeasureWorker::probeVna()
     }
     if (st != RunState::Idle) {
         // Complete / Error / Aborted — новый оркестратор в Idle.
-        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
     }
     std::string idn;
     if (m_backend == BackendS2VnaDemo) {
@@ -435,14 +458,7 @@ void MeasureWorker::runProbeCodes(double fStartHz,
         emit probeCodesFinished(false, QStringLiteral("VNA не сконфигурирован"));
         return;
     }
-    if (m_ctrlBackend != CtrlSimulator) {
-        const QString message = controllerUnavailableMessage();
-        emit probeCodesFinished(false, message);
-        emit diagnostic(message);
-        return;
-    }
-    if (m_backend != BackendSimulator) {
-        const QString message = linkedDemoStandRequiredMessage();
+    if (const QString message = standMismatch(); !message.isEmpty()) {
         emit probeCodesFinished(false, message);
         emit diagnostic(message);
         return;
@@ -457,7 +473,7 @@ void MeasureWorker::runProbeCodes(double fStartHz,
         return;
     }
     if (st != RunState::Idle) {
-        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
     }
     // На живом VNA (S2VNA/COM) settle через doSleep обязателен: DutSimulator
     // без readback идёт в confirmDutOrSettle → doSleep. Ускоряем только имитатор.
@@ -529,7 +545,7 @@ void MeasureWorker::measureNow(double fStartHz,
     }
     if (st != RunState::Idle && st != RunState::Ready) {
         // Complete / Error / Aborted / Paused — новый оркестратор в Idle.
-        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
     }
 
     SweepConfig sweep{};
@@ -699,7 +715,7 @@ void MeasureWorker::calibrateTwoPort(int step)
         return;
     }
     if (st != RunState::Idle && st != RunState::Ready) {
-        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
     }
 
     constexpr int kMax =
@@ -734,7 +750,7 @@ void MeasureWorker::calibrateOnePort(int step, int port)
         return;
     }
     if (st != RunState::Idle && st != RunState::Ready) {
-        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+        m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
     }
 
     constexpr int kMax = static_cast<int>(OnePortCalibrationStep::Apply);
@@ -897,6 +913,30 @@ void MeasureWorker::updateEta(qint64 completed, qint64 total)
     emit etaChanged(formatEtaSeconds(etaSec));
 }
 
+IDutController* MeasureWorker::activeDut()
+{
+    if (m_ctrlBackend == CtrlPs && m_psDut) {
+        return m_psDut.get();
+    }
+    return &m_dut;
+}
+
+QString MeasureWorker::standMismatch() const
+{
+    if (m_ctrlBackend == CtrlSimulator) {
+        return m_backend == BackendSimulator ? QString() : linkedDemoStandRequiredMessage();
+    }
+    if (m_ctrlBackend == CtrlPs) {
+        if (m_backend == BackendSocket || m_backend == BackendCom) {
+            return QString();
+        }
+        return QStringLiteral(
+            "Для серии с PS изделия выберите реальный C2220 (S2VNA Socket или COM): "
+            "имитатор VNA не видит реальную решётку.");
+    }
+    return controllerUnavailableMessage();
+}
+
 void MeasureWorker::emitConnection()
 {
     QString model = QStringLiteral("PLANAR C2220");
@@ -908,7 +948,18 @@ void MeasureWorker::emitConnection()
     bool tempOk = false;
     bool vnaOk = false;
     bool dutOk = false;
-    if (m_ctrlBackend == CtrlCombat) {
+    if (m_ctrlBackend == CtrlPs) {
+        iface = QStringLiteral("PS изделия %1:%2").arg(m_dutHost).arg(m_dutPort);
+        dutOk = m_psDut && m_psDut->connected();
+        if (dutOk) {
+            try {
+                temp = m_psDut->temperature_c();
+                tempOk = true;
+            } catch (const std::exception&) {
+                tempOk = false;
+            }
+        }
+    } else if (m_ctrlBackend == CtrlCombat) {
         iface = QStringLiteral("Контроллер изделия отсутствует");
         dutOk = false;
     } else if (m_ctrlBackend == CtrlStub) {
@@ -1258,14 +1309,7 @@ void MeasureWorker::prepare(const QString& dataRoot,
     resetEta();
     m_sweepThrottleArmed = false;
     m_artifactPreviewSent = false;
-    if (m_ctrlBackend != CtrlSimulator) {
-        const QString message = controllerUnavailableMessage();
-        emit prepareFinished(false, message);
-        emit diagnostic(message);
-        return;
-    }
-    if (m_backend != BackendSimulator) {
-        const QString message = linkedDemoStandRequiredMessage();
+    if (const QString message = standMismatch(); !message.isEmpty()) {
         emit prepareFinished(false, message);
         emit diagnostic(message);
         return;
@@ -1278,7 +1322,7 @@ void MeasureWorker::prepare(const QString& dataRoot,
         return;
     }
     if (forceSafeState) {
-        m_dut.set_safe_state();
+        activeDut()->set_safe_state();
     }
     std::string diag;
     afar::RunConfig cfg;
@@ -1297,9 +1341,10 @@ void MeasureWorker::prepare(const QString& dataRoot,
     }
 
     // Новый оркестратор: повторный prepare из Idle после Complete/Error невозможен.
-    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
+    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
     m_orch->setConfig(cfg, att);
-    m_orch->setSleepEnabled(false);
+    // На стенде выдержка после кода обязательна; ускоряем только имитатор.
+    m_orch->setSleepEnabled(m_backend != BackendSimulator);
 
     const bool ok = m_orch->prepare(dataRoot.toStdString(), runConfigPath.toStdString(),
                                     attenuatorCsvPath.toStdString(), diag,
@@ -1340,14 +1385,7 @@ void MeasureWorker::prepareRecovery(const QString& seriesDir)
     resetEta();
     m_sweepThrottleArmed = false;
     m_artifactPreviewSent = false;
-    if (m_ctrlBackend != CtrlSimulator) {
-        const QString message = controllerUnavailableMessage();
-        emit prepareFinished(false, message);
-        emit diagnostic(message);
-        return;
-    }
-    if (m_backend != BackendSimulator) {
-        const QString message = linkedDemoStandRequiredMessage();
+    if (const QString message = standMismatch(); !message.isEmpty()) {
         emit prepareFinished(false, message);
         emit diagnostic(message);
         return;
@@ -1359,8 +1397,8 @@ void MeasureWorker::prepareRecovery(const QString& seriesDir)
         emit diagnostic(message);
         return;
     }
-    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), &m_dut);
-    m_orch->setSleepEnabled(false);
+    m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
+    m_orch->setSleepEnabled(m_backend != BackendSimulator);
     std::string diag;
     const bool ok = m_orch->prepareRecovery(seriesDir.toStdString(), diag);
     emitConnection();

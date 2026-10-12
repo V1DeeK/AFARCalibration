@@ -188,3 +188,55 @@ set_target_properties(test_ui_interactions PROPERTIES AUTOMOC ON)
 afar_enable_warnings(test_ui_interactions)
 add_test(NAME ui_interactions COMMAND test_ui_interactions)
 set_tests_properties(ui_interactions PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Обмен с PS изделия: кодек (без Qt) и связь по TCP и UDP с тестовым сервером
+# на localhost. Тестовый сервер есть только здесь, в программу он не входит.
+find_package(Qt6 REQUIRED COMPONENTS Network)
+add_library(afar_test_ps_server STATIC
+    support/TestPsServer.cpp
+    support/TestPsServer.h
+)
+set_target_properties(afar_test_ps_server PROPERTIES AUTOMOC ON)
+target_include_directories(afar_test_ps_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(afar_test_ps_server PUBLIC afar_ps_protocol Qt6::Network)
+afar_enable_warnings(afar_test_ps_server)
+
+add_executable(test_ps_protocol test_ps_protocol.cpp)
+target_link_libraries(test_ps_protocol PRIVATE Catch2::Catch2WithMain afar_ps_protocol)
+afar_enable_warnings(test_ps_protocol)
+add_test(NAME ps_protocol COMMAND test_ps_protocol)
+
+add_executable(test_ps_link test_ps_link.cpp)
+target_link_libraries(test_ps_link PRIVATE Catch2::Catch2WithMain afar_ps afar_test_ps_server)
+afar_enable_warnings(test_ps_link)
+add_test(NAME ps_link COMMAND test_ps_link)
+
+add_executable(test_ps_tab
+    test_ps_tab.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsTab.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsTab.h
+    ${PROJECT_SOURCE_DIR}/src/ui/PsModulesPage.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsModulesPage.h
+    ${PROJECT_SOURCE_DIR}/src/ui/PsPacketPage.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsPacketPage.h
+    ${PROJECT_SOURCE_DIR}/src/ui/PsServiceCheckPage.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsServiceCheckPage.h
+)
+target_include_directories(test_ps_tab PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
+target_link_libraries(test_ps_tab PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_ps afar_test_ps_server)
+set_target_properties(test_ps_tab PROPERTIES AUTOMOC ON)
+afar_enable_warnings(test_ps_tab)
+add_test(NAME ps_tab COMMAND test_ps_tab)
+set_tests_properties(ps_tab PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(test_ps_dut_controller test_ps_dut_controller.cpp)
+target_link_libraries(test_ps_dut_controller PRIVATE
+    Catch2::Catch2WithMain
+    afar_dut_ps
+    afar_test_ps_server
+    afar_measure
+    afar_sim
+)
+target_include_directories(test_ps_dut_controller PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+afar_enable_warnings(test_ps_dut_controller)
+add_test(NAME ps_dut_controller COMMAND test_ps_dut_controller)

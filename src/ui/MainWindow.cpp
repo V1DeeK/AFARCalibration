@@ -6,6 +6,7 @@
 #include "DataFormatsTab.h"
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
+#include "PsTab.h"
 #include "RunConfig.h"
 #include "RunStateMachine.h"
 #include "StartWizard.h"
@@ -99,6 +100,8 @@ MainWindow::MainWindow(QWidget* parent)
     tabs->addTab(m_matrix, QStringLiteral("Матрица кодов"));
     tabs->addTab(m_formats, QStringLiteral("Форматы данных"));
     tabs->addTab(m_acceptance, QStringLiteral("Приёмка AT"));
+    m_ps = new PsTab(tabs);
+    tabs->addTab(m_ps, QStringLiteral("Параметры PS"));
 
     auto* cycle = new QFrame(root);
     cycle->setFrameShape(QFrame::StyledPanel);
@@ -445,6 +448,13 @@ void MainWindow::updateCycleButtons(int state)
     // UI-MEAS-001: Idle/Ready — да; Running и смежные — нет.
     const bool measureOk = st == RunState::Idle || st == RunState::Ready;
     m_measure->setMeasureNowEnabled(measureOk);
+    // Связь вкладки PS уступает серии, только если серия сама пишет коды
+    // через PS (контроллер «PS изделия»): PS держит одно соединение. Серия с
+    // любым другим контроллером работает только с анализатором и PS не трогает.
+    const bool idle = st == RunState::Idle || st == RunState::Complete
+        || st == RunState::Aborted || st == RunState::Error;
+    const bool seriesUsesPs = m_connections->controllerBackend() == MeasureWorker::CtrlPs;
+    m_ps->setSeriesActive(!idle && seriesUsesPs);
 }
 
 void MainWindow::onMeasureNow()

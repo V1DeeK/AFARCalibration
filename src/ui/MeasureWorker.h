@@ -2,6 +2,7 @@
 
 #include "DutSimulator.h"
 #include "MeasurementOrchestrator.h"
+#include "PsDutController.h"
 #include "TwoPortExport.h"
 #include "VnaSimulator.h"
 
@@ -34,7 +35,7 @@ public:
         BackendS2VnaDemo = 3,
     };
     /// 0 = DutSimulator (серия), 1 = Stub (диагностика т.14), 2 = боевой (не реализован).
-    enum CtrlBackend : int { CtrlSimulator = 0, CtrlStub = 1, CtrlCombat = 2 };
+    enum CtrlBackend : int { CtrlSimulator = 0, CtrlStub = 1, CtrlCombat = 2, CtrlPs = 3 };
 
     explicit MeasureWorker(QObject* parent = nullptr);
     ~MeasureWorker() override;
@@ -205,6 +206,10 @@ private slots:
 private:
     void rebuildVna();
     [[nodiscard]] IVna* activeVna();
+    /// PS изделия при CtrlPs, иначе демо-контроллер.
+    [[nodiscard]] IDutController* activeDut();
+    /// Пустая строка — связка VNA и контроллера допустима для серии.
+    [[nodiscard]] QString standMismatch() const;
     void emitPendingScpiErrors();
     void emitConnection();
     void emitState();
@@ -246,6 +251,7 @@ private:
     IVna* m_vna{nullptr};
 
     DutSimulator m_dut;
+    std::unique_ptr<PsDutController> m_psDut;
     std::unique_ptr<afar::MeasurementOrchestrator> m_orch;
     QTimer* m_timer = nullptr;
     int m_matrixChannel = 1;
