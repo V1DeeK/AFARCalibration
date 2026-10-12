@@ -778,12 +778,25 @@ void PsTab::onFrame(bool outgoing, const QString& channel, const QString& line)
 
 void PsTab::setSeriesActive(bool active)
 {
+    if (active == m_seriesActive) {
+        return;
+    }
     m_seriesActive = active;
+    if (active && m_link->state() != PsLink::State::Disconnected) {
+        // PS держит одно соединение: на время серии его занимает контроллер.
+        m_reconnectAfterSeries = true;
+        m_link->disconnectFromPs();
+        log(QStringLiteral("Серия: связь вкладки с PS закрыта, PS управляет оркестратор"));
+    } else if (!active && m_reconnectAfterSeries) {
+        m_reconnectAfterSeries = false;
+        onConnectClicked();
+    }
     refreshEnabled();
 }
 
 void PsTab::refreshEnabled()
 {
+    m_connect->setEnabled(!m_seriesActive);
     const bool ready = m_link->isReady() && !m_seriesActive;
     const bool service = ready && m_modeKnown && m_mode == ps::Mode::Service;
     m_toService->setEnabled(ready && (!m_modeKnown || m_mode == ps::Mode::Idle));

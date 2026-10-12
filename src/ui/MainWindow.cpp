@@ -448,8 +448,11 @@ void MainWindow::updateCycleButtons(int state)
     // UI-MEAS-001: Idle/Ready — да; Running и смежные — нет.
     const bool measureOk = st == RunState::Idle || st == RunState::Ready;
     m_measure->setMeasureNowEnabled(measureOk);
-    // Во время серии изделием владеет оркестратор: ручные команды PS — нет.
-    m_ps->setSeriesActive(running || st == RunState::Stopping || st == RunState::Finalizing);
+    // Подготовленной или идущей серией изделием владеет оркестратор: ручная
+    // связь вкладки PS закрывается, PS держит одно соединение.
+    const bool idle = st == RunState::Idle || st == RunState::Complete
+        || st == RunState::Aborted || st == RunState::Error;
+    m_ps->setSeriesActive(!idle);
 }
 
 void MainWindow::onMeasureNow()

@@ -282,6 +282,7 @@ target_link_libraries(AfarRxCalibrationStudio PRIVATE
     afar_qc
     afar_ps
     afar_ps_sim
+    afar_dut_ps
 )
 afar_enable_warnings(AfarRxCalibrationStudio)
 

@@ -77,6 +77,7 @@ private:
     PsLink* m_link = nullptr;
     PsSimulator* m_sim = nullptr;
     bool m_seriesActive = false;
+    bool m_reconnectAfterSeries = false;
     bool m_modeKnown = false;
     afar::ps::Mode m_mode = afar::ps::Mode::Idle;
 

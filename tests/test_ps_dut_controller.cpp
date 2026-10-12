@@ -1,14 +1,17 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include "MeasurementOrchestrator.h"
 #include "PsDutController.h"
 #include "PsSimulator.h"
+#include "VnaSimulator.h"
+#include "probe_fixtures.h"
+#include "qt_test_application.h"
 
-#include <QCoreApplication>
 #include <QMetaObject>
 #include <QThread>
 
-#include <atomic>
+#include <filesystem>
 #include <memory>
 #include <stdexcept>
 
@@ -17,14 +20,10 @@ namespace ps = afar::ps;
 
 namespace {
 
-QCoreApplication& app()
+void app()
 {
-    static int argc = 1;
-    static char name[] = "test_ps_dut_controller";
-    static char* argv[] = {name, nullptr};
-    // Не разрушаем до выхода процесса — см. qt_test_application.h.
-    static QCoreApplication& a = *new QCoreApplication(argc, argv);
-    return a;
+    // Отчёт PDF серии требует QGuiApplication — один экземпляр на процесс.
+    (void)afar::test::guiApplication();
 }
 
 /// Имитатор PS в своём потоке: драйвер блокирует поток теста.
@@ -164,4 +163,39 @@ TEST_CASE("PS-контроллер: отказы дают исключение, 
         CHECK_THROWS(nobody.connect());
         CHECK_FALSE(nobody.connected());
     }
+}
+
+TEST_CASE("PS-контроллер в серии AT-03: оркестратор пишет коды через PS", "[ps][dut][AT-03]")
+{
+    app();
+    SimThread sim;
+    const auto root = std::filesystem::temp_directory_path() / "afar_ps_probe_run";
+    std::filesystem::remove_all(root);
+    const auto fixtures = root / "fixtures";
+    afar::test::writeProbeFixtures(fixtures, "RX16-20261012-001", 11);
+    afar::RunConfig cfg;
+    afar::AttenuatorCodes att;
+    std::string diag;
+    REQUIRE(afar::test::loadProbeConfig(fixtures, cfg, att, diag));
+
+    VnaSimulator vna;
+    PsDutController dut(optionsFor(sim));
+    afar::MeasurementOrchestrator orch(&vna, &dut);
+    orch.setConfig(cfg, att);
+    orch.setSleepEnabled(false);
+    REQUIRE(orch.prepare(root / "data", fixtures / "run-config.json",
+                         fixtures / "attenuator-codes.csv", diag));
+    CHECK(dut.connected());
+    REQUIRE(orch.start(diag));
+    orch.runUntilDone();
+
+    REQUIRE(orch.state() == afar::RunState::Complete);
+    CHECK(orch.store().completedCount() == 8);
+    // После серии решётка в безопасном состоянии: 63/0 на всех каналах.
+    const auto codes = sim.call([](PsSimulator& s) { return s.codes(); });
+    for (const auto& c : codes) {
+        CHECK(c.att == 63);
+        CHECK(c.ph == 0);
+    }
+    std::filesystem::remove_all(root);
 }

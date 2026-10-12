@@ -106,12 +106,14 @@ TEST_CASE("Вкладка PS: имитатор, сервисный режим, �
         return false;
     }));
 
-    // Во время серии ручные команды недоступны.
+    // Серия занимает PS: связь вкладки закрывается и после серии восстанавливается.
     tab.setSeriesActive(true);
     CHECK_FALSE(writeCodes->isEnabled());
     CHECK_FALSE(child<QPushButton>(tab, "psToIdle")->isEnabled());
+    CHECK_FALSE(child<QPushButton>(tab, "psConnect")->isEnabled());
+    CHECK(tab.link()->state() == PsLink::State::Disconnected);
     tab.setSeriesActive(false);
-    CHECK(writeCodes->isEnabled());
+    REQUIRE(waitFor([&] { return writeCodes->isEnabled(); }));
 
     child<QPushButton>(tab, "psConnect")->click();
     CHECK(tab.link()->state() == PsLink::State::Disconnected);
