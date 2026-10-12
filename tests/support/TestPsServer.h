@@ -8,21 +8,21 @@
 #include <QUdpSocket>
 
 #include <array>
-#include <map>
 
 class QTcpServer;
 class QTcpSocket;
 
-/// Программный имитатор PS изделия (ТЗ т. 12.1) для тестов и работы без стенда.
-/// Отвечает по контракту docs/contracts/ps-json-protocol.md: hello, keep_alive,
-/// set_mode/get_state, сервисные команды, модули RS-485, UDP-телеметрия.
+/// Тестовый сервер на localhost для автотестов TCP и UDP. Только в tests/:
+/// в программу не входит, PS изделия делает разработчик PS. Отвечает по
+/// контракту docs/contracts/ps-json-protocol.md: hello, keep_alive,
+/// set_mode/get_state, сервисные команды v2, UDP-телеметрия.
 /// Одно соединение; новое закрывает старое.
-class PsSimulator final : public QObject {
+class TestPsServer final : public QObject {
     Q_OBJECT
 
 public:
-    explicit PsSimulator(QObject* parent = nullptr);
-    ~PsSimulator() override;
+    explicit TestPsServer(QObject* parent = nullptr);
+    ~TestPsServer() override;
 
     /// Слушать 127.0.0.1:port (0 — любой свободный). false — порт занят.
     bool listen(quint16 port = 0);
@@ -33,6 +33,7 @@ public:
     /// Сломать поведение для тестов отказов.
     void setSilent(bool silent) { m_silent = silent; }
     void setFault(bool fault);
+    /// 0 — телеметрию не слать совсем.
     void setTelemetryPeriodMs(int ms);
 
     [[nodiscard]] afar::ps::Mode mode() const { return m_mode; }
@@ -50,7 +51,6 @@ private:
                nlohmann::json payload = nlohmann::json::object());
     void sendTelemetry();
     [[nodiscard]] nlohmann::json channelsJson() const;
-    [[nodiscard]] nlohmann::json moduleJson(afar::ps::Rs485Module m) const;
     void resetService();
 
     QTcpServer* m_server = nullptr;
@@ -61,6 +61,7 @@ private:
     bool m_helloDone = false;
     bool m_silent = false;
     bool m_fault = false;
+    bool m_tlmOff = false;
     QString m_tlmHost;
     quint16 m_tlmPort = 0;
     quint8 m_tlmCount = 0;
@@ -73,5 +74,4 @@ private:
     std::string m_beamSrc = "none";
     double m_beamAz = 0.0;
     int m_beam = 0;
-    std::map<int, afar::ps::Rs485Values> m_modules;
 };

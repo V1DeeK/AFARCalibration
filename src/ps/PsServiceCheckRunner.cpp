@@ -30,14 +30,28 @@ PsServiceCheckRunner::PsServiceCheckRunner(PsLink* link, QObject* parent)
 {
     m_guard.setSingleShot(true);
     connect(&m_guard, &QTimer::timeout, this, [this] {
-        if (isRunning()) {
-            finishStep({ps::CheckVerdict::NoAnswer, "ответ не пришёл или не разобран"},
-                       QStringLiteral("нет ответа"), QString());
+        if (!isRunning()) {
+            return;
         }
+        if (m_waitTelemetry) {
+            m_waitTelemetry = false;
+            if (m_lastTelemetry.isEmpty()) {
+                finishStep({ps::CheckVerdict::NoAnswer, "ни одной датаграммы за " +
+                                                            std::to_string(ps::kTelemetryWaitMs) + " мс"},
+                           QStringLiteral("нет датаграмм"), QString());
+            } else {
+                finishStep({ps::CheckVerdict::Fail, "режим в телеметрии не сменился"}, m_lastTelemetry,
+                           QString());
+            }
+            return;
+        }
+        finishStep({ps::CheckVerdict::NoAnswer, "ответ не пришёл или не разобран"},
+                   QStringLiteral("нет ответа"), QString());
     });
     connect(m_link, &PsLink::responseReceived, this, &PsServiceCheckRunner::onResponse);
     connect(m_link, &PsLink::commandTimedOut, this, &PsServiceCheckRunner::onTimedOut);
     connect(m_link, &PsLink::stateChanged, this, &PsServiceCheckRunner::onLinkState);
+    connect(m_link, &PsLink::telemetryReceived, this, &PsServiceCheckRunner::onTelemetry);
 }
 
 bool PsServiceCheckRunner::start()
@@ -49,6 +63,8 @@ bool PsServiceCheckRunner::start()
     m_startedAt = QDateTime::currentDateTime();
     m_finishedAt = {};
     m_finishReason.clear();
+    m_lostAtStart = m_link->telemetryLost();
+    m_rejectedAtStart = m_link->telemetryRejected();
     m_index = 0;
     sendCurrent();
     return true;
@@ -62,6 +78,7 @@ void PsServiceCheckRunner::stop(const QString& reason)
     m_guard.stop();
     m_index = -1;
     m_msgCount = -1;
+    m_waitTelemetry = false;
     m_finishedAt = QDateTime::currentDateTime();
     m_finishReason = reason;
     emit finished(reason);
@@ -74,6 +91,33 @@ void PsServiceCheckRunner::sendCurrent()
     out.request = jsonText(step.payload);
     emit stepStarted(m_index);
     m_stepClock.start();
+    if (step.kind == ps::CheckKind::TelemetryMode) {
+        out.request = QStringLiteral("ожидание датаграммы UDP");
+        m_lastTelemetry.clear();
+        m_waitTelemetry = true;
+        m_guard.start(ps::kTelemetryWaitMs);
+        return;
+    }
+    if (step.kind == ps::CheckKind::TelemetryClean) {
+        out.request = QStringLiteral("счётчики телеметрии");
+        const quint64 lost = m_link->telemetryLost() - m_lostAtStart;
+        const quint64 rejected = m_link->telemetryRejected() - m_rejectedAtStart;
+        const QString got = QStringLiteral("принято %1, потеряно %2, отброшено %3")
+                                .arg(m_link->telemetryPackets())
+                                .arg(lost)
+                                .arg(rejected);
+        ps::CheckResult r{ps::CheckVerdict::Pass, {}};
+        if (lost != 0 || rejected != 0) {
+            r = {ps::CheckVerdict::Fail, got.toStdString()};
+        }
+        // Результат готов сразу, но следующий шаг — из цикла событий.
+        QTimer::singleShot(0, this, [this, r, got, index = m_index] {
+            if (m_index == index) {
+                finishStep(r, got, QString());
+            }
+        });
+        return;
+    }
     m_msgCount = m_link->sendCommand(step.msgType, step.payload);
     if (m_msgCount < 0) {
         finishStep({ps::CheckVerdict::Fail, "команда не ушла: нет связи с PS"},
@@ -122,6 +166,23 @@ void PsServiceCheckRunner::onResponse(const ps::Envelope& response, ps::Status s
     }
     finishStep(ps::evaluate(step, status, response.payload), qs(ps::responseText(status, response.payload)),
                jsonText(response.payload));
+}
+
+void PsServiceCheckRunner::onTelemetry(const ps::Telemetry& t)
+{
+    if (!isRunning() || !m_waitTelemetry) {
+        return;
+    }
+    const auto& step = m_steps[static_cast<std::size_t>(m_index)];
+    m_lastTelemetry = QStringLiteral("mode=%1, state=%2, принято %3")
+                          .arg(qs(std::string(ps::toString(t.mode))), qs(t.state))
+                          .arg(m_link->telemetryPackets());
+    // Сразу после set_mode может прийти датаграмма со старым режимом — ждём следующую.
+    if (ps::evaluateTelemetry(step, t).verdict != ps::CheckVerdict::Pass) {
+        return;
+    }
+    m_waitTelemetry = false;
+    finishStep({ps::CheckVerdict::Pass, {}}, m_lastTelemetry, QString());
 }
 
 void PsServiceCheckRunner::onTimedOut(const QString& msgType, int msgCount)

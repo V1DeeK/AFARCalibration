@@ -3,7 +3,7 @@
 
 #include "MeasurementOrchestrator.h"
 #include "PsDutController.h"
-#include "PsSimulator.h"
+#include "TestPsServer.h"
 #include "VnaSimulator.h"
 #include "probe_fixtures.h"
 #include "qt_test_application.h"
@@ -40,7 +40,7 @@ public:
         QMetaObject::invokeMethod(
             &anchor_,
             [this] {
-                sim_ = new PsSimulator;
+                sim_ = new TestPsServer;
                 sim_->setTelemetryPeriodMs(50);
                 port_ = sim_->listen() ? sim_->port() : 0;
             },
@@ -65,7 +65,7 @@ private:
     struct Anchor : QObject {};
     QThread thread_;
     Anchor anchor_;
-    PsSimulator* sim_ = nullptr;
+    TestPsServer* sim_ = nullptr;
     quint16 port_ = 0;
 };
 
@@ -89,14 +89,14 @@ TEST_CASE("PS-контроллер: SERVICE, коды активного кан�
     PsDutController dut(optionsFor(sim));
     dut.connect();
     CHECK(dut.connected());
-    CHECK(sim.call([](PsSimulator& s) { return s.mode() == ps::Mode::Service; }));
+    CHECK(sim.call([](TestPsServer& s) { return s.mode() == ps::Mode::Service; }));
 
     DutState st{};
     st.channel = 7;
     st.att_code = 18;
     st.phase_code = 42;
     dut.apply(st);
-    const auto codes = sim.call([](PsSimulator& s) { return s.codes(); });
+    const auto codes = sim.call([](TestPsServer& s) { return s.codes(); });
     for (const auto& c : codes) {
         if (c.n == 7) {
             CHECK(c.att == 18);
@@ -115,7 +115,7 @@ TEST_CASE("PS-контроллер: SERVICE, коды активного кан�
     CHECK(t > 0.0);
 
     dut.set_safe_state();
-    const auto safe = sim.call([](PsSimulator& s) { return s.codes(); });
+    const auto safe = sim.call([](TestPsServer& s) { return s.codes(); });
     for (const auto& c : safe) {
         CHECK(c.att == 63);
         CHECK(c.ph == 0);
@@ -137,7 +137,7 @@ TEST_CASE("PS-контроллер: отказы дают исключение, 
     }
     SECTION("PS в FAULT не переходит в SERVICE")
     {
-        sim.call([](PsSimulator& s) {
+        sim.call([](TestPsServer& s) {
             s.setFault(true);
             return 0;
         });
@@ -146,7 +146,7 @@ TEST_CASE("PS-контроллер: отказы дают исключение, 
     SECTION("молчащий PS — тайм-аут")
     {
         dut.connect();
-        sim.call([](PsSimulator& s) {
+        sim.call([](TestPsServer& s) {
             s.setSilent(true);
             return 0;
         });
@@ -197,7 +197,7 @@ TEST_CASE("PS-контроллер в серии AT-03: оркестратор �
         REQUIRE(orch.state() == afar::RunState::Complete);
         CHECK(orch.store().completedCount() == 8);
         // После серии решётка в безопасном состоянии: 63/0 на всех каналах.
-        const auto codes = sim.call([](PsSimulator& s) { return s.codes(); });
+        const auto codes = sim.call([](TestPsServer& s) { return s.codes(); });
         for (const auto& c : codes) {
             CHECK(c.att == 63);
             CHECK(c.ph == 0);

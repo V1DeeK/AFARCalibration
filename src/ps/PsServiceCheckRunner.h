@@ -49,6 +49,7 @@ private:
     void onResponse(const afar::ps::Envelope& response, afar::ps::Status status);
     void onTimedOut(const QString& msgType, int msgCount);
     void onLinkState(PsLink::State state);
+    void onTelemetry(const afar::ps::Telemetry& t);
 
     PsLink* m_link;
     std::vector<afar::ps::CheckStep> m_steps;
@@ -60,4 +61,8 @@ private:
     QDateTime m_startedAt;
     QDateTime m_finishedAt;
     QString m_finishReason;
+    quint64 m_lostAtStart = 0;
+    quint64 m_rejectedAtStart = 0;
+    bool m_waitTelemetry = false;
+    QString m_lastTelemetry;
 };

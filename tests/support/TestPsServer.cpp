@@ -1,4 +1,4 @@
-#include "PsSimulator.h"
+#include "TestPsServer.h"
 
 #include <QDateTime>
 #include <QHostAddress>
@@ -10,24 +10,7 @@
 namespace ps = afar::ps;
 using nlohmann::json;
 
-namespace {
-
-ps::Rs485Values defaultModule(ps::Rs485Module m)
-{
-    ps::Rs485Values v;
-    for (const auto& f : ps::rs485Fields(m)) {
-        double value = 0.0;
-        if (f.kind == ps::Rs485FieldKind::PowerDbm) {
-            value = -4.0;
-        }
-        v[std::string(f.key)] = value;
-    }
-    return v;
-}
-
-}  // namespace
-
-PsSimulator::PsSimulator(QObject* parent)
+TestPsServer::TestPsServer(QObject* parent)
     : QObject(parent)
     , m_server(new QTcpServer(this))
     , m_udp(this)
@@ -35,25 +18,22 @@ PsSimulator::PsSimulator(QObject* parent)
 {
     m_startMs = QDateTime::currentMSecsSinceEpoch();
     resetService();
-    for (int a = 1; a <= 4; ++a) {
-        m_modules[a] = defaultModule(static_cast<ps::Rs485Module>(a));
-    }
     m_tlmTimer.setInterval(1000);
-    connect(m_server, &QTcpServer::newConnection, this, &PsSimulator::onNewConnection);
-    connect(&m_tlmTimer, &QTimer::timeout, this, &PsSimulator::sendTelemetry);
+    connect(m_server, &QTcpServer::newConnection, this, &TestPsServer::onNewConnection);
+    connect(&m_tlmTimer, &QTimer::timeout, this, &TestPsServer::sendTelemetry);
 }
 
-PsSimulator::~PsSimulator()
+TestPsServer::~TestPsServer()
 {
     close();
 }
 
-bool PsSimulator::listen(quint16 port)
+bool TestPsServer::listen(quint16 port)
 {
     return m_server->listen(QHostAddress::LocalHost, port);
 }
 
-void PsSimulator::close()
+void TestPsServer::close()
 {
     m_tlmTimer.stop();
     if (m_client) {
@@ -63,17 +43,17 @@ void PsSimulator::close()
     m_server->close();
 }
 
-quint16 PsSimulator::port() const
+quint16 TestPsServer::port() const
 {
     return m_server->serverPort();
 }
 
-bool PsSimulator::isListening() const
+bool TestPsServer::isListening() const
 {
     return m_server->isListening();
 }
 
-void PsSimulator::setFault(bool fault)
+void TestPsServer::setFault(bool fault)
 {
     m_fault = fault;
     if (fault) {
@@ -81,12 +61,17 @@ void PsSimulator::setFault(bool fault)
     }
 }
 
-void PsSimulator::setTelemetryPeriodMs(int ms)
+void TestPsServer::setTelemetryPeriodMs(int ms)
 {
+    m_tlmOff = ms <= 0;
+    if (m_tlmOff) {
+        m_tlmTimer.stop();
+        return;
+    }
     m_tlmTimer.setInterval(ms);
 }
 
-void PsSimulator::resetService()
+void TestPsServer::resetService()
 {
     for (int i = 0; i < ps::kChannels; ++i) {
         m_codes[static_cast<std::size_t>(i)] = {i + 1, 0, 0};
@@ -94,7 +79,7 @@ void PsSimulator::resetService()
     m_beamSrc = "none";
 }
 
-void PsSimulator::onNewConnection()
+void TestPsServer::onNewConnection()
 {
     while (QTcpSocket* next = m_server->nextPendingConnection()) {
         if (m_client) {
@@ -105,7 +90,7 @@ void PsSimulator::onNewConnection()
         m_helloDone = false;
         m_splitter.clear();
         m_tlmTimer.stop();
-        connect(next, &QTcpSocket::readyRead, this, &PsSimulator::onReadyRead);
+        connect(next, &QTcpSocket::readyRead, this, &TestPsServer::onReadyRead);
         connect(next, &QTcpSocket::disconnected, this, [this, next] {
             if (m_client == next) {
                 m_tlmTimer.stop();
@@ -115,7 +100,7 @@ void PsSimulator::onNewConnection()
     }
 }
 
-void PsSimulator::onReadyRead()
+void TestPsServer::onReadyRead()
 {
     if (!m_client) {
         return;
@@ -138,7 +123,7 @@ void PsSimulator::onReadyRead()
     }
 }
 
-void PsSimulator::reply(const ps::Envelope& cmd, ps::Status status, json payload)
+void TestPsServer::reply(const ps::Envelope& cmd, ps::Status status, json payload)
 {
     if (!m_client) {
         return;
@@ -156,29 +141,14 @@ void PsSimulator::reply(const ps::Envelope& cmd, ps::Status status, json payload
     m_client->write(line.data(), static_cast<qint64>(line.size()));
 }
 
-json PsSimulator::channelsJson() const
+json TestPsServer::channelsJson() const
 {
     json payload;
     ps::channelsToJson(std::vector<ps::ChannelCodes>(m_codes.begin(), m_codes.end()), payload);
     return payload;
 }
 
-json PsSimulator::moduleJson(ps::Rs485Module m) const
-{
-    const int addr = static_cast<int>(m);
-    json p;
-    ps::rs485SetPayload(m, m_modules.at(addr), p);
-    if (m == ps::Rs485Module::MixerLo || m == ps::Rs485Module::CalibrationLo ||
-        m == ps::Rs485Module::VideoReceiver) {
-        const auto& v = m_modules.at(addr);
-        const bool on = v.at("EN_ADF4355") != 0.0 && v.at("FREQ_ADF4355") > 0.0;
-        p["Lock"] = on ? 1 : 0;
-    }
-    p["Temp"] = 35.0 + addr;
-    return p;
-}
-
-void PsSimulator::handle(const ps::Envelope& cmd)
+void TestPsServer::handle(const ps::Envelope& cmd)
 {
     const std::string& t = cmd.msg_type;
     const json& in = cmd.payload;
@@ -201,7 +171,9 @@ void PsSimulator::handle(const ps::Envelope& cmd)
         reply(cmd, ps::Status::Ok, json{{"ver", std::string(ps::kProtocolVersion)},
                                         {"tlm_ip", ip->get<std::string>()},
                                         {"tlm_port", m_tlmPort}});
-        m_tlmTimer.start();
+        if (!m_tlmOff) {
+            m_tlmTimer.start();
+        }
         sendTelemetry();
         return;
     }
@@ -246,8 +218,7 @@ void PsSimulator::handle(const ps::Envelope& cmd)
     const bool serviceCommand =
         t == ps::msg::SetPhaseAtten || t == ps::msg::GetPhaseAtten || t == ps::msg::SetAdc ||
         t == ps::msg::GetAdc || t == ps::msg::SetBeamAzimuth || t == ps::msg::SetBeam ||
-        t == ps::msg::GetBeam || t == ps::msg::Rs485Send || t == ps::msg::Rs485Set ||
-        t == ps::msg::Rs485Status;
+        t == ps::msg::GetBeam || t == ps::msg::Rs485Send;
     if (!serviceCommand) {
         reply(cmd, ps::Status::NotSupported);
         return;
@@ -316,42 +287,12 @@ void PsSimulator::handle(const ps::Envelope& cmd)
             return;
         }
         reply(cmd, ps::Status::Ok, json{{"data", data->get<std::string>()}});
-    } else if (t == ps::msg::Rs485Set || t == ps::msg::Rs485Status) {
-        const auto addr = in.find("addr");
-        ps::Rs485Module m{};
-        if (addr == in.end() || !addr->is_number_integer() ||
-            !ps::rs485ModuleFromAddr(addr->get<int>(), m)) {
-            reply(cmd, ps::Status::InvalidArgument);
-            return;
-        }
-        if (t == ps::msg::Rs485Set) {
-            ps::Rs485Values values;
-            for (const auto& [key, value] : in.items()) {
-                if (key == "addr") {
-                    continue;
-                }
-                if (!value.is_number()) {
-                    reply(cmd, ps::Status::InvalidArgument);
-                    return;
-                }
-                values[key] = value.get<double>();
-            }
-            json check;
-            if (!ps::rs485SetPayload(m, values, check)) {
-                reply(cmd, ps::Status::InvalidArgument);
-                return;
-            }
-            for (const auto& [key, value] : values) {
-                m_modules[static_cast<int>(m)][key] = value;
-            }
-        }
-        reply(cmd, ps::Status::Ok, moduleJson(m));
     }
 }
 
-void PsSimulator::sendTelemetry()
+void TestPsServer::sendTelemetry()
 {
-    if (!m_helloDone || m_tlmPort == 0) {
+    if (!m_helloDone || m_tlmPort == 0 || m_tlmOff) {
         return;
     }
     ps::Envelope e;

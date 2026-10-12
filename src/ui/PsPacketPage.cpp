@@ -46,12 +46,6 @@ json templateFor(std::string_view type)
     if (type == ps::msg::Rs485Send) {
         return json{{"data", "01A3FF"}};
     }
-    if (type == ps::msg::Rs485Set) {
-        return json{{"addr", 1}, {"EN_ADF4355", 0}};
-    }
-    if (type == ps::msg::Rs485Status) {
-        return ps::rs485StatusPayload(ps::Rs485Module::MixerLo);
-    }
     return json::object();
 }
 
@@ -67,7 +61,7 @@ PsPacketPage::PsPacketPage(PsLink* link, QWidget* parent)
     m_type->setObjectName(QStringLiteral("psPacketType"));
     for (std::string_view t : {ps::msg::GetState, ps::msg::SetMode, ps::msg::SetPhaseAtten, ps::msg::GetPhaseAtten,
                                ps::msg::SetAdc, ps::msg::GetAdc, ps::msg::SetBeamAzimuth, ps::msg::SetBeam,
-                               ps::msg::GetBeam, ps::msg::Rs485Send, ps::msg::Rs485Set, ps::msg::Rs485Status}) {
+                               ps::msg::GetBeam, ps::msg::Rs485Send}) {
         m_type->addItem(qs(t));
     }
     m_type->setEditable(true);  // можно ввести и msg_type, которого нет в контракте

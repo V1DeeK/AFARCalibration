@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "PsLink.h"
-#include "PsSimulator.h"
+#include "TestPsServer.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -62,7 +62,7 @@ const std::pair<ps::Envelope, ps::Status>* await(Responses& r, int count)
     return r.find(count);
 }
 
-void connectToSim(PsLink& link, PsSimulator& sim)
+void connectToSim(PsLink& link, TestPsServer& sim)
 {
     REQUIRE(sim.listen());
     link.connectToPs(QStringLiteral("127.0.0.1"), sim.port(), 0);
@@ -74,7 +74,7 @@ void connectToSim(PsLink& link, PsSimulator& sim)
 TEST_CASE("PS-связь: hello, телеметрия и переход в SERVICE", "[ps][link]")
 {
     app();
-    PsSimulator sim;
+    TestPsServer sim;
     sim.setTelemetryPeriodMs(50);
     PsLink link;
     Responses r(link);
@@ -109,7 +109,7 @@ TEST_CASE("PS-связь: hello, телеметрия и переход в SERVI
 TEST_CASE("PS-связь: коды решётки записываются и читаются обратно", "[ps][link]")
 {
     app();
-    PsSimulator sim;
+    TestPsServer sim;
     PsLink link;
     Responses r(link);
     connectToSim(link, sim);
@@ -141,10 +141,10 @@ TEST_CASE("PS-связь: коды решётки записываются и ч
     CHECK(sim.codes()[0].ph == codes[0].ph);
 }
 
-TEST_CASE("PS-связь: АЦП и модули RS-485", "[ps][link]")
+TEST_CASE("PS-связь: АЦП и rs485_send", "[ps][link]")
 {
     app();
-    PsSimulator sim;
+    TestPsServer sim;
     PsLink link;
     Responses r(link);
     connectToSim(link, sim);
@@ -158,28 +158,17 @@ TEST_CASE("PS-связь: АЦП и модули RS-485", "[ps][link]")
     CHECK(actual.lo <= adc.lo);
     CHECK(adc.lo - actual.lo < 1024);
 
-    json set;
-    REQUIRE(ps::rs485SetPayload(ps::Rs485Module::MixerLo,
-                                {{"FREQ_ADF4355", 5'500'000'000.0}, {"EN_ADF4355", 1}}, set));
-    const auto* setReply = await(r, link.sendCommand(ps::msg::Rs485Set, set));
-    REQUIRE(setReply);
-    REQUIRE(setReply->second == ps::Status::Ok);
-
-    const auto* status = await(r, link.sendCommand(ps::msg::Rs485Status,
-                                                   ps::rs485StatusPayload(ps::Rs485Module::MixerLo)));
-    REQUIRE(status);
-    ps::Rs485Status st;
-    REQUIRE(ps::Rs485Status::fromJson(status->first.payload, st));
-    CHECK(st.values.at("FREQ_ADF4355") == 5'500'000'000.0);
-    REQUIRE(st.lock);
-    CHECK(*st.lock == 1);
-    CHECK(st.temp.has_value());
+    // rs485_send из v2: PS подтверждает передачу байт в линию.
+    const auto* sent = await(r, link.sendCommand(ps::msg::Rs485Send, json{{"data", "01A3FF"}}));
+    REQUIRE(sent);
+    CHECK(sent->second == ps::Status::Ok);
+    CHECK(sent->first.payload.value("data", "") == "01A3FF");
 }
 
 TEST_CASE("PS-связь: молчащий PS — тайм-аут команды и разрыв по keep_alive", "[ps][link]")
 {
     app();
-    PsSimulator sim;
+    TestPsServer sim;
     PsLink link;
     PsLink::Timeouts t;
     t.commandMs = 300;
@@ -208,7 +197,7 @@ TEST_CASE("PS-связь: нет PS по адресу — ошибка без з
     t.connectMs = 500;
     t.reconnectMs = 60000;
     link.setTimeouts(t);
-    PsSimulator probe;
+    TestPsServer probe;
     REQUIRE(probe.listen());
     const quint16 freePort = probe.port();
     probe.close();

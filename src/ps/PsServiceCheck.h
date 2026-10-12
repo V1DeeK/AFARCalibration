@@ -12,7 +12,19 @@
 
 namespace afar::ps {
 
+/// Что проверяет шаг: ответ на команду по TCP или телеметрию по UDP.
+enum class CheckKind {
+    Command,          ///< отправить msgType и сверить ответ
+    TelemetryMode,    ///< дождаться датаграммы с режимом expectMode
+    TelemetryClean,   ///< за проверку ни одной потерянной и битой датаграммы
+};
+
+/// Сколько ждать датаграмму телеметрии: период PS 1 с (§5) с запасом.
+inline constexpr int kTelemetryWaitMs = 3000;
+
 struct CheckStep {
+    CheckKind kind = CheckKind::Command;
+    Mode expectMode = Mode::Idle;
     std::string phase;     ///< этап: «Связь», «Сервисный режим», …
     std::string title;     ///< что проверяем, по-русски
     std::string msgType;
@@ -33,13 +45,16 @@ struct CheckResult {
     std::string detail;    ///< почему не прошёл, по-русски
 };
 
-/// Шаги проверки: вход в SERVICE из IDLE, все сервисные команды с обратным
-/// чтением, отказы на неверные аргументы и вне SERVICE, возврат в IDLE.
+/// Шаги проверки: вход в SERVICE из IDLE, все сервисные команды v2 с обратным
+/// чтением, отказы на неверные аргументы и вне SERVICE, телеметрия по UDP,
+/// возврат в IDLE.
 /// Последняя запись кодов — безопасное состояние 63/0 (§7).
 std::vector<CheckStep> serviceCheckSteps();
 
-/// Оценка ответа PS на шаг.
+/// Оценка ответа PS на шаг-команду.
 CheckResult evaluate(const CheckStep& step, Status status, const nlohmann::json& payload);
+/// Оценка датаграммы телеметрии на шаг TelemetryMode.
+CheckResult evaluateTelemetry(const CheckStep& step, const Telemetry& t);
 
 std::string verdictRu(CheckVerdict v);
 /// Ожидаемый результат шага одной строкой: «OK, src=azimuth, az=12.5».

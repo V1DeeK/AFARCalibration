@@ -7,8 +7,7 @@
 
 #include <array>
 #include <cstdint>
-#include <map>
-#include <optional>
+
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,8 +33,6 @@ inline constexpr std::string_view KeepAlive = "keep_alive";
 inline constexpr std::string_view SetMode = "set_mode";
 inline constexpr std::string_view GetState = "get_state";
 inline constexpr std::string_view Rs485Send = "rs485_send";
-inline constexpr std::string_view Rs485Set = "rs485_set";
-inline constexpr std::string_view Rs485Status = "rs485_status";
 inline constexpr std::string_view SetPhaseAtten = "set_phase_atten";
 inline constexpr std::string_view GetPhaseAtten = "get_phase_atten";
 inline constexpr std::string_view SetAdc = "set_adc";
@@ -153,57 +150,6 @@ struct BeamState {
 
 /// Чётная длина, только 0-9 A-F a-f, не пусто (§4.4).
 bool hexBytesValid(std::string_view hex) noexcept;
-
-// --------------------------------------------------------------- RS-485
-
-/// Модули на линии RS-485 (§4.5). Значение — поле addr.
-enum class Rs485Module : int {
-    MixerLo = 1,
-    CalibrationLo = 2,
-    Mixer = 3,
-    VideoReceiver = 4,
-};
-
-std::string rs485ModuleRu(Rs485Module m);
-bool rs485ModuleFromAddr(int addr, Rs485Module& out) noexcept;
-
-enum class Rs485FieldKind {
-    Flag,         ///< 0 / 1
-    PowerDbm,     ///< −4, −1, 2, 5
-    FrequencyHz,  ///< 0 … 7 ГГц
-    Att31,        ///< 0 … 31,5 дБ, шаг 0,5
-    Att15,        ///< 0 … 15,5 дБ, шаг 0,5
-};
-
-struct Rs485Field {
-    std::string_view key;
-    Rs485FieldKind kind;
-    std::string_view titleRu;
-};
-
-/// Поля модуля в порядке документа RS-485.
-const std::vector<Rs485Field>& rs485Fields(Rs485Module m);
-/// Значение поля допустимо по его виду.
-bool rs485ValueValid(Rs485FieldKind kind, double value) noexcept;
-
-/// Значения полей модуля. Ключи — как в документе RS-485.
-using Rs485Values = std::map<std::string, double>;
-
-/// payload команды rs485_set: addr + переданные поля. Неизвестное поле или
-/// значение вне диапазона — false и текст ошибки, команда не собирается.
-bool rs485SetPayload(Rs485Module m, const Rs485Values& values, nlohmann::json& payload,
-                     std::string* error = nullptr);
-nlohmann::json rs485StatusPayload(Rs485Module m);
-
-struct Rs485Status {
-    Rs485Module module = Rs485Module::MixerLo;
-    Rs485Values values;
-    std::optional<double> temp;
-    std::optional<int> lock;
-
-    /// Ответ rs485_set / rs485_status. Незнакомые поля пропускаются.
-    static bool fromJson(const nlohmann::json& o, Rs485Status& out, std::string* error = nullptr);
-};
 
 // ------------------------------------------------------------- телеметрия
 

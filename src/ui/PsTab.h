@@ -5,12 +5,10 @@
 
 #include <QWidget>
 
-#include <map>
 #include <vector>
 
 class PsPacketPage;
 class PsServiceCheckPage;
-class PsSimulator;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -36,6 +34,8 @@ public:
     /// Серия идёт — ручные команды запрещены (ТЗ т. 8.2).
     void setSeriesActive(bool active);
     [[nodiscard]] PsLink* link() const { return m_link; }
+    /// Таблица обмена: строка на каждый отправленный и принятый пакет TCP и UDP.
+    [[nodiscard]] QTableWidget* exchangeTable() const { return m_exchange; }
     [[nodiscard]] PsServiceCheckPage* checkPage() const { return m_checkPage; }
     [[nodiscard]] PsPacketPage* packetPage() const { return m_packetPage; }
 
@@ -48,20 +48,12 @@ signals:
     void summaryChanged(const QString& text, bool ok);
 
 private:
-    struct ModuleRow {
-        QCheckBox* send = nullptr;
-        QWidget* editor = nullptr;
-        QLabel* actual = nullptr;
-        afar::ps::Rs485FieldKind kind{};
-    };
-
     QWidget* buildConnectionBox();
     QWidget* buildModeBox();
     QWidget* buildTelemetryBox();
     QWidget* buildCodesPage();
     QWidget* buildAdcPage();
     QWidget* buildBeamPage();
-    QWidget* buildModulesPage();
     QWidget* buildRawPage();
 
     void onConnectClicked();
@@ -73,17 +65,12 @@ private:
     void send(std::string_view msgType, const nlohmann::json& payload = nlohmann::json::object());
     void writeCodes();
     void applyAdc();
-    void writeModule();
-    void requestModuleStatus();
-    void rebuildModuleForm();
-    void showModuleValues(const afar::ps::Rs485Status& st);
     void showCodes(const std::vector<afar::ps::ChannelCodes>& codes);
     void setMode(afar::ps::Mode mode, const QString& state);
     void refreshEnabled();
     void log(const QString& text);
 
     PsLink* m_link = nullptr;
-    PsSimulator* m_sim = nullptr;
     bool m_seriesActive = false;
     bool m_reconnectAfterSeries = false;
     bool m_modeKnown = false;
@@ -92,7 +79,6 @@ private:
     QLineEdit* m_host = nullptr;
     QSpinBox* m_port = nullptr;
     QSpinBox* m_tlmPort = nullptr;
-    QCheckBox* m_useSim = nullptr;
     QPushButton* m_connect = nullptr;
     QLabel* m_linkState = nullptr;
 
@@ -121,13 +107,10 @@ private:
     QSpinBox* m_beamId = nullptr;
     QLabel* m_beamState = nullptr;
 
-    QComboBox* m_module = nullptr;
-    QTableWidget* m_moduleTable = nullptr;
-    std::map<std::string, ModuleRow> m_moduleRows;
-    QLabel* m_moduleStatus = nullptr;
 
     QLineEdit* m_rawHex = nullptr;
 
+    QTableWidget* m_exchange = nullptr;
     QPlainTextEdit* m_log = nullptr;
     QCheckBox* m_logTelemetry = nullptr;
 

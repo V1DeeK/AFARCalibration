@@ -207,16 +207,6 @@ target_include_directories(afar_dut_ps PUBLIC
 target_link_libraries(afar_dut_ps PUBLIC afar_interfaces afar_ps_protocol Qt6::Network)
 afar_enable_warnings(afar_dut_ps)
 
-# Имитатор PS для тестов и работы без стенда (ТЗ т. 12.1).
-add_library(afar_ps_sim STATIC
-    sim/PsSimulator.cpp
-    sim/PsSimulator.h
-)
-set_target_properties(afar_ps_sim PROPERTIES AUTOMOC ON)
-target_include_directories(afar_ps_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sim)
-target_link_libraries(afar_ps_sim PUBLIC afar_ps_protocol Qt6::Network)
-afar_enable_warnings(afar_ps_sim)
-
 add_library(afar_dut STATIC
     dut/StubDutController.cpp
 )
@@ -289,7 +279,6 @@ target_link_libraries(AfarRxCalibrationStudio PRIVATE
     afar_cal
     afar_qc
     afar_ps
-    afar_ps_sim
     afar_dut_ps
 )
 afar_enable_warnings(AfarRxCalibrationStudio)
