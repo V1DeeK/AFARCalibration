@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <string>
+#include <version>
 
 #if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L \
     && !defined(AFAR_NUMBERTEXT_FORCE_STRTOD)
