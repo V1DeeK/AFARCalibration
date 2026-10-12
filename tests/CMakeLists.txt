@@ -211,3 +211,8 @@ set_target_properties(test_ps_tab PROPERTIES AUTOMOC ON)
 afar_enable_warnings(test_ps_tab)
 add_test(NAME ps_tab COMMAND test_ps_tab)
 set_tests_properties(ps_tab PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(test_ps_dut_controller test_ps_dut_controller.cpp)
+target_link_libraries(test_ps_dut_controller PRIVATE Catch2::Catch2WithMain afar_dut_ps afar_ps_sim)
+afar_enable_warnings(test_ps_dut_controller)
+add_test(NAME ps_dut_controller COMMAND test_ps_dut_controller)

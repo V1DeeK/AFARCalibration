@@ -191,6 +191,18 @@ target_include_directories(afar_ps PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ps)
 target_link_libraries(afar_ps PUBLIC afar_ps_protocol Qt6::Network)
 afar_enable_warnings(afar_ps)
 
+# IDutController через PS изделия: блокирующий драйвер для рабочего потока.
+add_library(afar_dut_ps STATIC
+    dut/PsDutController.cpp
+    dut/PsDutController.h
+)
+target_include_directories(afar_dut_ps PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/dut
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(afar_dut_ps PUBLIC afar_interfaces afar_ps_protocol Qt6::Network)
+afar_enable_warnings(afar_dut_ps)
+
 # Имитатор PS для тестов и работы без стенда (ТЗ т. 12.1).
 add_library(afar_ps_sim STATIC
     sim/PsSimulator.cpp
