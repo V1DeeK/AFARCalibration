@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "PsModulesPage.h"
 #include "PsPacketPage.h"
 #include "PsServiceCheckPage.h"
 #include "PsServiceCheckRunner.h"
@@ -262,4 +263,76 @@ TEST_CASE("Вкладка PS: конструктор пакетов и набо�
     CHECK_FALSE(tab.loadCodes(broken, &error));
     CHECK(error.startsWith(QStringLiteral("Набор кодов отклонён")));
     CHECK(static_cast<QSpinBox*>(codes->cellWidget(2, 1))->value() == 21);
+}
+
+TEST_CASE("Вкладка PS: модули — гетеродины, смеситель, видеоприёмник по JSON", "[ps][ui][modules]")
+{
+    app();
+    TestPsServer server;
+    PsTab tab;
+    tab.show();
+    connectTab(tab, server);
+
+    auto* lo1Write = child<QPushButton>(tab, "psLo1Write");
+    CHECK_FALSE(lo1Write->isEnabled());  // только в SERVICE
+    child<QPushButton>(tab, "psToService")->click();
+    REQUIRE(waitFor([&] { return lo1Write->isEnabled(); }));
+    auto* page = tab.modulesPage();
+
+    // Ничего не отмечено — не отправляем.
+    CHECK_FALSE(page->write(PsModulesPage::Lo1));
+
+    // Правка значения сама отмечает «Передать»; уходят только отмеченные поля.
+    child<QDoubleSpinBox>(tab, "psLo1_freq")->setValue(5500.0);
+    child<QDoubleSpinBox>(tab, "psLo1_att1")->setValue(0.5);
+    CHECK(child<QCheckBox>(tab, "psLo1_freq_send")->isChecked());
+    CHECK_FALSE(child<QCheckBox>(tab, "psLo1_att2_send")->isChecked());
+    lo1Write->click();
+    auto* lo1State = child<QLabel>(tab, "psLo1State");
+    REQUIRE(waitFor([&] { return lo1State->text().startsWith(QStringLiteral("Ответ: OK")); }));
+    CHECK(server.moduleState(1)["freq"] == 5'500'000'000LL);
+    CHECK(server.moduleState(1)["att1"] == 0.5);
+    CHECK(server.moduleState(1)["att2"] == 31.5);   // не передавали — не изменилось
+    CHECK(server.moduleState(2)["freq"] == 0);      // второй гетеродин не тронут
+
+    auto* ex = tab.exchangeTable();
+    bool sentPartial = false;
+    for (int row = 0; row < ex->rowCount(); ++row) {
+        if (ex->item(row, 3)->text() == QStringLiteral("set_lo") &&
+            ex->item(row, 2)->text().contains(QStringLiteral("ушло"))) {
+            const QString j = ex->item(row, 6)->text();
+            sentPartial = j.contains(QStringLiteral("\"freq\":5500000000")) &&
+                          !j.contains(QStringLiteral("att2"));
+        }
+    }
+    CHECK(sentPartial);
+
+    child<QPushButton>(tab, "psLo2Read")->click();
+    auto* lo2State = child<QLabel>(tab, "psLo2State");
+    REQUIRE(waitFor([&] { return lo2State->text().contains(QStringLiteral("°C")); }));
+    CHECK(lo2State->text().contains(QStringLiteral("захвата частоты нет")));
+    CHECK_FALSE(child<QCheckBox>(tab, "psLo2_freq_send")->isChecked());  // чтение не отмечает
+
+    child<QCheckBox>(tab, "psMixer3_send")->setChecked(true);
+    child<QDoubleSpinBox>(tab, "psMixer3_if_att")->setValue(4.5);
+    child<QCheckBox>(tab, "psMixer3_en")->setChecked(true);
+    child<QPushButton>(tab, "psMixerWrite")->click();
+    REQUIRE(waitFor([&] { return server.mixerState()["ch"][2]["if_att"] == 4.5; }));
+    CHECK(server.mixerState()["ch"][2]["en"] == 1);
+    CHECK(server.mixerState()["ch"][0]["en"] == 0);
+    child<QPushButton>(tab, "psMixerRead")->click();
+    REQUIRE(waitFor([&] { return child<QLabel>(tab, "psMixerState")->text().contains(QStringLiteral("°C")); }));
+
+    child<QCheckBox>(tab, "psVideo_en_vid")->setChecked(true);
+    child<QComboBox>(tab, "psVideo_pwr_a")->setCurrentIndex(3);
+    child<QPushButton>(tab, "psVideoWrite")->click();
+    REQUIRE(waitFor([&] { return server.moduleState(4)["en_vid"] == 1; }));
+    CHECK(server.moduleState(4)["pwr_a"] == 5);
+
+    // Модуль не ответил по RS-485 — PS отвечает HW_NOT_READY, это видно на странице.
+    server.setModulesSilent(true);
+    child<QPushButton>(tab, "psVideoRead")->click();
+    REQUIRE(waitFor([&] {
+        return child<QLabel>(tab, "psVideoState")->text().contains(QStringLiteral("HW_NOT_READY"));
+    }));
 }

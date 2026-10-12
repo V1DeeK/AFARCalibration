@@ -154,6 +154,84 @@ TEST_CASE("PS: HEX-строка rs485_send", "[ps][protocol]")
     CHECK_FALSE(ps::hexBytesValid("0G"));
 }
 
+TEST_CASE("PS: команды модулей по v3 §2.5.2", "[ps][protocol][modules]")
+{
+    using namespace afar::ps;
+    nlohmann::json p;
+    std::string error;
+
+    // Частичная запись: уходят только заданные поля, частота — целым.
+    REQUIRE(loSetPayload(kLoMixer, {{"freq", 5'500'000'000.0}, {"att1", 0.5}, {"pwr_b", 5}}, p, &error));
+    CHECK(p == nlohmann::json::parse(R"({"addr":1,"freq":5500000000,"att1":0.5,"pwr_b":5})"));
+    CHECK(p["freq"].is_number_integer());
+    CHECK(loGetPayload(kLoCalibration) == nlohmann::json{{"addr", 2}});
+
+    CHECK_FALSE(loSetPayload(3, {{"en_rf", 1}}, p, &error));
+    CHECK_FALSE(loSetPayload(kLoMixer, {}, p, &error));
+    CHECK_FALSE(loSetPayload(kLoMixer, {{"att1", 0.3}}, p, &error));
+    CHECK_THAT(error, Catch::Matchers::ContainsSubstring("шаг 0,5"));
+    CHECK_FALSE(loSetPayload(kLoMixer, {{"att2", 32.0}}, p, &error));
+    CHECK_FALSE(loSetPayload(kLoMixer, {{"freq", 7'000'000'001.0}}, p, &error));
+    CHECK(loSetPayload(kLoMixer, {{"freq", 7'000'000'000.0}}, p, &error));
+    CHECK_FALSE(loSetPayload(kLoMixer, {{"pwr_a", 3}}, p, &error));
+    CHECK_FALSE(loSetPayload(kLoMixer, {{"en_b", 2}}, p, &error));
+    // У гетеродина нет полей видеоприёмника.
+    CHECK_FALSE(loSetPayload(kLoMixer, {{"en_vid", 1}}, p, &error));
+
+    REQUIRE(videoSetPayload({{"en_vid", 1}, {"att_mode", 1}, {"freq", 5'800'000'000.0}, {"att1", 6.0}}, p));
+    CHECK(p == nlohmann::json::parse(R"({"en_vid":1,"att_mode":1,"freq":5800000000,"att1":6.0})"));
+    CHECK_FALSE(p.contains("addr"));
+
+    REQUIRE(mixerSetPayload({{2, {{"en", 0}}}, {1, {{"en", 1}, {"rp", 0}, {"if_att", 2.5}, {"att", 10.0}}}}, p));
+    CHECK(p == nlohmann::json::parse(
+                   R"({"ch":[{"n":1,"en":1,"rp":0,"if_att":2.5,"att":10.0},{"n":2,"en":0}]})"));
+    CHECK_FALSE(mixerSetPayload({}, p, &error));
+    CHECK_FALSE(mixerSetPayload({{5, {{"en", 1}}}}, p, &error));
+    CHECK_FALSE(mixerSetPayload({{1, {{"en", 1}}}, {1, {{"rp", 1}}}}, p, &error));
+    CHECK_FALSE(mixerSetPayload({{1, {{"if_att", 16.0}}}}, p, &error));
+    CHECK_FALSE(mixerSetPayload({{1, {}}}, p, &error));
+}
+
+TEST_CASE("PS: ответы модулей — примеры из v3", "[ps][protocol][modules]")
+{
+    using namespace afar::ps;
+    ModuleState lo;
+    REQUIRE(ModuleState::fromJson(nlohmann::json::parse(R"({"status":"OK","addr":1,"pwr_b":5,"pwr_a":5,
+        "en_b":1,"en_a":1,"en_rf":1,"en_syn":1,"ref":0,"freq":5500000000,"att1":0.5,"att2":31.5,
+        "temp":41.5,"lock":1})"),
+                                  loFields(), lo));
+    CHECK(lo.addr == 1);
+    CHECK(lo.values.size() == loFields().size());
+    CHECK(lo.values["freq"] == 5'500'000'000.0);
+    CHECK(lo.values["att2"] == 31.5);
+    REQUIRE(lo.temp);
+    CHECK(*lo.temp == 41.5);
+    REQUIRE(lo.lock);
+    CHECK(*lo.lock == 1);
+
+    std::string error;
+    CHECK_FALSE(ModuleState::fromJson(nlohmann::json::parse(R"({"addr":1,"att1":0.3})"), loFields(), lo, &error));
+
+    ModuleState video;
+    REQUIRE(ModuleState::fromJson(nlohmann::json::parse(R"({"status":"OK","en_vid":1,"att_mode":1,
+        "freq":5800000000,"att1":6.0})"),
+                                  videoFields(), video));
+    CHECK(video.values.size() == 4);
+    CHECK_FALSE(video.temp);
+
+    MixerState mix;
+    REQUIRE(MixerState::fromJson(nlohmann::json::parse(R"({"status":"OK","ch":[
+        {"n":2,"en":0,"rp":0,"if_att":0.0,"att":0.0},{"n":1,"en":1,"rp":0,"if_att":2.5,"att":10.0}],
+        "temp":39.0})"),
+                                 mix));
+    REQUIRE(mix.ch.size() == 2);
+    CHECK(mix.ch[0].n == 1);
+    CHECK(mix.ch[0].values["if_att"] == 2.5);
+    REQUIRE(mix.temp);
+    CHECK_FALSE(MixerState::fromJson(nlohmann::json::parse(R"({"ch":[{"n":5,"en":1}]})"), mix));
+    CHECK_FALSE(MixerState::fromJson(nlohmann::json::parse(R"({"ch":[]})"), mix));
+}
+
 TEST_CASE("PS: телеметрия по предложению контракта", "[ps][telemetry]")
 {
     const std::string dg =

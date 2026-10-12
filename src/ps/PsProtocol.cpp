@@ -468,6 +468,274 @@ bool hexBytesValid(std::string_view hex) noexcept
     });
 }
 
+// ------------------------------------------------- внутренние модули (§4.5)
+
+namespace {
+
+bool isHalfStep(double v) noexcept
+{
+    const double twice = v * 2.0;
+    return std::fabs(twice - std::round(twice)) < 1e-9;
+}
+
+const ModuleField* findField(const std::vector<ModuleField>& fields, std::string_view key)
+{
+    const auto it = std::find_if(fields.begin(), fields.end(),
+                                 [key](const ModuleField& f) { return f.key == key; });
+    return it == fields.end() ? nullptr : &*it;
+}
+
+/// Поля из values в p с проверкой по таблице полей модуля.
+bool putValues(const std::vector<ModuleField>& fields, const ModuleValues& values, json& p,
+               const std::string& where, std::string* error)
+{
+    if (values.empty()) {
+        setError(error, where + ": не задано ни одного поля");
+        return false;
+    }
+    for (const auto& [key, value] : values) {
+        const ModuleField* f = findField(fields, key);
+        if (!f) {
+            setError(error, where + ": нет поля " + key);
+            return false;
+        }
+        if (!moduleValueValid(f->kind, value)) {
+            setError(error, where + ": " + key + " — допустимо " + moduleRangeText(f->kind));
+            return false;
+        }
+        p[key] = moduleFieldValue(f->kind, value);
+    }
+    return true;
+}
+
+/// Известные поля из ответа; значение вне допустимых — ошибка разбора.
+bool readValues(const json& o, const std::vector<ModuleField>& fields, ModuleValues& out,
+                std::string* error)
+{
+    for (const auto& f : fields) {
+        const auto it = o.find(f.key);
+        if (it == o.end()) {
+            continue;
+        }
+        double v = 0.0;
+        if (!readNumber(o, f.key, v) || !moduleValueValid(f.kind, v)) {
+            setError(error, "недопустимое значение " + std::string(f.key));
+            return false;
+        }
+        out[std::string(f.key)] = v;
+    }
+    return true;
+}
+
+}  // namespace
+
+const std::vector<ModuleField>& loFields()
+{
+    using K = ModuleFieldKind;
+    static const std::vector<ModuleField> lo = {
+        {"pwr_b", K::PowerDbm, "Мощность RF_OUT_B, дБм"},
+        {"pwr_a", K::PowerDbm, "Мощность RF_OUT_A, дБм"},
+        {"en_b", K::Flag, "Выход RF_OUT_B"},
+        {"en_a", K::Flag, "Выход RF_OUT_A"},
+        {"en_rf", K::Flag, "Все РЧ-выходы"},
+        {"en_syn", K::Flag, "Синтезатор ADF4355"},
+        {"ref", K::Flag, "Внешняя опорная частота"},
+        {"freq", K::FrequencyHz, "Частота синтезатора, Гц"},
+        {"att1", K::Att31, "Аттенюация канала 1, дБ"},
+        {"att2", K::Att31, "Аттенюация канала 2, дБ"},
+    };
+    return lo;
+}
+
+const std::vector<ModuleField>& videoFields()
+{
+    static const std::vector<ModuleField> video = [] {
+        auto v = loFields();
+        v.push_back({"att_mode", ModuleFieldKind::Flag, "Ручной режим аттенюации"});
+        v.push_back({"en_vid", ModuleFieldKind::Flag, "Видеоприёмник"});
+        return v;
+    }();
+    return video;
+}
+
+const std::vector<ModuleField>& mixerChannelFields()
+{
+    using K = ModuleFieldKind;
+    static const std::vector<ModuleField> mixer = {
+        {"en", K::Flag, "Канал включён"},
+        {"rp", K::Flag, "Пониженная мощность"},
+        {"if_att", K::Att15, "Аттенюатор ПЧ, дБ"},
+        {"att", K::Att31, "Аттенюация входа, дБ"},
+    };
+    return mixer;
+}
+
+bool moduleValueValid(ModuleFieldKind kind, double v) noexcept
+{
+    if (!std::isfinite(v)) {
+        return false;
+    }
+    switch (kind) {
+    case ModuleFieldKind::Flag: return v == 0.0 || v == 1.0;
+    case ModuleFieldKind::PowerDbm: return v == -4.0 || v == -1.0 || v == 2.0 || v == 5.0;
+    case ModuleFieldKind::FrequencyHz: return v >= 0.0 && v <= 7.0e9 && std::trunc(v) == v;
+    case ModuleFieldKind::Att31: return v >= 0.0 && v <= 31.5 && isHalfStep(v);
+    case ModuleFieldKind::Att15: return v >= 0.0 && v <= 15.5 && isHalfStep(v);
+    }
+    return false;
+}
+
+std::string moduleRangeText(ModuleFieldKind kind)
+{
+    switch (kind) {
+    case ModuleFieldKind::Flag: return "0 или 1";
+    case ModuleFieldKind::PowerDbm: return "−4, −1, 2, 5";
+    case ModuleFieldKind::FrequencyHz: return "0…7000000000, целое";
+    case ModuleFieldKind::Att31: return "0…31,5 шаг 0,5";
+    case ModuleFieldKind::Att15: return "0…15,5 шаг 0,5";
+    }
+    return {};
+}
+
+nlohmann::json moduleFieldValue(ModuleFieldKind kind, double v)
+{
+    switch (kind) {
+    case ModuleFieldKind::Flag:
+    case ModuleFieldKind::PowerDbm:
+    case ModuleFieldKind::FrequencyHz: return static_cast<std::int64_t>(std::llround(v));
+    case ModuleFieldKind::Att31:
+    case ModuleFieldKind::Att15: return v;
+    }
+    return v;
+}
+
+std::string loNameRu(int addr)
+{
+    switch (addr) {
+    case kLoMixer: return "Гетеродин смесителя";
+    case kLoCalibration: return "Гетеродин калибровки";
+    default: return "Гетеродин " + std::to_string(addr);
+    }
+}
+
+bool loSetPayload(int addr, const ModuleValues& values, nlohmann::json& payload, std::string* error)
+{
+    if (addr != kLoMixer && addr != kLoCalibration) {
+        setError(error, "адрес гетеродина — 1 или 2");
+        return false;
+    }
+    json p{{"addr", addr}};
+    if (!putValues(loFields(), values, p, loNameRu(addr), error)) {
+        return false;
+    }
+    payload = std::move(p);
+    return true;
+}
+
+nlohmann::json loGetPayload(int addr)
+{
+    return json{{"addr", addr}};
+}
+
+bool videoSetPayload(const ModuleValues& values, nlohmann::json& payload, std::string* error)
+{
+    json p = json::object();
+    if (!putValues(videoFields(), values, p, "Видеоприёмник", error)) {
+        return false;
+    }
+    payload = std::move(p);
+    return true;
+}
+
+bool mixerSetPayload(const std::vector<MixerChannel>& channels, nlohmann::json& payload,
+                     std::string* error)
+{
+    if (channels.empty() || channels.size() > static_cast<std::size_t>(kMixerChannels)) {
+        setError(error, "смеситель: от 1 до 4 каналов");
+        return false;
+    }
+    std::vector<MixerChannel> sorted = channels;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const MixerChannel& a, const MixerChannel& b) { return a.n < b.n; });
+    json ch = json::array();
+    int prev = 0;
+    for (const auto& c : sorted) {
+        if (c.n < 1 || c.n > kMixerChannels || c.n == prev) {
+            setError(error, "смеситель: номер канала 1…4 без повторов");
+            return false;
+        }
+        prev = c.n;
+        json e{{"n", c.n}};
+        if (!putValues(mixerChannelFields(), c.values, e, "смеситель, канал " + std::to_string(c.n),
+                       error)) {
+            return false;
+        }
+        ch.push_back(std::move(e));
+    }
+    payload = json{{"ch", std::move(ch)}};
+    return true;
+}
+
+bool ModuleState::fromJson(const nlohmann::json& o, const std::vector<ModuleField>& fields,
+                           ModuleState& out, std::string* error)
+{
+    if (!o.is_object()) {
+        setError(error, "payload не объект");
+        return false;
+    }
+    ModuleState s;
+    std::int64_t addr = 0;
+    if (readInt(o, "addr", addr)) {
+        s.addr = static_cast<int>(std::clamp<std::int64_t>(addr, 0, 255));
+    }
+    if (!readValues(o, fields, s.values, error)) {
+        return false;
+    }
+    double temp = 0.0;
+    if (readNumber(o, "temp", temp)) {
+        s.temp = temp;
+    }
+    std::int64_t lock = 0;
+    if (readInt(o, "lock", lock)) {
+        s.lock = static_cast<int>(lock != 0);
+    }
+    out = std::move(s);
+    return true;
+}
+
+bool MixerState::fromJson(const nlohmann::json& o, MixerState& out, std::string* error)
+{
+    const auto it = o.find("ch");
+    if (it == o.end() || !it->is_array() || it->empty() ||
+        it->size() > static_cast<std::size_t>(kMixerChannels)) {
+        setError(error, "ch — массив из 1…4 каналов смесителя");
+        return false;
+    }
+    MixerState s;
+    std::set<int> seen;
+    for (const auto& e : *it) {
+        std::int64_t n = 0;
+        if (!e.is_object() || !readInt(e, "n", n) || n < 1 || n > kMixerChannels ||
+            !seen.insert(static_cast<int>(n)).second) {
+            setError(error, "канал смесителя: n 1…4 без повторов");
+            return false;
+        }
+        MixerChannel c;
+        c.n = static_cast<int>(n);
+        if (!readValues(e, mixerChannelFields(), c.values, error)) {
+            return false;
+        }
+        s.ch.push_back(std::move(c));
+    }
+    std::sort(s.ch.begin(), s.ch.end(), [](const MixerChannel& a, const MixerChannel& b) { return a.n < b.n; });
+    double temp = 0.0;
+    if (readNumber(o, "temp", temp)) {
+        s.temp = temp;
+    }
+    out = std::move(s);
+    return true;
+}
+
 // ------------------------------------------------------------- телеметрия
 
 bool Telemetry::fromJson(const nlohmann::json& o, Telemetry& out, std::string* error)

@@ -252,6 +252,8 @@ add_executable(AfarRxCalibrationStudio WIN32 MACOSX_BUNDLE
     ui/MeasureWorker.h
     ui/PsTab.cpp
     ui/PsTab.h
+    ui/PsModulesPage.cpp
+    ui/PsModulesPage.h
     ui/PsPacketPage.cpp
     ui/PsPacketPage.h
     ui/PsServiceCheckPage.cpp

@@ -215,6 +215,8 @@ add_executable(test_ps_tab
     test_ps_tab.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/PsTab.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/PsTab.h
+    ${PROJECT_SOURCE_DIR}/src/ui/PsModulesPage.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsModulesPage.h
     ${PROJECT_SOURCE_DIR}/src/ui/PsPacketPage.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/PsPacketPage.h
     ${PROJECT_SOURCE_DIR}/src/ui/PsServiceCheckPage.cpp

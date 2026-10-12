@@ -1,5 +1,6 @@
 #include "PsTab.h"
 
+#include "PsModulesPage.h"
 #include "PsPacketPage.h"
 #include "PsServiceCheckPage.h"
 
@@ -64,6 +65,8 @@ PsTab::PsTab(QWidget* parent)
     m_pages->addTab(buildAdcPage(), QStringLiteral("АЦП"));
     m_pages->addTab(buildBeamPage(), QStringLiteral("Луч"));
     m_pages->addTab(buildRawPage(), QStringLiteral("RS-485 HEX"));
+    m_modulesPage = new PsModulesPage(m_link, this);
+    m_pages->addTab(m_modulesPage, QStringLiteral("Модули"));
     m_packetPage = new PsPacketPage(m_link, this);
     m_pages->addTab(m_packetPage, QStringLiteral("Пакет"));
     m_checkPage = new PsServiceCheckPage(m_link, this);
@@ -747,6 +750,7 @@ void PsTab::refreshEnabled()
     const bool service = ready && m_modeKnown && m_mode == ps::Mode::Service;
     m_checkPage->setAllowed(m_link->isReady() && !m_seriesActive);
     m_packetPage->setAllowed(ready);
+    m_modulesPage->setAllowed(service);
     m_toService->setEnabled(ready && (!m_modeKnown || m_mode == ps::Mode::Idle));
     m_toIdle->setEnabled(ready && m_modeKnown && m_mode != ps::Mode::Idle);
     m_getState->setEnabled(ready);

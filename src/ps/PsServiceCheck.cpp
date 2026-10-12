@@ -1,5 +1,6 @@
 #include "PsServiceCheck.h"
 
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 
@@ -122,6 +123,8 @@ std::vector<CheckStep> serviceCheckSteps()
     b.add("коды вне SERVICE — отказ", msg::SetPhaseAtten, Status::NotSupported, "4, 6",
           codesPayload(safe));
     b.add("АЦП вне SERVICE — отказ", msg::GetAdc, Status::NotSupported, "4, 6");
+    b.add("гетеродин вне SERVICE — отказ", msg::GetLo, Status::NotSupported, "4.5, 6",
+          loGetPayload(kLoMixer));
 
     b.phase = "Вход в SERVICE";
     b.add("неизвестный режим — отказ", msg::SetMode, Status::InvalidArgument, "3",
@@ -173,10 +176,73 @@ std::vector<CheckStep> serviceCheckSteps()
     b.add("нечётная HEX-строка — отказ", msg::Rs485Send, Status::InvalidArgument, "4.4",
           json{{"data", "ABC"}});
 
+    b.phase = "Модули";
+    const json lo{{"pwr_b", 5}, {"en_rf", 1}, {"en_syn", 1}, {"freq", 5'500'000'000LL},
+                  {"att1", 0.5}, {"att2", 31.5}};
+    const std::vector<std::string> tempLock{"temp", "lock"};
+    b.add("гетеродин смесителя: чтение", msg::GetLo, Status::Ok, "4.5", loGetPayload(kLoMixer))
+        .expectKeys = tempLock;
+    {
+        json p = lo;
+        p["addr"] = kLoMixer;
+        b.add("гетеродин смесителя: запись части полей", msg::SetLo, Status::Ok, "4.5", p)
+            .expectFields = p;
+    }
+    {
+        auto& s = b.add("гетеродин смесителя прочитан тем же", msg::GetLo, Status::Ok, "4.5",
+                        loGetPayload(kLoMixer));
+        s.expectFields = lo;
+        s.expectKeys = tempLock;
+    }
+    b.add("att1 не кратно 0,5 — отказ", msg::SetLo, Status::InvalidArgument, "4.5",
+          json{{"addr", kLoMixer}, {"att1", 0.3}});
+    b.add("freq выше 7 ГГц — отказ", msg::SetLo, Status::InvalidArgument, "4.5",
+          json{{"addr", kLoMixer}, {"freq", 7'500'000'000LL}});
+    b.add("гетеродин не изменился после отказа", msg::GetLo, Status::Ok, "4.5",
+          loGetPayload(kLoMixer))
+        .expectFields = json{{"freq", 5'500'000'000LL}, {"att1", 0.5}};
+    b.add("адрес гетеродина 3 — отказ", msg::SetLo, Status::InvalidArgument, "4.5",
+          json{{"addr", 3}, {"en_rf", 1}});
+    {
+        auto& s = b.add("гетеродин калибровки: чтение", msg::GetLo, Status::Ok, "4.5",
+                        loGetPayload(kLoCalibration));
+        s.expectFields = json{{"addr", kLoCalibration}};
+        s.expectKeys = tempLock;
+    }
+    {
+        const std::vector<MixerChannel> mix{
+            {1, {{"en", 1}, {"rp", 0}, {"if_att", 2.5}, {"att", 10.0}}},
+            {2, {{"en", 0}}},
+        };
+        json p;
+        mixerSetPayload(mix, p);
+        b.add("смеситель: запись двух каналов", msg::SetMixer, Status::Ok, "4.5", p).expectMixer =
+            mix;
+        auto& s = b.add("смеситель прочитан: 4 канала", msg::GetMixer, Status::Ok, "4.5");
+        s.expectMixer = mix;
+        s.expectMixerAll = true;
+        s.expectKeys = {"temp"};
+    }
+    b.add("if_att 16 дБ — отказ", msg::SetMixer, Status::InvalidArgument, "4.5",
+          json{{"ch", json::array({json{{"n", 1}, {"if_att", 16.0}}})}});
+    b.add("канал смесителя 5 — отказ", msg::SetMixer, Status::InvalidArgument, "4.5",
+          json{{"ch", json::array({json{{"n", 5}, {"en", 1}}})}});
+    {
+        const json video{{"en_vid", 1}, {"att_mode", 1}, {"freq", 5'800'000'000LL}, {"att1", 6.0}};
+        b.add("видеоприёмник: запись", msg::SetVideo, Status::Ok, "4.5", video).expectFields =
+            video;
+        auto& s = b.add("видеоприёмник прочитан тем же", msg::GetVideo, Status::Ok, "4.5");
+        s.expectFields = video;
+        s.expectKeys = tempLock;
+    }
+    b.add("мощность 3 дБм — отказ", msg::SetVideo, Status::InvalidArgument, "4.5",
+          json{{"pwr_a", 3}});
+
     b.phase = "Завершение";
     b.add("возврат в ожидание", msg::SetMode, Status::Ok, "3", json{{"mode", "IDLE"}});
     b.state("IDLE", "READY");
     b.add("сервисные команды снова отклоняются", msg::GetBeam, Status::NotSupported, "6");
+    b.add("команды модулей снова отклоняются", msg::GetVideo, Status::NotSupported, "6");
     b.telemetry(Mode::Idle);
     {
         CheckStep s;
@@ -204,6 +270,36 @@ CheckResult evaluate(const CheckStep& step, Status status, const json& payload)
         }
         if (!sameValue(want, *it)) {
             return {CheckVerdict::Fail, key + " = " + show(*it) + ", ожидали " + show(want)};
+        }
+    }
+    for (const auto& key : step.expectKeys) {
+        if (!payload.contains(key)) {
+            return {CheckVerdict::Fail, "в ответе нет поля " + key};
+        }
+    }
+    if (!step.expectMixer.empty() || step.expectMixerAll) {
+        MixerState got;
+        std::string error;
+        if (!MixerState::fromJson(payload, got, &error)) {
+            return {CheckVerdict::Fail, "каналы смесителя не разобраны: " + error};
+        }
+        if (step.expectMixerAll && got.ch.size() != static_cast<std::size_t>(kMixerChannels)) {
+            return {CheckVerdict::Fail, "каналов смесителя " + std::to_string(got.ch.size()) +
+                                            ", ожидали 4"};
+        }
+        for (const auto& want : step.expectMixer) {
+            const auto it = std::find_if(got.ch.begin(), got.ch.end(),
+                                         [&want](const MixerChannel& c) { return c.n == want.n; });
+            if (it == got.ch.end()) {
+                return {CheckVerdict::Fail, "в ответе нет канала смесителя " + std::to_string(want.n)};
+            }
+            for (const auto& [key, value] : want.values) {
+                const auto v = it->values.find(key);
+                if (v == it->values.end() || std::fabs(v->second - value) > 1e-9) {
+                    return {CheckVerdict::Fail, "смеситель, канал " + std::to_string(want.n) + ": " +
+                                                    key + " не совпал"};
+                }
+            }
         }
     }
     if (!step.expectCodes.empty()) {
@@ -257,6 +353,12 @@ std::string expectedText(const CheckStep& step)
     std::string s(toString(step.expectStatus));
     for (const auto& [key, want] : step.expectFields.items()) {
         s += ", " + key + "=" + show(want);
+    }
+    for (const auto& key : step.expectKeys) {
+        s += ", есть " + key;
+    }
+    if (!step.expectMixer.empty()) {
+        s += ", каналы смесителя как заданы";
     }
     if (!step.expectCodes.empty()) {
         s += ", коды 16 каналов как заданы";

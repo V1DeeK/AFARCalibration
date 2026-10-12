@@ -46,6 +46,22 @@ json templateFor(std::string_view type)
     if (type == ps::msg::Rs485Send) {
         return json{{"data", "01A3FF"}};
     }
+    // Модули (§4.5): образцы из v3 §2.5.2.
+    if (type == ps::msg::SetLo) {
+        return json{{"addr", ps::kLoMixer}, {"pwr_b", 5},  {"pwr_a", 5},  {"en_b", 1},
+                    {"en_a", 1},           {"en_rf", 1},  {"en_syn", 1}, {"ref", 0},
+                    {"freq", 5'500'000'000LL}, {"att1", 0.5}, {"att2", 31.5}};
+    }
+    if (type == ps::msg::GetLo) {
+        return ps::loGetPayload(ps::kLoMixer);
+    }
+    if (type == ps::msg::SetMixer) {
+        return json{{"ch", json::array({json{{"n", 1}, {"en", 1}, {"rp", 0}, {"if_att", 2.5}, {"att", 10.0}},
+                                        json{{"n", 2}, {"en", 0}}})}};
+    }
+    if (type == ps::msg::SetVideo) {
+        return json{{"en_vid", 1}, {"att_mode", 1}, {"freq", 5'800'000'000LL}, {"att1", 6.0}};
+    }
     return json::object();
 }
 
@@ -61,7 +77,8 @@ PsPacketPage::PsPacketPage(PsLink* link, QWidget* parent)
     m_type->setObjectName(QStringLiteral("psPacketType"));
     for (std::string_view t : {ps::msg::GetState, ps::msg::SetMode, ps::msg::SetPhaseAtten, ps::msg::GetPhaseAtten,
                                ps::msg::SetAdc, ps::msg::GetAdc, ps::msg::SetBeamAzimuth, ps::msg::SetBeam,
-                               ps::msg::GetBeam, ps::msg::Rs485Send}) {
+                               ps::msg::GetBeam, ps::msg::Rs485Send, ps::msg::SetLo, ps::msg::GetLo,
+                               ps::msg::SetMixer, ps::msg::GetMixer, ps::msg::SetVideo, ps::msg::GetVideo}) {
         m_type->addItem(qs(t));
     }
     m_type->setEditable(true);  // можно ввести и msg_type, которого нет в контракте

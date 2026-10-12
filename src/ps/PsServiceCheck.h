@@ -34,6 +34,12 @@ struct CheckStep {
     nlohmann::json expectFields = nlohmann::json::object();
     /// Ответ должен вернуть ровно те коды 16 каналов, что в expectCodes.
     std::vector<ChannelCodes> expectCodes;
+    /// Поля, которые должны быть в ответе с любым значением (temp, lock).
+    std::vector<std::string> expectKeys;
+    /// Каналы смесителя в ответе: заданные поля должны совпасть.
+    std::vector<MixerChannel> expectMixer;
+    /// В ответе все 4 канала смесителя (get_mixer).
+    bool expectMixerAll = false;
     std::string section;   ///< раздел контракта
     bool proposal = false; ///< шаг проверяет [предложение] контракта
 };
@@ -45,7 +51,7 @@ struct CheckResult {
     std::string detail;    ///< почему не прошёл, по-русски
 };
 
-/// Шаги проверки: вход в SERVICE из IDLE, все сервисные команды v2 с обратным
+/// Шаги проверки: вход в SERVICE из IDLE, все сервисные команды v3 с обратным
 /// чтением, отказы на неверные аргументы и вне SERVICE, телеметрия по UDP,
 /// возврат в IDLE.
 /// Последняя запись кодов — безопасное состояние 63/0 (§7).

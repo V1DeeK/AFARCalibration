@@ -7,6 +7,7 @@
 
 #include <vector>
 
+class PsModulesPage;
 class PsPacketPage;
 class PsServiceCheckPage;
 class QCheckBox;
@@ -38,6 +39,7 @@ public:
     [[nodiscard]] QTableWidget* exchangeTable() const { return m_exchange; }
     [[nodiscard]] PsServiceCheckPage* checkPage() const { return m_checkPage; }
     [[nodiscard]] PsPacketPage* packetPage() const { return m_packetPage; }
+    [[nodiscard]] PsModulesPage* modulesPage() const { return m_modulesPage; }
 
     /// Набор кодов 16 каналов в файле — payload set_phase_atten ({"ch": […]}).
     bool saveCodes(const QString& path, QString* error = nullptr) const;
@@ -116,6 +118,7 @@ private:
 
     PsServiceCheckPage* m_checkPage = nullptr;
     PsPacketPage* m_packetPage = nullptr;
+    PsModulesPage* m_modulesPage = nullptr;
 
     std::vector<QWidget*> m_serviceControls;
 };

@@ -5,7 +5,10 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 
+#include <algorithm>
 #include <cmath>
+#include <initializer_list>
+#include <set>
 
 namespace ps = afar::ps;
 using nlohmann::json;
@@ -73,6 +76,21 @@ void TestPsServer::setTelemetryPeriodMs(int ms)
 
 void TestPsServer::resetService()
 {
+    const json lo{{"pwr_b", -4}, {"pwr_a", -4}, {"en_b", 0}, {"en_a", 0}, {"en_rf", 0},
+                  {"en_syn", 0}, {"ref", 0}, {"freq", 0}, {"att1", 31.5}, {"att2", 31.5},
+                  {"temp", 41.5}, {"lock", 0}};
+    m_video = lo;
+    m_lo1 = lo;
+    m_lo1["addr"] = ps::kLoMixer;
+    m_lo2 = lo;
+    m_lo2["addr"] = ps::kLoCalibration;
+    m_video["att_mode"] = 0;
+    m_video["en_vid"] = 0;
+    m_video["temp"] = 44.0;
+    m_mixer = json{{"ch", json::array()}, {"temp", 39.0}};
+    for (int n = 1; n <= ps::kMixerChannels; ++n) {
+        m_mixer["ch"].push_back(json{{"n", n}, {"en", 0}, {"rp", 0}, {"if_att", 0.0}, {"att", 31.5}});
+    }
     for (int i = 0; i < ps::kChannels; ++i) {
         m_codes[static_cast<std::size_t>(i)] = {i + 1, 0, 0};
     }
@@ -218,7 +236,9 @@ void TestPsServer::handle(const ps::Envelope& cmd)
     const bool serviceCommand =
         t == ps::msg::SetPhaseAtten || t == ps::msg::GetPhaseAtten || t == ps::msg::SetAdc ||
         t == ps::msg::GetAdc || t == ps::msg::SetBeamAzimuth || t == ps::msg::SetBeam ||
-        t == ps::msg::GetBeam || t == ps::msg::Rs485Send;
+        t == ps::msg::GetBeam || t == ps::msg::Rs485Send || t == ps::msg::SetLo ||
+        t == ps::msg::GetLo || t == ps::msg::SetMixer || t == ps::msg::GetMixer ||
+        t == ps::msg::SetVideo || t == ps::msg::GetVideo;
     if (!serviceCommand) {
         reply(cmd, ps::Status::NotSupported);
         return;
@@ -287,6 +307,122 @@ void TestPsServer::handle(const ps::Envelope& cmd)
             return;
         }
         reply(cmd, ps::Status::Ok, json{{"data", data->get<std::string>()}});
+    } else {
+        handleModule(cmd);
+    }
+}
+
+namespace {
+
+/// Поля из in по таблице fields в to. false — неизвестное поле, значение вне
+/// диапазона или ни одного поля; тогда to не меняется.
+bool applyFields(const json& in, const std::vector<ps::ModuleField>& fields, json& to,
+                 std::initializer_list<std::string_view> skip)
+{
+    json next = to;
+    int n = 0;
+    for (const auto& [key, value] : in.items()) {
+        if (std::find(skip.begin(), skip.end(), key) != skip.end()) {
+            continue;
+        }
+        const auto f = std::find_if(fields.begin(), fields.end(),
+                                    [&key](const ps::ModuleField& x) { return x.key == key; });
+        if (f == fields.end() || !value.is_number() ||
+            !ps::moduleValueValid(f->kind, value.get<double>())) {
+            return false;
+        }
+        next[key] = ps::moduleFieldValue(f->kind, value.get<double>());
+        ++n;
+    }
+    if (n == 0) {
+        return false;
+    }
+    to = std::move(next);
+    return true;
+}
+
+json withoutStatus(json j, std::initializer_list<std::string_view> drop)
+{
+    for (auto k : drop) {
+        j.erase(std::string(k));
+    }
+    return j;
+}
+
+}  // namespace
+
+const json& TestPsServer::moduleState(int addr) const
+{
+    return addr == ps::kLoMixer ? m_lo1 : addr == ps::kLoCalibration ? m_lo2 : m_video;
+}
+
+void TestPsServer::handleModule(const ps::Envelope& cmd)
+{
+    const auto& t = cmd.msg_type;
+    const json& in = cmd.payload;
+    if (t == ps::msg::SetLo || t == ps::msg::GetLo) {
+        const auto addr = in.find("addr");
+        if (addr == in.end() || !addr->is_number_integer() ||
+            (*addr != ps::kLoMixer && *addr != ps::kLoCalibration)) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        if (m_modulesSilent) {
+            reply(cmd, ps::Status::HwNotReady);
+            return;
+        }
+        json& lo = *addr == ps::kLoMixer ? m_lo1 : m_lo2;
+        if (t == ps::msg::GetLo) {
+            reply(cmd, ps::Status::Ok, lo);
+            return;
+        }
+        if (!applyFields(in, ps::loFields(), lo, {"addr"})) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        reply(cmd, ps::Status::Ok, withoutStatus(lo, {"temp", "lock"}));
+        return;
+    }
+    if (m_modulesSilent) {
+        reply(cmd, ps::Status::HwNotReady);
+        return;
+    }
+    if (t == ps::msg::GetVideo) {
+        reply(cmd, ps::Status::Ok, m_video);
+    } else if (t == ps::msg::SetVideo) {
+        if (!applyFields(in, ps::videoFields(), m_video, {})) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        reply(cmd, ps::Status::Ok, withoutStatus(m_video, {"temp", "lock"}));
+    } else if (t == ps::msg::GetMixer) {
+        reply(cmd, ps::Status::Ok, m_mixer);
+    } else if (t == ps::msg::SetMixer) {
+        const auto ch = in.find("ch");
+        if (ch == in.end() || !ch->is_array() || ch->empty() ||
+            ch->size() > static_cast<std::size_t>(ps::kMixerChannels)) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        json next = m_mixer;
+        json answer = json::array();
+        std::set<int> seen;
+        for (const auto& e : *ch) {
+            const auto n = e.find("n");
+            if (!e.is_object() || n == e.end() || !n->is_number_integer() || *n < 1 ||
+                *n > ps::kMixerChannels || !seen.insert(n->get<int>()).second) {
+                reply(cmd, ps::Status::InvalidArgument);
+                return;
+            }
+            json& slot = next["ch"][static_cast<std::size_t>(n->get<int>() - 1)];
+            if (!applyFields(e, ps::mixerChannelFields(), slot, {"n"})) {
+                reply(cmd, ps::Status::InvalidArgument);
+                return;
+            }
+            answer.push_back(slot);
+        }
+        m_mixer = std::move(next);
+        reply(cmd, ps::Status::Ok, json{{"ch", answer}});
     }
 }
 

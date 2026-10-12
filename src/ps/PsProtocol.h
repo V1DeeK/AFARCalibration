@@ -7,7 +7,8 @@
 
 #include <array>
 #include <cstdint>
-
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -40,6 +41,12 @@ inline constexpr std::string_view GetAdc = "get_adc";
 inline constexpr std::string_view SetBeamAzimuth = "set_beam_azimuth";
 inline constexpr std::string_view SetBeam = "set_beam";
 inline constexpr std::string_view GetBeam = "get_beam";
+inline constexpr std::string_view SetLo = "set_lo";
+inline constexpr std::string_view GetLo = "get_lo";
+inline constexpr std::string_view SetMixer = "set_mixer";
+inline constexpr std::string_view GetMixer = "get_mixer";
+inline constexpr std::string_view SetVideo = "set_video";
+inline constexpr std::string_view GetVideo = "get_video";
 inline constexpr std::string_view Telemetry = "telemetry";
 }  // namespace msg
 
@@ -150,6 +157,82 @@ struct BeamState {
 
 /// Чётная длина, только 0-9 A-F a-f, не пусто (§4.4).
 bool hexBytesValid(std::string_view hex) noexcept;
+
+// ------------------------------------------------- внутренние модули (§4.5)
+
+/// Адрес гетеродина в set_lo / get_lo (v3 таблица 25).
+inline constexpr int kLoMixer = 1;        ///< гетеродин смесителя
+inline constexpr int kLoCalibration = 2;  ///< гетеродин калибровки
+inline constexpr int kMixerChannels = 4;
+
+enum class ModuleFieldKind {
+    Flag,         ///< 0 / 1
+    PowerDbm,     ///< −4, −1, 2, 5
+    FrequencyHz,  ///< 0 … 7·10⁹, целое
+    Att31,        ///< 0 … 31,5 дБ, шаг 0,5
+    Att15,        ///< 0 … 15,5 дБ, шаг 0,5
+};
+
+struct ModuleField {
+    std::string_view key;
+    ModuleFieldKind kind;
+    std::string_view titleRu;
+};
+
+/// Поля гетеродина (v3 таблица 26).
+const std::vector<ModuleField>& loFields();
+/// Поля видеоприёмника: таблица 26 и таблица 29.
+const std::vector<ModuleField>& videoFields();
+/// Поля канала смесителя без "n" (таблица 28).
+const std::vector<ModuleField>& mixerChannelFields();
+
+bool moduleValueValid(ModuleFieldKind kind, double value) noexcept;
+/// Допустимые значения одной строкой: «0…31,5 шаг 0,5».
+std::string moduleRangeText(ModuleFieldKind kind);
+/// Значение в JSON: целое для флагов, мощности и частоты, число для аттенюации.
+nlohmann::json moduleFieldValue(ModuleFieldKind kind, double value);
+
+std::string loNameRu(int addr);
+
+/// Поле → значение. В set_* передаются только заданные поля.
+using ModuleValues = std::map<std::string, double>;
+
+/// set_lo: addr 1 или 2 и хотя бы одно поле таблицы 26.
+bool loSetPayload(int addr, const ModuleValues& values, nlohmann::json& payload,
+                  std::string* error = nullptr);
+nlohmann::json loGetPayload(int addr);
+/// set_video: хотя бы одно поле видеоприёмника.
+bool videoSetPayload(const ModuleValues& values, nlohmann::json& payload,
+                     std::string* error = nullptr);
+
+struct MixerChannel {
+    int n = 1;
+    ModuleValues values;
+};
+
+/// set_mixer: 1…4 канала без повторов, в каждом хотя бы одно поле.
+bool mixerSetPayload(const std::vector<MixerChannel>& channels, nlohmann::json& payload,
+                     std::string* error = nullptr);
+
+/// Ответ set_lo / get_lo / set_video / get_video.
+struct ModuleState {
+    int addr = 0;  ///< только у гетеродина
+    ModuleValues values;
+    std::optional<double> temp;
+    std::optional<int> lock;
+
+    /// Значения полей проверяются по fields; неизвестные поля пропускаются.
+    static bool fromJson(const nlohmann::json& o, const std::vector<ModuleField>& fields,
+                         ModuleState& out, std::string* error = nullptr);
+};
+
+/// Ответ set_mixer / get_mixer. ch — по возрастанию n.
+struct MixerState {
+    std::vector<MixerChannel> ch;
+    std::optional<double> temp;
+
+    static bool fromJson(const nlohmann::json& o, MixerState& out, std::string* error = nullptr);
+};
 
 // ------------------------------------------------------------- телеметрия
 
