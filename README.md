@@ -216,10 +216,11 @@ open build/src/AfarRxCalibrationStudio.app                    # macOS
 | `src/qc/` | флаги качества |
 | `src/report/` | AFARPQ LUT, PDF, манифест SHA-256 |
 | `src/sim/` | имитаторы C2220 и контроллера |
+| `src/ps/` | клиент PS изделия (JSON по TCP + UDP), приёмка сервисного режима |
 | `src/ui/` | Qt GUI |
 | `src/core/` | идентификатор прогона |
 | `include/afar/` | публичные заголовки интерфейсов |
-| `tests/` | Catch2 + CTest |
+| `tests/` | Catch2 + CTest; `tests/support/` — ответчик PS только для автотестов |
 | `cmake/` | Catch2, JSON, предупреждения |
 | `schemas/` | JSON Schema конфигурации серии |
 | `examples/` | примеры конфигов (не боевой стенд) |
@@ -244,6 +245,7 @@ open build/src/AfarRxCalibrationStudio.app                    # macOS
 - SCPI C1220/C2220 / S2VNA: [`docs/contracts/vna-c2220-scpi.md`](docs/contracts/vna-c2220-scpi.md)
 - C++-интерфейсы и автомат: [`docs/contracts/cpp-interfaces.md`](docs/contracts/cpp-interfaces.md)
 - Каталог серии и форматы: [`docs/contracts/data-formats.md`](docs/contracts/data-formats.md)
+- Обмен с PS изделия и сервисный режим: [`docs/contracts/ps-json-protocol.md`](docs/contracts/ps-json-protocol.md)
 - Руководство оператора: [`docs/operator-guide.md`](docs/operator-guide.md)
 - Руководство администратора: [`docs/admin-guide.md`](docs/admin-guide.md)
 - Программная методика испытаний: [`docs/software-test-procedure.md`](docs/software-test-procedure.md)

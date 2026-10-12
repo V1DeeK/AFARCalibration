@@ -189,7 +189,18 @@ afar_enable_warnings(test_ui_interactions)
 add_test(NAME ui_interactions COMMAND test_ui_interactions)
 set_tests_properties(ui_interactions PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Обмен с PS изделия: кодек (без Qt) и связь с имитатором PS на localhost.
+# Обмен с PS изделия: кодек (без Qt) и связь с ответчиком PS на localhost.
+# Ответчик — только для автотестов, в программу не входит.
+find_package(Qt6 REQUIRED COMPONENTS Network)
+add_library(afar_ps_sim STATIC
+    support/PsSimulator.cpp
+    support/PsSimulator.h
+)
+set_target_properties(afar_ps_sim PROPERTIES AUTOMOC ON)
+target_include_directories(afar_ps_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(afar_ps_sim PUBLIC afar_ps_protocol Qt6::Network)
+afar_enable_warnings(afar_ps_sim)
+
 add_executable(test_ps_protocol test_ps_protocol.cpp)
 target_link_libraries(test_ps_protocol PRIVATE Catch2::Catch2WithMain afar_ps_protocol)
 afar_enable_warnings(test_ps_protocol)
@@ -208,6 +219,8 @@ add_executable(test_ps_tab
     ${PROJECT_SOURCE_DIR}/src/ui/PsPacketPage.h
     ${PROJECT_SOURCE_DIR}/src/ui/PsServiceCheckPage.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/PsServiceCheckPage.h
+    ${PROJECT_SOURCE_DIR}/src/ui/PsTrafficView.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsTrafficView.h
 )
 target_include_directories(test_ps_tab PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
 target_link_libraries(test_ps_tab PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_ps afar_ps_sim)

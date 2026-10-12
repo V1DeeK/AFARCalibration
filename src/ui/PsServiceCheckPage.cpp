@@ -68,7 +68,8 @@ PsServiceCheckPage::PsServiceCheckPage(PsLink* link, QWidget* parent)
         const auto& s = steps[static_cast<std::size_t>(row)];
         const QStringList cells{QString::number(row + 1), qs(s.phase),
                                 qs(s.title) + (s.proposal ? QStringLiteral(" · предл.") : QString()),
-                                qs(s.msgType), qs(ps::expectedText(s)), QString(),
+                                (s.udp == ps::UdpCheck::None ? QStringLiteral("TCP ") : QStringLiteral("UDP ")) + qs(s.msgType),
+                                qs(ps::expectedText(s)), QString(),
                                 qs(ps::verdictRu(ps::CheckVerdict::NotRun)), QString()};
         for (int col = 0; col < ColCount; ++col) {
             m_table->setItem(row, col, new QTableWidgetItem(cells[col]));

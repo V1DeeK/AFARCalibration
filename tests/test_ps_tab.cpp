@@ -5,6 +5,7 @@
 #include "PsServiceCheckPage.h"
 #include "PsServiceCheckRunner.h"
 #include "PsTab.h"
+#include "PsTrafficView.h"
 
 #include <QApplication>
 #include <QDir>
@@ -16,9 +17,11 @@
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTableWidget>
+#include <QUdpSocket>
 
 #include <functional>
 
@@ -58,9 +61,28 @@ T* child(QWidget& w, const char* name)
     return c;
 }
 
+/// Свободный UDP-порт для телеметрии: занятый 49601 не должен ронять тест.
+int freeUdpPort()
+{
+    QUdpSocket probe;
+    REQUIRE(probe.bind(QHostAddress::LocalHost, 0));
+    return probe.localPort();
+}
+
+/// Вкладка подключается к ответчику PS так же, как к PS изделия: по адресу.
+void connectTab(PsTab& tab, PsSimulator& sim)
+{
+    REQUIRE((sim.isListening() || sim.listen()));
+    child<QLineEdit>(tab, "psHost")->setText(QStringLiteral("127.0.0.1"));
+    child<QSpinBox>(tab, "psPort")->setValue(sim.port());
+    child<QSpinBox>(tab, "psTlmPort")->setValue(freeUdpPort());
+    child<QPushButton>(tab, "psConnect")->click();
+    REQUIRE(waitFor([&] { return tab.link()->isReady(); }));
+}
+
 }  // namespace
 
-TEST_CASE("Вкладка PS: имитатор, сервисный режим, коды и модуль", "[ps][ui]")
+TEST_CASE("Вкладка PS: подключение по адресу, сервисный режим, коды и обмен", "[ps][ui]")
 {
     app();
     PsTab tab;
@@ -69,10 +91,12 @@ TEST_CASE("Вкладка PS: имитатор, сервисный режим, �
     auto* writeCodes = child<QPushButton>(tab, "psWriteCodes");
     auto* toService = child<QPushButton>(tab, "psToService");
     CHECK_FALSE(writeCodes->isEnabled());
+    // Имитатора PS в программе нет: только адрес PS изделия.
+    CHECK(tab.findChild<QCheckBox*>(QStringLiteral("psUseSimulator")) == nullptr);
+    CHECK(tab.findChild<QTableWidget*>(QStringLiteral("psModuleTable")) == nullptr);
 
-    child<QCheckBox>(tab, "psUseSimulator")->setChecked(true);
-    child<QPushButton>(tab, "psConnect")->click();
-    REQUIRE(waitFor([&] { return tab.link()->isReady(); }));
+    PsSimulator sim;
+    connectTab(tab, sim);
     REQUIRE(waitFor([&] { return toService->isEnabled(); }));
     CHECK_FALSE(writeCodes->isEnabled());
 
@@ -87,54 +111,54 @@ TEST_CASE("Вкладка PS: имитатор, сервисный режим, �
     REQUIRE(waitFor([&] { return codes->item(4, 3)->text() == QStringLiteral("42"); }));
     CHECK(codes->item(4, 4)->text() == QStringLiteral("18"));
 
-    // Модуль 0x01: частота синтезатора и включение — статус приходит с Lock.
-    auto* table = child<QTableWidget>(tab, "psModuleTable");
-    QDoubleSpinBox* freq = nullptr;
-    QCheckBox* enSynth = nullptr;
-    for (int row = 0; row < table->rowCount(); ++row) {
-        const QString name = table->item(row, 1)->text();
-        if (name.contains(QStringLiteral("(FREQ_ADF4355)"))) {
-            freq = static_cast<QDoubleSpinBox*>(table->cellWidget(row, 2));
-        } else if (name.contains(QStringLiteral("(EN_ADF4355)"))) {
-            enSynth = static_cast<QCheckBox*>(table->cellWidget(row, 2));
-        }
-    }
-    REQUIRE(freq);
-    REQUIRE(enSynth);
-    freq->setValue(5500.0);
-    enSynth->setChecked(true);
-    child<QPushButton>(tab, "psModuleWrite")->click();
+    // Обмен: команда и ответ в одной паре, телеметрия идёт по UDP.
+    auto* traffic = tab.trafficView();
     REQUIRE(waitFor([&] {
-        for (int row = 0; row < table->rowCount(); ++row) {
-            if (table->item(row, 1)->text().contains(QStringLiteral("(FREQ_ADF4355)"))) {
-                return static_cast<QLabel*>(table->cellWidget(row, 3))->text().startsWith(QStringLiteral("5500"));
+        for (const auto& f : traffic->frames()) {
+            if (f.outgoing && f.msgType == QStringLiteral("set_phase_atten") && f.status == QStringLiteral("OK")) {
+                return f.pair >= 0 && traffic->frames()[static_cast<std::size_t>(f.pair)].msgClass ==
+                                          QStringLiteral("response");
             }
         }
         return false;
     }));
+    REQUIRE(waitFor([&] { return traffic->udpReceived() > 0; }));
+    CHECK(traffic->tcpSent() >= 3);
+    CHECK(traffic->tcpTimeouts() == 0);
+    QTemporaryDir logDir;
+    REQUIRE(logDir.isValid());
+    const QString logPath = logDir.filePath(QStringLiteral("exchange.log"));
+    REQUIRE(traffic->saveLog(logPath));
+    QFile logFile(logPath);
+    REQUIRE(logFile.open(QIODevice::ReadOnly));
+    const QString logText = QString::fromUtf8(logFile.readAll());
+    CHECK(logText.contains(QStringLiteral("\tTCP\t->\t{")));
+    CHECK(logText.contains(QStringLiteral("\tUDP\t<-\t{")));
 
-    // Серия занимает PS: связь вкладки закрывается и после серии восстанавливается.
+    // Серия (VNA подключён, идёт измерение) связь с PS не рвёт: блокируются
+    // только ручные команды.
     tab.setSeriesActive(true);
     CHECK_FALSE(writeCodes->isEnabled());
     CHECK_FALSE(child<QPushButton>(tab, "psToIdle")->isEnabled());
-    CHECK_FALSE(child<QPushButton>(tab, "psConnect")->isEnabled());
-    CHECK(tab.link()->state() == PsLink::State::Disconnected);
+    CHECK(child<QPushButton>(tab, "psConnect")->isEnabled());
+    CHECK(tab.link()->isReady());
+    const auto udpBefore = tab.link()->telemetryPackets();
+    REQUIRE(waitFor([&] { return tab.link()->telemetryPackets() > udpBefore; }));
     tab.setSeriesActive(false);
-    REQUIRE(waitFor([&] { return writeCodes->isEnabled(); }));
+    CHECK(writeCodes->isEnabled());
 
     child<QPushButton>(tab, "psConnect")->click();
     CHECK(tab.link()->state() == PsLink::State::Disconnected);
     CHECK_FALSE(writeCodes->isEnabled());
 }
 
-TEST_CASE("Вкладка PS: приёмка сервиса на имитаторе проходит целиком", "[ps][ui][check]")
+TEST_CASE("Вкладка PS: приёмка сервиса TCP и UDP проходит целиком", "[ps][ui][check]")
 {
     app();
     PsTab tab;
     tab.show();
-    child<QCheckBox>(tab, "psUseSimulator")->setChecked(true);
-    child<QPushButton>(tab, "psConnect")->click();
-    REQUIRE(waitFor([&] { return tab.link()->isReady(); }));
+    PsSimulator sim;
+    connectTab(tab, sim);
 
     auto* start = child<QPushButton>(tab, "psCheckStart");
     REQUIRE(waitFor([&] { return start->isEnabled(); }));
@@ -169,9 +193,8 @@ TEST_CASE("Вкладка PS: конструктор пакетов и набо�
     app();
     PsTab tab;
     tab.show();
-    child<QCheckBox>(tab, "psUseSimulator")->setChecked(true);
-    child<QPushButton>(tab, "psConnect")->click();
-    REQUIRE(waitFor([&] { return tab.link()->isReady(); }));
+    PsSimulator sim;
+    connectTab(tab, sim);
 
     auto* type = child<QComboBox>(tab, "psPacketType");
     auto* payload = child<QPlainTextEdit>(tab, "psPacketPayload");

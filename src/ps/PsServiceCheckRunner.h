@@ -12,6 +12,7 @@
 
 /// Прогон приёмочной проверки сервисного режима по шагам через PsLink.
 /// Шаги идут строго по одному: следующий — после ответа или тайм-аута.
+/// Шаги UDP ждут датаграмму телеметрии, отправленную PS после начала шага.
 class PsServiceCheckRunner final : public QObject {
     Q_OBJECT
 
@@ -49,12 +50,20 @@ private:
     void onResponse(const afar::ps::Envelope& response, afar::ps::Status status);
     void onTimedOut(const QString& msgType, int msgCount);
     void onLinkState(PsLink::State state);
+    void onFrame(bool outgoing, const QString& channel, const QString& line);
+    void checkCounters();
 
     PsLink* m_link;
     std::vector<afar::ps::CheckStep> m_steps;
     std::vector<Outcome> m_outcomes;
     int m_index = -1;
     int m_msgCount = -1;
+    bool m_waitUdp = false;
+    afar::ps::CheckResult m_lastUdp;  ///< последняя датаграмма шага с не тем mode
+    QString m_lastUdpText;
+    quint64 m_tlmReceived0 = 0;
+    quint64 m_tlmLost0 = 0;
+    quint64 m_tlmRejected0 = 0;
     QTimer m_guard;
     QElapsedTimer m_stepClock;
     QDateTime m_startedAt;

@@ -5,6 +5,9 @@ using nlohmann::json;
 
 namespace {
 
+/// Период телеметрии 1 с (§5) плюс запас на внеочередную датаграмму.
+constexpr int kUdpWaitMs = 3500;
+
 QString qs(const std::string& s)
 {
     return QString::fromStdString(s);
@@ -30,14 +33,28 @@ PsServiceCheckRunner::PsServiceCheckRunner(PsLink* link, QObject* parent)
 {
     m_guard.setSingleShot(true);
     connect(&m_guard, &QTimer::timeout, this, [this] {
-        if (isRunning()) {
-            finishStep({ps::CheckVerdict::NoAnswer, "ответ не пришёл или не разобран"},
-                       QStringLiteral("нет ответа"), QString());
+        if (!isRunning()) {
+            return;
         }
+        if (m_waitUdp) {
+            m_waitUdp = false;
+            if (!m_lastUdpText.isEmpty()) {
+                finishStep(m_lastUdp, m_lastUdpText, QString());
+            } else {
+                finishStep({ps::CheckVerdict::NoAnswer,
+                            "за " + std::to_string(kUdpWaitMs) + " мс не пришло ни одной датаграммы на UDP " +
+                                std::to_string(m_link->telemetryPort())},
+                           QStringLiteral("нет датаграмм"), QString());
+            }
+            return;
+        }
+        finishStep({ps::CheckVerdict::NoAnswer, "ответ не пришёл или не разобран"},
+                   QStringLiteral("нет ответа"), QString());
     });
     connect(m_link, &PsLink::responseReceived, this, &PsServiceCheckRunner::onResponse);
     connect(m_link, &PsLink::commandTimedOut, this, &PsServiceCheckRunner::onTimedOut);
     connect(m_link, &PsLink::stateChanged, this, &PsServiceCheckRunner::onLinkState);
+    connect(m_link, &PsLink::frameLogged, this, &PsServiceCheckRunner::onFrame);
 }
 
 bool PsServiceCheckRunner::start()
@@ -49,6 +66,9 @@ bool PsServiceCheckRunner::start()
     m_startedAt = QDateTime::currentDateTime();
     m_finishedAt = {};
     m_finishReason.clear();
+    m_tlmReceived0 = m_link->telemetryPackets();
+    m_tlmLost0 = m_link->telemetryLost();
+    m_tlmRejected0 = m_link->telemetryRejected();
     m_index = 0;
     sendCurrent();
     return true;
@@ -62,6 +82,7 @@ void PsServiceCheckRunner::stop(const QString& reason)
     m_guard.stop();
     m_index = -1;
     m_msgCount = -1;
+    m_waitUdp = false;
     m_finishedAt = QDateTime::currentDateTime();
     m_finishReason = reason;
     emit finished(reason);
@@ -71,9 +92,20 @@ void PsServiceCheckRunner::sendCurrent()
 {
     const auto& step = m_steps[static_cast<std::size_t>(m_index)];
     auto& out = m_outcomes[static_cast<std::size_t>(m_index)];
-    out.request = jsonText(step.payload);
+    out.request = step.udp == ps::UdpCheck::None ? jsonText(step.payload) : QString();
     emit stepStarted(m_index);
     m_stepClock.start();
+    if (step.udp == ps::UdpCheck::Counters) {
+        checkCounters();
+        return;
+    }
+    if (step.udp == ps::UdpCheck::Datagram) {
+        m_waitUdp = true;
+        m_lastUdp = {};
+        m_lastUdpText.clear();
+        m_guard.start(kUdpWaitMs);
+        return;
+    }
     m_msgCount = m_link->sendCommand(step.msgType, step.payload);
     if (m_msgCount < 0) {
         finishStep({ps::CheckVerdict::Fail, "команда не ушла: нет связи с PS"},
@@ -135,6 +167,45 @@ void PsServiceCheckRunner::onTimedOut(const QString& msgType, int msgCount)
                QStringLiteral("нет ответа"), QString());
 }
 
+void PsServiceCheckRunner::onFrame(bool outgoing, const QString& channel, const QString& line)
+{
+    if (!isRunning() || !m_waitUdp || outgoing || channel != QLatin1String("UDP")) {
+        return;
+    }
+    const std::string datagram = line.toStdString();
+    const auto& step = m_steps[static_cast<std::size_t>(m_index)];
+    bool waitMore = false;
+    ps::CheckResult r = ps::evaluateTelemetry(step, datagram, &waitMore);
+    const QString text = qs(ps::telemetryText(datagram));
+    if (waitMore) {
+        m_lastUdp = std::move(r);
+        m_lastUdpText = text;
+        return;
+    }
+    m_waitUdp = false;
+    finishStep(std::move(r), text, line);
+}
+
+void PsServiceCheckRunner::checkCounters()
+{
+    const quint64 received = m_link->telemetryPackets() - m_tlmReceived0;
+    const quint64 lost = m_link->telemetryLost() - m_tlmLost0;
+    const quint64 rejected = m_link->telemetryRejected() - m_tlmRejected0;
+    const QString got = QStringLiteral("принято %1, потеряно %2, отброшено %3").arg(received).arg(lost).arg(rejected);
+    ps::CheckResult r{ps::CheckVerdict::Pass, {}};
+    if (received == 0) {
+        r = {ps::CheckVerdict::Fail, "за проверку не принято ни одной датаграммы"};
+    } else if (lost > 0 || rejected > 0) {
+        r = {ps::CheckVerdict::Fail, "потеряно " + std::to_string(lost) + ", отброшено " + std::to_string(rejected)};
+    }
+    // Итог — из цикла событий, как у остальных шагов.
+    QTimer::singleShot(0, this, [this, r, got, index = m_index] {
+        if (m_index == index) {
+            finishStep(r, got, QString());
+        }
+    });
+}
+
 void PsServiceCheckRunner::onLinkState(PsLink::State state)
 {
     if (!isRunning() || state == PsLink::State::Ready) {
@@ -188,11 +259,12 @@ QString PsServiceCheckRunner::reportMarkdown() const
         if (!o.result.detail.empty()) {
             verdict += QStringLiteral(": ") + qs(o.result.detail);
         }
-        md += QStringLiteral("| %1 | %2 | %3 | `%4` | %5 | %6 | %7 | %8 |\n")
+        md += QStringLiteral("| %1 | %2 | %3 | %4 | %5 | %6 | %7 | %8 |\n")
                   .arg(i + 1)
                   .arg(cell(qs(s.phase)),
                        cell(qs(s.title) + (s.proposal ? QStringLiteral(" (предл.)") : QString())),
-                       qs(s.msgType), cell(qs(ps::expectedText(s))), cell(o.got), cell(verdict),
+                       (s.udp == ps::UdpCheck::None ? QStringLiteral("TCP ") : QStringLiteral("UDP ")) + qs(s.msgType),
+                       cell(qs(ps::expectedText(s))), cell(o.got), cell(verdict),
                        o.result.verdict == ps::CheckVerdict::NotRun ? QStringLiteral("—")
                                                                     : QString::number(o.ms));
     }

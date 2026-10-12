@@ -2,7 +2,7 @@
 
 #include "PsPacketPage.h"
 #include "PsServiceCheckPage.h"
-#include "PsSimulator.h"
+#include "PsTrafficView.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -43,18 +43,6 @@ QString hzText(double hz)
     return QStringLiteral("%1 МГц").arg(hz / 1e6, 0, 'f', 6);
 }
 
-QString fieldText(ps::Rs485FieldKind kind, double v)
-{
-    switch (kind) {
-    case ps::Rs485FieldKind::Flag: return v != 0.0 ? QStringLiteral("1 (вкл)") : QStringLiteral("0 (выкл)");
-    case ps::Rs485FieldKind::PowerDbm: return QStringLiteral("%1 дБм").arg(v, 0, 'f', 0);
-    case ps::Rs485FieldKind::FrequencyHz: return hzText(v);
-    case ps::Rs485FieldKind::Att31:
-    case ps::Rs485FieldKind::Att15: return QStringLiteral("%1 дБ").arg(v, 0, 'f', 1);
-    }
-    return QString::number(v);
-}
-
 }  // namespace
 
 PsTab::PsTab(QWidget* parent)
@@ -74,7 +62,6 @@ PsTab::PsTab(QWidget* parent)
     m_pages->addTab(buildCodesPage(), QStringLiteral("Коды решётки"));
     m_pages->addTab(buildAdcPage(), QStringLiteral("АЦП"));
     m_pages->addTab(buildBeamPage(), QStringLiteral("Луч"));
-    m_pages->addTab(buildModulesPage(), QStringLiteral("Модули RS-485"));
     m_pages->addTab(buildRawPage(), QStringLiteral("RS-485 HEX"));
     m_packetPage = new PsPacketPage(m_link, this);
     m_pages->addTab(m_packetPage, QStringLiteral("Пакет"));
@@ -84,22 +71,20 @@ PsTab::PsTab(QWidget* parent)
     middle->addWidget(buildTelemetryBox(), 2);
     root->addLayout(middle, 1);
 
-    auto* logBox = new QGroupBox(QStringLiteral("Журнал обмена"), this);
-    auto* logLayout = new QVBoxLayout(logBox);
-    m_log = new QPlainTextEdit(logBox);
+    auto* bottom = new QTabWidget(this);
+    m_traffic = new PsTrafficView(m_link, bottom);
+    m_traffic->setObjectName(QStringLiteral("psTraffic"));
+    bottom->addTab(m_traffic, QStringLiteral("Обмен TCP / UDP"));
+    m_log = new QPlainTextEdit(bottom);
     m_log->setObjectName(QStringLiteral("psLog"));
     m_log->setReadOnly(true);
     m_log->setMaximumBlockCount(kLogLines);
-    m_log->setMinimumHeight(90);
-    m_logTelemetry = new QCheckBox(QStringLiteral("Показывать датаграммы телеметрии"), logBox);
-    logLayout->addWidget(m_log);
-    logLayout->addWidget(m_logTelemetry);
-    root->addWidget(logBox);
+    bottom->addTab(m_log, QStringLiteral("События"));
+    root->addWidget(bottom, 1);
 
     connect(m_link, &PsLink::stateChanged, this, &PsTab::onLinkStateChanged);
     connect(m_link, &PsLink::responseReceived, this, &PsTab::onResponse);
     connect(m_link, &PsLink::telemetryReceived, this, &PsTab::onTelemetry);
-    connect(m_link, &PsLink::frameLogged, this, &PsTab::onFrame);
     connect(m_link, &PsLink::errorOccurred, this,
             [this](const QString& message) { log(QStringLiteral("Ошибка: %1").arg(message)); });
     connect(m_link, &PsLink::commandTimedOut, this, [this](const QString& type, int count) {
@@ -121,13 +106,20 @@ QWidget* PsTab::buildConnectionBox()
     m_host->setObjectName(QStringLiteral("psHost"));
     m_host->setPlaceholderText(QStringLiteral("адрес PS из профиля стенда"));
     m_port = new QSpinBox(box);
+    m_port->setObjectName(QStringLiteral("psPort"));
     m_port->setRange(1, 65535);
     m_port->setValue(ps::kDefaultControlPort);
     m_tlmPort = new QSpinBox(box);
+    m_tlmPort->setObjectName(QStringLiteral("psTlmPort"));
     m_tlmPort->setRange(1, 65535);
     m_tlmPort->setValue(ps::kDefaultTelemetryPort);
-    m_useSim = new QCheckBox(QStringLiteral("Имитатор PS (без стенда)"), box);
-    m_useSim->setObjectName(QStringLiteral("psUseSimulator"));
+    m_keepAlive = new QSpinBox(box);
+    m_keepAlive->setObjectName(QStringLiteral("psKeepAlive"));
+    m_keepAlive->setRange(1, 300);
+    m_keepAlive->setValue(ps::kDefaultKeepAliveSec);
+    m_keepAlive->setSuffix(QStringLiteral(" с"));
+    m_keepAlive->setToolTip(QStringLiteral("keep_alive уходит, если в канале не было обмена столько секунд. "
+                                           "Нет ответа за 2 с — связь потеряна, переподключение с новым hello."));
     m_connect = new QPushButton(QStringLiteral("Подключить"), box);
     m_connect->setObjectName(QStringLiteral("psConnect"));
     m_linkState = new QLabel(box);
@@ -140,15 +132,12 @@ QWidget* PsTab::buildConnectionBox()
     grid->addWidget(m_port, 1, 1);
     grid->addWidget(new QLabel(QStringLiteral("UDP телеметрии"), box), 1, 2);
     grid->addWidget(m_tlmPort, 1, 3);
-    grid->addWidget(m_useSim, 2, 0, 1, 2);
+    grid->addWidget(new QLabel(QStringLiteral("keep_alive при простое"), box), 2, 0);
+    grid->addWidget(m_keepAlive, 2, 1);
     grid->addWidget(m_connect, 2, 3);
     grid->addWidget(m_linkState, 3, 0, 1, 4);
 
     connect(m_connect, &QPushButton::clicked, this, &PsTab::onConnectClicked);
-    connect(m_useSim, &QCheckBox::toggled, this, [this](bool on) {
-        m_host->setEnabled(!on);
-        m_port->setEnabled(!on);
-    });
     return box;
 }
 
@@ -367,60 +356,6 @@ QWidget* PsTab::buildBeamPage()
     return page;
 }
 
-QWidget* PsTab::buildModulesPage()
-{
-    auto* page = new QWidget(this);
-    auto* layout = new QVBoxLayout(page);
-    auto* head = new QHBoxLayout;
-    m_module = new QComboBox(page);
-    m_module->setObjectName(QStringLiteral("psModule"));
-    for (int addr = 1; addr <= 4; ++addr) {
-        const auto m = static_cast<ps::Rs485Module>(addr);
-        m_module->addItem(QStringLiteral("0x%1 — %2")
-                              .arg(addr, 2, 16, QLatin1Char('0'))
-                              .arg(QString::fromStdString(ps::rs485ModuleRu(m))),
-                          addr);
-    }
-    m_moduleStatus = new QLabel(QStringLiteral("Temp: —, Lock: —"), page);
-    head->addWidget(m_module, 1);
-    head->addWidget(m_moduleStatus);
-
-    m_moduleTable = new QTableWidget(0, 4, page);
-    m_moduleTable->setObjectName(QStringLiteral("psModuleTable"));
-    m_moduleTable->setHorizontalHeaderLabels({QStringLiteral("Передать"), QStringLiteral("Поле"),
-                                              QStringLiteral("Задать"), QStringLiteral("Состояние")});
-    m_moduleTable->verticalHeader()->setVisible(false);
-    m_moduleTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    m_moduleTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-    m_moduleTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    m_moduleTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-
-    auto* buttons = new QHBoxLayout;
-    auto* write = new QPushButton(QStringLiteral("Записать отмеченные"), page);
-    write->setObjectName(QStringLiteral("psModuleWrite"));
-    auto* status = new QPushButton(QStringLiteral("Запросить статус"), page);
-    status->setObjectName(QStringLiteral("psModuleStatus"));
-    auto* note = new QLabel(QStringLiteral("Команды rs485_set / rs485_status — предложение контракта, "
-                                           "ждут согласования с разработчиком PS."),
-                            page);
-    note->setWordWrap(true);
-    buttons->addWidget(write);
-    buttons->addWidget(status);
-    buttons->addStretch(1);
-
-    layout->addLayout(head);
-    layout->addWidget(m_moduleTable, 1);
-    layout->addLayout(buttons);
-    layout->addWidget(note);
-
-    connect(m_module, &QComboBox::currentIndexChanged, this, [this](int) { rebuildModuleForm(); });
-    connect(write, &QPushButton::clicked, this, &PsTab::writeModule);
-    connect(status, &QPushButton::clicked, this, &PsTab::requestModuleStatus);
-    m_serviceControls.insert(m_serviceControls.end(), {write, status});
-    rebuildModuleForm();
-    return page;
-}
-
 QWidget* PsTab::buildRawPage()
 {
     auto* page = new QWidget(this);
@@ -452,95 +387,21 @@ QWidget* PsTab::buildRawPage()
     return page;
 }
 
-void PsTab::rebuildModuleForm()
-{
-    m_moduleRows.clear();
-    m_moduleTable->setRowCount(0);
-    m_moduleStatus->setText(QStringLiteral("Temp: —, Lock: —"));
-    const auto module = static_cast<ps::Rs485Module>(m_module->currentData().toInt());
-    const auto& fields = ps::rs485Fields(module);
-    m_moduleTable->setRowCount(static_cast<int>(fields.size()));
-    int row = 0;
-    for (const auto& f : fields) {
-        ModuleRow r;
-        r.kind = f.kind;
-        r.send = new QCheckBox(m_moduleTable);
-        auto* name = new QTableWidgetItem(QStringLiteral("%1 (%2)").arg(qs(f.titleRu), qs(f.key)));
-        name->setFlags(Qt::ItemIsEnabled);
-        switch (f.kind) {
-        case ps::Rs485FieldKind::Flag: {
-            auto* box = new QCheckBox(QStringLiteral("вкл"), m_moduleTable);
-            r.editor = box;
-            connect(box, &QCheckBox::toggled, r.send, [send = r.send] { send->setChecked(true); });
-            break;
-        }
-        case ps::Rs485FieldKind::PowerDbm: {
-            auto* combo = new QComboBox(m_moduleTable);
-            for (int dbm : {-4, -1, 2, 5}) {
-                combo->addItem(QStringLiteral("%1 дБм").arg(dbm), dbm);
-            }
-            r.editor = combo;
-            connect(combo, &QComboBox::currentIndexChanged, r.send,
-                    [send = r.send] { send->setChecked(true); });
-            break;
-        }
-        case ps::Rs485FieldKind::FrequencyHz:
-        case ps::Rs485FieldKind::Att31:
-        case ps::Rs485FieldKind::Att15: {
-            auto* spin = new QDoubleSpinBox(m_moduleTable);
-            if (f.kind == ps::Rs485FieldKind::FrequencyHz) {
-                spin->setRange(0.0, 7000.0);
-                spin->setDecimals(6);
-                spin->setSuffix(QStringLiteral(" МГц"));
-            } else {
-                spin->setRange(0.0, f.kind == ps::Rs485FieldKind::Att31 ? 31.5 : 15.5);
-                spin->setDecimals(1);
-                spin->setSingleStep(0.5);
-                spin->setSuffix(QStringLiteral(" дБ"));
-            }
-            r.editor = spin;
-            connect(spin, &QDoubleSpinBox::valueChanged, r.send,
-                    [send = r.send] { send->setChecked(true); });
-            break;
-        }
-        }
-        r.actual = new QLabel(QStringLiteral("—"), m_moduleTable);
-        m_moduleTable->setCellWidget(row, 0, r.send);
-        m_moduleTable->setItem(row, 1, name);
-        m_moduleTable->setCellWidget(row, 2, r.editor);
-        m_moduleTable->setCellWidget(row, 3, r.actual);
-        m_moduleRows.emplace(std::string(f.key), r);
-        ++row;
-    }
-}
-
 void PsTab::onConnectClicked()
 {
     if (m_link->state() != PsLink::State::Disconnected) {
         m_link->disconnectFromPs();
-        if (m_sim) {
-            m_sim->close();
-        }
         return;
     }
-    QString host = m_host->text().trimmed();
-    quint16 port = static_cast<quint16>(m_port->value());
-    if (m_useSim->isChecked()) {
-        if (!m_sim) {
-            m_sim = new PsSimulator(this);
-        }
-        if (!m_sim->isListening() && !m_sim->listen()) {
-            log(QStringLiteral("Имитатор PS не смог открыть порт"));
-            return;
-        }
-        host = QStringLiteral("127.0.0.1");
-        port = m_sim->port();
-        log(QStringLiteral("Имитатор PS запущен на 127.0.0.1:%1 — ДЕМО, НЕ ДЛЯ МЕТРОЛОГИИ").arg(port));
-    }
+    const QString host = m_host->text().trimmed();
+    const auto port = static_cast<quint16>(m_port->value());
     if (host.isEmpty()) {
         log(QStringLiteral("Укажите адрес PS"));
         return;
     }
+    PsLink::Timeouts t = m_link->timeouts();
+    t.keepAliveIdleMs = m_keepAlive->value() * 1000;
+    m_link->setTimeouts(t);
     m_link->connectToPs(host, port, static_cast<quint16>(m_tlmPort->value()));
 }
 
@@ -575,7 +436,11 @@ void PsTab::onLinkStateChanged(PsLink::State state)
     m_linkState->setText(text);
     m_connect->setText(state == PsLink::State::Disconnected ? QStringLiteral("Подключить")
                                                             : QStringLiteral("Отключить"));
-    m_useSim->setEnabled(state == PsLink::State::Disconnected);
+    const bool idle = state == PsLink::State::Disconnected;
+    m_host->setEnabled(idle);
+    m_port->setEnabled(idle);
+    m_tlmPort->setEnabled(idle);
+    m_keepAlive->setEnabled(idle);
     emit summaryChanged(ok ? QStringLiteral("PS: OK") : QStringLiteral("PS: нет связи"), ok);
     refreshEnabled();
 }
@@ -676,60 +541,6 @@ void PsTab::applyAdc()
     send(ps::msg::SetAdc, adc.toJson());
 }
 
-void PsTab::writeModule()
-{
-    const auto module = static_cast<ps::Rs485Module>(m_module->currentData().toInt());
-    ps::Rs485Values values;
-    for (const auto& [key, row] : m_moduleRows) {
-        if (!row.send->isChecked()) {
-            continue;
-        }
-        double v = 0.0;
-        switch (row.kind) {
-        case ps::Rs485FieldKind::Flag: v = static_cast<QCheckBox*>(row.editor)->isChecked() ? 1 : 0; break;
-        case ps::Rs485FieldKind::PowerDbm: v = static_cast<QComboBox*>(row.editor)->currentData().toInt(); break;
-        case ps::Rs485FieldKind::FrequencyHz:
-            v = std::round(static_cast<QDoubleSpinBox*>(row.editor)->value() * 1e6);
-            break;
-        case ps::Rs485FieldKind::Att31:
-        case ps::Rs485FieldKind::Att15:
-            v = std::round(static_cast<QDoubleSpinBox*>(row.editor)->value() * 2.0) / 2.0;
-            break;
-        }
-        values[key] = v;
-    }
-    json payload;
-    std::string error;
-    if (!ps::rs485SetPayload(module, values, payload, &error)) {
-        log(QString::fromStdString(error));
-        return;
-    }
-    send(ps::msg::Rs485Set, payload);
-}
-
-void PsTab::requestModuleStatus()
-{
-    const auto module = static_cast<ps::Rs485Module>(m_module->currentData().toInt());
-    send(ps::msg::Rs485Status, ps::rs485StatusPayload(module));
-}
-
-void PsTab::showModuleValues(const ps::Rs485Status& st)
-{
-    if (static_cast<int>(st.module) != m_module->currentData().toInt()) {
-        return;
-    }
-    for (auto& [key, row] : m_moduleRows) {
-        const auto it = st.values.find(key);
-        row.actual->setText(it == st.values.end() ? QStringLiteral("—") : fieldText(row.kind, it->second));
-        row.send->setChecked(false);
-    }
-    m_moduleStatus->setText(
-        QStringLiteral("Temp: %1, Lock: %2")
-            .arg(st.temp ? QStringLiteral("%1 °C").arg(*st.temp, 0, 'f', 1) : QStringLiteral("—"))
-            .arg(st.lock ? (*st.lock ? QStringLiteral("захват") : QStringLiteral("нет захвата"))
-                         : QStringLiteral("—")));
-}
-
 void PsTab::showCodes(const std::vector<ps::ChannelCodes>& codes)
 {
     for (const auto& c : codes) {
@@ -811,11 +622,6 @@ void PsTab::onResponse(const ps::Envelope& r, ps::Status status)
                 }
             }
         }
-    } else if (r.msg_type == ps::msg::Rs485Set || r.msg_type == ps::msg::Rs485Status) {
-        ps::Rs485Status st;
-        if (ps::Rs485Status::fromJson(r.payload, st, &error)) {
-            showModuleValues(st);
-        }
     }
     if (!error.empty()) {
         log(QStringLiteral("%1: ответ не разобран — %2").arg(type, QString::fromStdString(error)));
@@ -856,35 +662,21 @@ void PsTab::onTelemetry(const ps::Telemetry& t)
     }
 }
 
-void PsTab::onFrame(bool outgoing, const QString& channel, const QString& line)
-{
-    if (channel == QLatin1String("UDP") && !m_logTelemetry->isChecked()) {
-        return;
-    }
-    log(QStringLiteral("%1 %2 %3").arg(outgoing ? QStringLiteral("→") : QStringLiteral("←"), channel, line));
-}
-
 void PsTab::setSeriesActive(bool active)
 {
     if (active == m_seriesActive) {
         return;
     }
     m_seriesActive = active;
-    if (active && m_link->state() != PsLink::State::Disconnected) {
-        // PS держит одно соединение: на время серии его занимает контроллер.
-        m_reconnectAfterSeries = true;
-        m_link->disconnectFromPs();
-        log(QStringLiteral("Серия: связь вкладки с PS закрыта, PS управляет оркестратор"));
-    } else if (!active && m_reconnectAfterSeries) {
-        m_reconnectAfterSeries = false;
-        onConnectClicked();
-    }
+    // Связь с PS серия не трогает: подключение анализатора и ход серии на неё
+    // не влияют. Блокируются только ручные команды, пока идёт измерение.
+    log(active ? QStringLiteral("Идёт серия: ручные команды PS заблокированы, связь сохранена")
+               : QStringLiteral("Серия остановлена: ручные команды PS снова доступны"));
     refreshEnabled();
 }
 
 void PsTab::refreshEnabled()
 {
-    m_connect->setEnabled(!m_seriesActive);
     // Во время приёмки команды шлёт только она: ручные мешали бы её шагам.
     const bool checking = m_checkPage->isRunning();
     const bool ready = m_link->isReady() && !m_seriesActive && !checking;

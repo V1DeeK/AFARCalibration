@@ -154,66 +154,6 @@ TEST_CASE("PS: HEX-строка rs485_send", "[ps][protocol]")
     CHECK_FALSE(ps::hexBytesValid("0G"));
 }
 
-TEST_CASE("PS: модули RS-485 — поля и диапазоны", "[ps][rs485]")
-{
-    CHECK(ps::rs485Fields(ps::Rs485Module::MixerLo).size() == 10);
-    CHECK(ps::rs485Fields(ps::Rs485Module::CalibrationLo).size() == 10);
-    CHECK(ps::rs485Fields(ps::Rs485Module::VideoReceiver).size() == 12);
-    CHECK(ps::rs485Fields(ps::Rs485Module::Mixer).size() == 16);
-
-    using K = ps::Rs485FieldKind;
-    CHECK(ps::rs485ValueValid(K::PowerDbm, -4));
-    CHECK(ps::rs485ValueValid(K::PowerDbm, 5));
-    CHECK_FALSE(ps::rs485ValueValid(K::PowerDbm, 0));
-    CHECK(ps::rs485ValueValid(K::Att31, 31.5));
-    CHECK_FALSE(ps::rs485ValueValid(K::Att31, 32.0));
-    CHECK_FALSE(ps::rs485ValueValid(K::Att31, 0.25));
-    CHECK(ps::rs485ValueValid(K::Att15, 15.5));
-    CHECK_FALSE(ps::rs485ValueValid(K::Att15, 16.0));
-    CHECK(ps::rs485ValueValid(K::FrequencyHz, 5'500'000'000.0));
-    CHECK_FALSE(ps::rs485ValueValid(K::FrequencyHz, 7'000'000'001.0));
-    CHECK_FALSE(ps::rs485ValueValid(K::Flag, 2));
-}
-
-TEST_CASE("PS: команда rs485_set собирается только из допустимых полей", "[ps][rs485]")
-{
-    json p;
-    REQUIRE(ps::rs485SetPayload(ps::Rs485Module::MixerLo,
-                                {{"FREQ_ADF4355", 5'500'000'000.0}, {"ATT_2", 31.5}, {"P_RF_OUT_A", 5}},
-                                p));
-    CHECK(p.at("addr") == 1);
-    CHECK(p.at("FREQ_ADF4355") == 5'500'000'000LL);
-    CHECK(p.at("FREQ_ADF4355").is_number_integer());
-    CHECK(p.at("ATT_2") == 31.5);
-
-    std::string error;
-    CHECK_FALSE(ps::rs485SetPayload(ps::Rs485Module::MixerLo, {{"EN_VIDEO", 1}}, p, &error));
-    CHECK_THAT(error, ContainsSubstring("EN_VIDEO"));
-    CHECK(ps::rs485SetPayload(ps::Rs485Module::VideoReceiver, {{"EN_VIDEO", 1}}, p));
-    CHECK(p.at("addr") == 4);
-    CHECK_FALSE(ps::rs485SetPayload(ps::Rs485Module::Mixer, {{"IF1", 16}}, p, &error));
-    CHECK_FALSE(ps::rs485SetPayload(ps::Rs485Module::Mixer, {}, p, &error));
-
-    CHECK(ps::rs485StatusPayload(ps::Rs485Module::Mixer) == json{{"addr", 3}});
-}
-
-TEST_CASE("PS: ответ статуса модуля RS-485", "[ps][rs485]")
-{
-    const json in = json::parse(
-        R"({"status":"OK","addr":2,"FREQ_ADF4355":5500000000,"ATT_1":0.5,"Temp":41.5,"Lock":1,"extra":7})");
-    ps::Rs485Status st;
-    REQUIRE(ps::Rs485Status::fromJson(in, st));
-    CHECK(st.module == ps::Rs485Module::CalibrationLo);
-    CHECK(st.values.at("FREQ_ADF4355") == 5'500'000'000.0);
-    CHECK(st.values.count("extra") == 0);
-    REQUIRE(st.temp);
-    CHECK(*st.temp == 41.5);
-    REQUIRE(st.lock);
-    CHECK(*st.lock == 1);
-
-    CHECK_FALSE(ps::Rs485Status::fromJson(json{{"addr", 9}}, st));
-}
-
 TEST_CASE("PS: телеметрия по предложению контракта", "[ps][telemetry]")
 {
     const std::string dg =
@@ -244,7 +184,15 @@ TEST_CASE("Приёмка сервиса: шаги по контракту и о
     REQUIRE(steps.size() > 20);
     // Начинает с перевода в IDLE, заканчивает в IDLE; последняя запись кодов — 63/0.
     CHECK(steps.front().msgType == msg::GetState);
-    CHECK(steps.back().expectStatus == Status::NotSupported);
+    // Проверяется и TCP, и UDP: последним — итог по счётчикам телеметрии.
+    CHECK(steps.back().udp == UdpCheck::Counters);
+    int udpSteps = 0;
+    for (const auto& s : steps) {
+        udpSteps += s.udp == UdpCheck::Datagram ? 1 : 0;
+        CHECK(s.msgType != "rs485_set");
+        CHECK(s.msgType != "rs485_status");
+    }
+    CHECK(udpSteps >= 3);
     const CheckStep* lastCodes = nullptr;
     for (const auto& s : steps) {
         CHECK_FALSE(s.title.empty());
@@ -275,4 +223,39 @@ TEST_CASE("Приёмка сервиса: шаги по контракту и о
     const auto bad = evaluate(codes, Status::Ok, payload);
     CHECK(bad.verdict == CheckVerdict::Fail);
     CHECK(bad.detail.find("канал 5") != std::string::npos);
+}
+
+TEST_CASE("Приёмка сервиса: оценка датаграммы телеметрии", "[ps][check][telemetry]")
+{
+    using namespace afar::ps;
+    CheckStep step;
+    step.udp = UdpCheck::Datagram;
+    step.udpMode = "SERVICE";
+    const std::string ok =
+        R"({"msg_type":"telemetry","msg_class":"event","msg_count":7,"payload":{"time":1,"uptime":2,"mode":"SERVICE","state":"","devices":{},"temperature":{},"power":{}}})";
+    bool waitMore = true;
+    CHECK(evaluateTelemetry(step, ok, &waitMore).verdict == CheckVerdict::Pass);
+    CHECK_FALSE(waitMore);
+
+    // Исправная датаграмма с прежним режимом — ждать следующую, не ошибка формата.
+    std::string idle = ok;
+    idle.replace(idle.find("\"SERVICE\""), 9, "\"IDLE\"");
+    CHECK(evaluateTelemetry(step, idle, &waitMore).verdict == CheckVerdict::Fail);
+    CHECK(waitMore);
+
+    std::string noPower = ok;
+    noPower.replace(noPower.find(",\"power\":{}"), 11, "");
+    const auto r = evaluateTelemetry(step, noPower, &waitMore);
+    CHECK(r.verdict == CheckVerdict::Fail);
+    CHECK(r.detail == "нет объекта power");
+    CHECK_FALSE(waitMore);
+
+    CHECK(evaluateTelemetry(step, "{oops").verdict == CheckVerdict::Fail);
+    const std::string command =
+        R"({"msg_type":"get_state","msg_class":"command","msg_count":1,"payload":{}})";
+    CHECK(evaluateTelemetry(step, command).verdict == CheckVerdict::Fail);
+
+    std::string big = ok;
+    big.insert(big.find("\"power\""), "\"pad\":\"" + std::string(1400, 'x') + "\",");
+    CHECK(evaluateTelemetry(step, big).detail.find("фрагментация") != std::string::npos);
 }

@@ -54,6 +54,14 @@ public:
         return steps.back();
     }
 
+    void telemetry(std::string title, std::string mode, bool proposal = false)
+    {
+        CheckStep& s = add(std::move(title), msg::Telemetry, Status::Ok, "5");
+        s.udp = UdpCheck::Datagram;
+        s.udpMode = std::move(mode);
+        s.proposal = proposal;
+    }
+
     void state(std::string_view mode, std::string_view st = {})
     {
         json f{{"mode", std::string(mode)}};
@@ -102,9 +110,11 @@ std::vector<CheckStep> serviceCheckSteps()
     const auto safe = allChannels(0, kCodeMax);
 
     b.phase = "Связь";
-    b.add("PS отвечает", msg::GetState, Status::Ok, "3");
+    b.add("PS отвечает по TCP", msg::GetState, Status::Ok, "3");
+    b.telemetry("телеметрия приходит по UDP, формат §5", "");
     b.add("перевод в ожидание", msg::SetMode, Status::Ok, "3", json{{"mode", "IDLE"}});
     b.state("IDLE", "READY");
+    b.telemetry("телеметрия показывает IDLE", "IDLE");
     b.add("коды вне SERVICE — отказ", msg::SetPhaseAtten, Status::NotSupported, "4, 6",
           codesPayload(safe));
     b.add("АЦП вне SERVICE — отказ", msg::GetAdc, Status::NotSupported, "4, 6");
@@ -115,6 +125,7 @@ std::vector<CheckStep> serviceCheckSteps()
     b.add("переход в сервисный режим", msg::SetMode, Status::Ok, "3", json{{"mode", "SERVICE"}})
         .expectFields = json{{"mode", "SERVICE"}};
     b.state("SERVICE");
+    b.telemetry("телеметрия показывает SERVICE", "SERVICE");
 
     b.phase = "Приёмный тракт";
     b.add("чтение АЦП", msg::GetAdc, Status::Ok, "4.2");
@@ -157,18 +168,16 @@ std::vector<CheckStep> serviceCheckSteps()
     b.add("байты в линию", msg::Rs485Send, Status::Ok, "4.4", json{{"data", "01A3FF"}});
     b.add("нечётная HEX-строка — отказ", msg::Rs485Send, Status::InvalidArgument, "4.4",
           json{{"data", "ABC"}});
-    b.add("статус гетеродина смесителя", msg::Rs485Status, Status::Ok, "4.5",
-          rs485StatusPayload(Rs485Module::MixerLo))
-        .proposal = true;
-    b.steps.back().expectFields = json{{"addr", 1}};
-    b.add("неизвестный адрес модуля — отказ", msg::Rs485Status, Status::InvalidArgument, "4.5",
-          json{{"addr", 9}})
-        .proposal = true;
 
     b.phase = "Завершение";
     b.add("возврат в ожидание", msg::SetMode, Status::Ok, "3", json{{"mode", "IDLE"}});
     b.state("IDLE", "READY");
     b.add("сервисные команды снова отклоняются", msg::GetBeam, Status::NotSupported, "6");
+    b.telemetry("телеметрия снова показывает IDLE", "IDLE");
+    {
+        CheckStep& s = b.add("UDP без потерь и битых датаграмм за всю проверку", msg::Telemetry, Status::Ok, "5");
+        s.udp = UdpCheck::Counters;
+    }
     return b.steps;
 }
 
@@ -218,8 +227,67 @@ std::string verdictRu(CheckVerdict v)
     return {};
 }
 
+CheckResult evaluateTelemetry(const CheckStep& step, std::string_view datagram, bool* waitMore)
+{
+    if (waitMore) {
+        *waitMore = false;
+    }
+    Envelope env;
+    std::string error;
+    if (!decodeLine(datagram, env, &error)) {
+        return {CheckVerdict::Fail, "датаграмма не разобрана: " + error};
+    }
+    if (env.msg_type != msg::Telemetry || env.msg_class != MsgClass::Event) {
+        return {CheckVerdict::Fail, "msg_type " + env.msg_type + ", msg_class " +
+                                        std::string(toString(env.msg_class)) + ", ожидали telemetry / event"};
+    }
+    Telemetry t;
+    if (!Telemetry::fromJson(env.payload, t, &error)) {
+        return {CheckVerdict::Fail, error + " (time, uptime, mode, state)"};
+    }
+    for (const char* key : {"devices", "temperature", "power"}) {
+        const auto it = env.payload.find(key);
+        if (it == env.payload.end() || !it->is_object()) {
+            return {CheckVerdict::Fail, std::string("нет объекта ") + key};
+        }
+    }
+    if (datagram.size() > kTelemetryMtuBytes) {
+        return {CheckVerdict::Fail, "датаграмма " + std::to_string(datagram.size()) + " байт, больше " +
+                                        std::to_string(kTelemetryMtuBytes) + " (фрагментация IP)"};
+    }
+    if (!step.udpMode.empty() && std::string(toString(t.mode)) != step.udpMode) {
+        if (waitMore) {
+            *waitMore = true;
+        }
+        return {CheckVerdict::Fail, "mode в телеметрии " + std::string(toString(t.mode)) + ", ожидали " + step.udpMode};
+    }
+    return {CheckVerdict::Pass, {}};
+}
+
+std::string telemetryText(std::string_view datagram)
+{
+    Envelope env;
+    if (!decodeLine(datagram, env)) {
+        return "битая датаграмма, " + std::to_string(datagram.size()) + " байт";
+    }
+    std::string s = "№" + std::to_string(env.msg_count) + ", " + std::to_string(datagram.size()) + " байт";
+    for (const char* key : {"mode", "state", "uptime"}) {
+        if (const auto it = env.payload.find(key); it != env.payload.end()) {
+            s += std::string(", ") + key + "=" + show(*it);
+        }
+    }
+    return s;
+}
+
 std::string expectedText(const CheckStep& step)
 {
+    if (step.udp == UdpCheck::Datagram) {
+        return "датаграмма telemetry ≤ " + std::to_string(kTelemetryMtuBytes) + " байт" +
+               (step.udpMode.empty() ? std::string() : ", mode=" + step.udpMode);
+    }
+    if (step.udp == UdpCheck::Counters) {
+        return "потеряно 0, отброшено 0, принято > 0";
+    }
     std::string s(toString(step.expectStatus));
     for (const auto& [key, want] : step.expectFields.items()) {
         s += ", " + key + "=" + show(want);

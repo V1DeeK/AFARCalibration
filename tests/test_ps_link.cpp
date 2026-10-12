@@ -141,7 +141,7 @@ TEST_CASE("PS-связь: коды решётки записываются и ч
     CHECK(sim.codes()[0].ph == codes[0].ph);
 }
 
-TEST_CASE("PS-связь: АЦП и модули RS-485", "[ps][link]")
+TEST_CASE("PS-связь: АЦП и rs485_send", "[ps][link]")
 {
     app();
     PsSimulator sim;
@@ -158,22 +158,10 @@ TEST_CASE("PS-связь: АЦП и модули RS-485", "[ps][link]")
     CHECK(actual.lo <= adc.lo);
     CHECK(adc.lo - actual.lo < 1024);
 
-    json set;
-    REQUIRE(ps::rs485SetPayload(ps::Rs485Module::MixerLo,
-                                {{"FREQ_ADF4355", 5'500'000'000.0}, {"EN_ADF4355", 1}}, set));
-    const auto* setReply = await(r, link.sendCommand(ps::msg::Rs485Set, set));
-    REQUIRE(setReply);
-    REQUIRE(setReply->second == ps::Status::Ok);
-
-    const auto* status = await(r, link.sendCommand(ps::msg::Rs485Status,
-                                                   ps::rs485StatusPayload(ps::Rs485Module::MixerLo)));
-    REQUIRE(status);
-    ps::Rs485Status st;
-    REQUIRE(ps::Rs485Status::fromJson(status->first.payload, st));
-    CHECK(st.values.at("FREQ_ADF4355") == 5'500'000'000.0);
-    REQUIRE(st.lock);
-    CHECK(*st.lock == 1);
-    CHECK(st.temp.has_value());
+    const auto* sent = await(r, link.sendCommand(ps::msg::Rs485Send, json{{"data", "01A3FF"}}));
+    REQUIRE(sent);
+    CHECK(sent->second == ps::Status::Ok);
+    CHECK(sent->first.payload.at("data") == "01A3FF");
 }
 
 TEST_CASE("PS-связь: молчащий PS — тайм-аут команды и разрыв по keep_alive", "[ps][link]")

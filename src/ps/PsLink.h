@@ -25,7 +25,7 @@ public:
     Q_ENUM(State)
 
     struct Timeouts {
-        int keepAliveIdleMs = 5000;  ///< keep_alive при отсутствии обмена
+        int keepAliveIdleMs = afar::ps::kDefaultKeepAliveSec * 1000;  ///< keep_alive при простое канала
         int commandMs = 2000;        ///< ответ на команду
         int connectMs = 3000;        ///< HW-VNA-04 по аналогии: 3 с на соединение
         int reconnectMs = 3000;

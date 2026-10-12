@@ -12,19 +12,6 @@ using nlohmann::json;
 
 namespace {
 
-ps::Rs485Values defaultModule(ps::Rs485Module m)
-{
-    ps::Rs485Values v;
-    for (const auto& f : ps::rs485Fields(m)) {
-        double value = 0.0;
-        if (f.kind == ps::Rs485FieldKind::PowerDbm) {
-            value = -4.0;
-        }
-        v[std::string(f.key)] = value;
-    }
-    return v;
-}
-
 }  // namespace
 
 PsSimulator::PsSimulator(QObject* parent)
@@ -35,9 +22,6 @@ PsSimulator::PsSimulator(QObject* parent)
 {
     m_startMs = QDateTime::currentMSecsSinceEpoch();
     resetService();
-    for (int a = 1; a <= 4; ++a) {
-        m_modules[a] = defaultModule(static_cast<ps::Rs485Module>(a));
-    }
     m_tlmTimer.setInterval(1000);
     connect(m_server, &QTcpServer::newConnection, this, &PsSimulator::onNewConnection);
     connect(&m_tlmTimer, &QTimer::timeout, this, &PsSimulator::sendTelemetry);
@@ -163,21 +147,6 @@ json PsSimulator::channelsJson() const
     return payload;
 }
 
-json PsSimulator::moduleJson(ps::Rs485Module m) const
-{
-    const int addr = static_cast<int>(m);
-    json p;
-    ps::rs485SetPayload(m, m_modules.at(addr), p);
-    if (m == ps::Rs485Module::MixerLo || m == ps::Rs485Module::CalibrationLo ||
-        m == ps::Rs485Module::VideoReceiver) {
-        const auto& v = m_modules.at(addr);
-        const bool on = v.at("EN_ADF4355") != 0.0 && v.at("FREQ_ADF4355") > 0.0;
-        p["Lock"] = on ? 1 : 0;
-    }
-    p["Temp"] = 35.0 + addr;
-    return p;
-}
-
 void PsSimulator::handle(const ps::Envelope& cmd)
 {
     const std::string& t = cmd.msg_type;
@@ -246,8 +215,7 @@ void PsSimulator::handle(const ps::Envelope& cmd)
     const bool serviceCommand =
         t == ps::msg::SetPhaseAtten || t == ps::msg::GetPhaseAtten || t == ps::msg::SetAdc ||
         t == ps::msg::GetAdc || t == ps::msg::SetBeamAzimuth || t == ps::msg::SetBeam ||
-        t == ps::msg::GetBeam || t == ps::msg::Rs485Send || t == ps::msg::Rs485Set ||
-        t == ps::msg::Rs485Status;
+        t == ps::msg::GetBeam || t == ps::msg::Rs485Send;
     if (!serviceCommand) {
         reply(cmd, ps::Status::NotSupported);
         return;
@@ -316,36 +284,6 @@ void PsSimulator::handle(const ps::Envelope& cmd)
             return;
         }
         reply(cmd, ps::Status::Ok, json{{"data", data->get<std::string>()}});
-    } else if (t == ps::msg::Rs485Set || t == ps::msg::Rs485Status) {
-        const auto addr = in.find("addr");
-        ps::Rs485Module m{};
-        if (addr == in.end() || !addr->is_number_integer() ||
-            !ps::rs485ModuleFromAddr(addr->get<int>(), m)) {
-            reply(cmd, ps::Status::InvalidArgument);
-            return;
-        }
-        if (t == ps::msg::Rs485Set) {
-            ps::Rs485Values values;
-            for (const auto& [key, value] : in.items()) {
-                if (key == "addr") {
-                    continue;
-                }
-                if (!value.is_number()) {
-                    reply(cmd, ps::Status::InvalidArgument);
-                    return;
-                }
-                values[key] = value.get<double>();
-            }
-            json check;
-            if (!ps::rs485SetPayload(m, values, check)) {
-                reply(cmd, ps::Status::InvalidArgument);
-                return;
-            }
-            for (const auto& [key, value] : values) {
-                m_modules[static_cast<int>(m)][key] = value;
-            }
-        }
-        reply(cmd, ps::Status::Ok, moduleJson(m));
     }
 }
 

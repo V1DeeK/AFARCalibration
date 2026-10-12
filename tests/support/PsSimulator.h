@@ -8,14 +8,13 @@
 #include <QUdpSocket>
 
 #include <array>
-#include <map>
 
 class QTcpServer;
 class QTcpSocket;
 
-/// Программный имитатор PS изделия (ТЗ т. 12.1) для тестов и работы без стенда.
-/// Отвечает по контракту docs/contracts/ps-json-protocol.md: hello, keep_alive,
-/// set_mode/get_state, сервисные команды, модули RS-485, UDP-телеметрия.
+/// Ответчик PS для автотестов: в программу не входит, программа работает
+/// только с PS изделия. Отвечает по контракту docs/contracts/ps-json-protocol.md:
+/// hello, keep_alive, set_mode/get_state, сервисные команды, UDP-телеметрия.
 /// Одно соединение; новое закрывает старое.
 class PsSimulator final : public QObject {
     Q_OBJECT
@@ -50,7 +49,6 @@ private:
                nlohmann::json payload = nlohmann::json::object());
     void sendTelemetry();
     [[nodiscard]] nlohmann::json channelsJson() const;
-    [[nodiscard]] nlohmann::json moduleJson(afar::ps::Rs485Module m) const;
     void resetService();
 
     QTcpServer* m_server = nullptr;
@@ -73,5 +71,4 @@ private:
     std::string m_beamSrc = "none";
     double m_beamAz = 0.0;
     int m_beam = 0;
-    std::map<int, afar::ps::Rs485Values> m_modules;
 };

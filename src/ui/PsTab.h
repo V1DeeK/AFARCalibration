@@ -10,7 +10,7 @@
 
 class PsPacketPage;
 class PsServiceCheckPage;
-class PsSimulator;
+class PsTrafficView;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -25,7 +25,8 @@ class QTabWidget;
 /// Вкладка «Параметры PS»: связь с PS изделия, режим, телеметрия и ручные
 /// сервисные команды (docs/contracts/ps-json-protocol.md). Все действия
 /// выполняет PS; вкладка только формирует команды и показывает ответы.
-/// Во время серии ручные команды заблокированы: изделием владеет оркестратор.
+/// Программа только клиент PS: подключается по адресу и шлёт JSON-команды.
+/// Во время серии ручные команды заблокированы, связь с PS при этом не рвётся.
 class PsTab final : public QWidget {
     Q_OBJECT
 
@@ -33,11 +34,12 @@ public:
     explicit PsTab(QWidget* parent = nullptr);
     ~PsTab() override;
 
-    /// Серия идёт — ручные команды запрещены (ТЗ т. 8.2).
+    /// Серия идёт — ручные команды запрещены (ТЗ т. 8.2); связь остаётся.
     void setSeriesActive(bool active);
     [[nodiscard]] PsLink* link() const { return m_link; }
     [[nodiscard]] PsServiceCheckPage* checkPage() const { return m_checkPage; }
     [[nodiscard]] PsPacketPage* packetPage() const { return m_packetPage; }
+    [[nodiscard]] PsTrafficView* trafficView() const { return m_traffic; }
 
     /// Набор кодов 16 каналов в файле — payload set_phase_atten ({"ch": […]}).
     bool saveCodes(const QString& path, QString* error = nullptr) const;
@@ -48,51 +50,36 @@ signals:
     void summaryChanged(const QString& text, bool ok);
 
 private:
-    struct ModuleRow {
-        QCheckBox* send = nullptr;
-        QWidget* editor = nullptr;
-        QLabel* actual = nullptr;
-        afar::ps::Rs485FieldKind kind{};
-    };
-
     QWidget* buildConnectionBox();
     QWidget* buildModeBox();
     QWidget* buildTelemetryBox();
     QWidget* buildCodesPage();
     QWidget* buildAdcPage();
     QWidget* buildBeamPage();
-    QWidget* buildModulesPage();
     QWidget* buildRawPage();
 
     void onConnectClicked();
     void onLinkStateChanged(PsLink::State state);
     void onResponse(const afar::ps::Envelope& response, afar::ps::Status status);
     void onTelemetry(const afar::ps::Telemetry& t);
-    void onFrame(bool outgoing, const QString& channel, const QString& line);
 
     void send(std::string_view msgType, const nlohmann::json& payload = nlohmann::json::object());
     void writeCodes();
     void applyAdc();
-    void writeModule();
-    void requestModuleStatus();
-    void rebuildModuleForm();
-    void showModuleValues(const afar::ps::Rs485Status& st);
     void showCodes(const std::vector<afar::ps::ChannelCodes>& codes);
     void setMode(afar::ps::Mode mode, const QString& state);
     void refreshEnabled();
     void log(const QString& text);
 
     PsLink* m_link = nullptr;
-    PsSimulator* m_sim = nullptr;
     bool m_seriesActive = false;
-    bool m_reconnectAfterSeries = false;
     bool m_modeKnown = false;
     afar::ps::Mode m_mode = afar::ps::Mode::Idle;
 
     QLineEdit* m_host = nullptr;
     QSpinBox* m_port = nullptr;
     QSpinBox* m_tlmPort = nullptr;
-    QCheckBox* m_useSim = nullptr;
+    QSpinBox* m_keepAlive = nullptr;
     QPushButton* m_connect = nullptr;
     QLabel* m_linkState = nullptr;
 
@@ -121,15 +108,11 @@ private:
     QSpinBox* m_beamId = nullptr;
     QLabel* m_beamState = nullptr;
 
-    QComboBox* m_module = nullptr;
-    QTableWidget* m_moduleTable = nullptr;
-    std::map<std::string, ModuleRow> m_moduleRows;
-    QLabel* m_moduleStatus = nullptr;
 
     QLineEdit* m_rawHex = nullptr;
 
+    PsTrafficView* m_traffic = nullptr;
     QPlainTextEdit* m_log = nullptr;
-    QCheckBox* m_logTelemetry = nullptr;
 
     PsServiceCheckPage* m_checkPage = nullptr;
     PsPacketPage* m_packetPage = nullptr;
