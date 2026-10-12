@@ -10,6 +10,7 @@ class ConnectionBar;
 class DataFormatsTab;
 class MeasureTab;
 class MeasureWorker;
+class PsTab;
 class QLabel;
 class QProgressBar;
 class QPushButton;
@@ -126,6 +127,7 @@ private:
     CodeMatrixTab* m_matrix = nullptr;
     DataFormatsTab* m_formats = nullptr;
     AcceptanceAtTab* m_acceptance = nullptr;
+    PsTab* m_ps = nullptr;
     QPushButton* m_wizardBtn = nullptr;
     QPushButton* m_start = nullptr;
     QPushButton* m_pause = nullptr;

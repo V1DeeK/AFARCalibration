@@ -170,6 +170,37 @@ target_include_directories(afar_sim PUBLIC
 target_link_libraries(afar_sim PUBLIC afar_interfaces)
 afar_enable_warnings(afar_sim)
 
+# Обмен с PS изделия (docs/contracts/ps-json-protocol.md): кодек без Qt и
+# асинхронная связь TCP + UDP на Qt Network.
+add_library(afar_ps_protocol STATIC
+    ps/PsProtocol.cpp
+    ps/PsProtocol.h
+)
+target_include_directories(afar_ps_protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ps)
+target_link_libraries(afar_ps_protocol PUBLIC nlohmann_json::nlohmann_json)
+afar_enable_warnings(afar_ps_protocol)
+
+find_package(Qt6 REQUIRED COMPONENTS Network)
+
+add_library(afar_ps STATIC
+    ps/PsLink.cpp
+    ps/PsLink.h
+)
+set_target_properties(afar_ps PROPERTIES AUTOMOC ON)
+target_include_directories(afar_ps PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ps)
+target_link_libraries(afar_ps PUBLIC afar_ps_protocol Qt6::Network)
+afar_enable_warnings(afar_ps)
+
+# Имитатор PS для тестов и работы без стенда (ТЗ т. 12.1).
+add_library(afar_ps_sim STATIC
+    sim/PsSimulator.cpp
+    sim/PsSimulator.h
+)
+set_target_properties(afar_ps_sim PROPERTIES AUTOMOC ON)
+target_include_directories(afar_ps_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sim)
+target_link_libraries(afar_ps_sim PUBLIC afar_ps_protocol Qt6::Network)
+afar_enable_warnings(afar_ps_sim)
+
 add_library(afar_dut STATIC
     dut/StubDutController.cpp
 )
@@ -213,6 +244,8 @@ add_executable(AfarRxCalibrationStudio WIN32 MACOSX_BUNDLE
     ui/StartWizard.h
     ui/MeasureWorker.cpp
     ui/MeasureWorker.h
+    ui/PsTab.cpp
+    ui/PsTab.h
 )
 target_include_directories(AfarRxCalibrationStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -235,6 +268,8 @@ target_link_libraries(AfarRxCalibrationStudio PRIVATE
     afar_data
     afar_cal
     afar_qc
+    afar_ps
+    afar_ps_sim
 )
 afar_enable_warnings(AfarRxCalibrationStudio)
 

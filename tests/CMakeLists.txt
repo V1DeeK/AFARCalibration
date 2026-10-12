@@ -188,3 +188,26 @@ set_target_properties(test_ui_interactions PROPERTIES AUTOMOC ON)
 afar_enable_warnings(test_ui_interactions)
 add_test(NAME ui_interactions COMMAND test_ui_interactions)
 set_tests_properties(ui_interactions PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Обмен с PS изделия: кодек (без Qt) и связь с имитатором PS на localhost.
+add_executable(test_ps_protocol test_ps_protocol.cpp)
+target_link_libraries(test_ps_protocol PRIVATE Catch2::Catch2WithMain afar_ps_protocol)
+afar_enable_warnings(test_ps_protocol)
+add_test(NAME ps_protocol COMMAND test_ps_protocol)
+
+add_executable(test_ps_link test_ps_link.cpp)
+target_link_libraries(test_ps_link PRIVATE Catch2::Catch2WithMain afar_ps afar_ps_sim)
+afar_enable_warnings(test_ps_link)
+add_test(NAME ps_link COMMAND test_ps_link)
+
+add_executable(test_ps_tab
+    test_ps_tab.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsTab.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsTab.h
+)
+target_include_directories(test_ps_tab PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
+target_link_libraries(test_ps_tab PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_ps afar_ps_sim)
+set_target_properties(test_ps_tab PROPERTIES AUTOMOC ON)
+afar_enable_warnings(test_ps_tab)
+add_test(NAME ps_tab COMMAND test_ps_tab)
+set_tests_properties(ps_tab PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
