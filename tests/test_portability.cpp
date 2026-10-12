@@ -5,6 +5,7 @@
 #include "ProcessMetrics.h"
 
 #include <clocale>
+#include <cmath>
 #include <string>
 
 using Catch::Approx;
@@ -49,6 +50,22 @@ TEST_CASE("parse_double accepts SCPI and file numbers with a dot", "[portability
     REQUIRE(v == Approx(0.0));
 }
 
+TEST_CASE("parse_double reads nan, inf and denormals written to LUT files", "[portability]")
+{
+    double v = 0.0;
+    REQUIRE(afar::parse_double("nan", v));
+    REQUIRE(std::isnan(v));
+    REQUIRE(afar::parse_double("inf", v));
+    REQUIRE(std::isinf(v));
+    REQUIRE(v > 0.0);
+    REQUIRE(afar::parse_double("-inf", v));
+    REQUIRE(std::isinf(v));
+    REQUIRE(v < 0.0);
+    REQUIRE(afar::parse_double("1e-320", v));
+    REQUIRE(v > 0.0);
+    REQUIRE(v < 1e-300);
+}
+
 TEST_CASE("parse_double rejects partial and malformed numbers", "[portability]")
 {
     double v = 7.0;
@@ -57,6 +74,7 @@ TEST_CASE("parse_double rejects partial and malformed numbers", "[portability]")
     REQUIRE_FALSE(afar::parse_double("1.5abc", v));
     REQUIRE_FALSE(afar::parse_double("abc", v));
     REQUIRE_FALSE(afar::parse_double("+-1", v));
+    REQUIRE_FALSE(afar::parse_double(" 1", v));
     REQUIRE(v == Approx(7.0));
 }
 
