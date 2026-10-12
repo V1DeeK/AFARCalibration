@@ -175,6 +175,8 @@ afar_enable_warnings(afar_sim)
 add_library(afar_ps_protocol STATIC
     ps/PsProtocol.cpp
     ps/PsProtocol.h
+    ps/PsServiceCheck.cpp
+    ps/PsServiceCheck.h
 )
 target_include_directories(afar_ps_protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ps)
 target_link_libraries(afar_ps_protocol PUBLIC nlohmann_json::nlohmann_json)
@@ -185,6 +187,8 @@ find_package(Qt6 REQUIRED COMPONENTS Network)
 add_library(afar_ps STATIC
     ps/PsLink.cpp
     ps/PsLink.h
+    ps/PsServiceCheckRunner.cpp
+    ps/PsServiceCheckRunner.h
 )
 set_target_properties(afar_ps PROPERTIES AUTOMOC ON)
 target_include_directories(afar_ps PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ps)
@@ -258,6 +262,10 @@ add_executable(AfarRxCalibrationStudio WIN32 MACOSX_BUNDLE
     ui/MeasureWorker.h
     ui/PsTab.cpp
     ui/PsTab.h
+    ui/PsPacketPage.cpp
+    ui/PsPacketPage.h
+    ui/PsServiceCheckPage.cpp
+    ui/PsServiceCheckPage.h
 )
 target_include_directories(AfarRxCalibrationStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

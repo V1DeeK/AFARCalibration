@@ -234,3 +234,45 @@ TEST_CASE("PS: совместимость версий", "[ps][protocol]")
     CHECK_FALSE(ps::versionsCompatible("2.0", "1.0"));
     CHECK_FALSE(ps::versionsCompatible("", "1.0"));
 }
+
+#include "PsServiceCheck.h"
+
+TEST_CASE("Приёмка сервиса: шаги по контракту и оценка ответа", "[ps][check]")
+{
+    using namespace afar::ps;
+    const auto steps = serviceCheckSteps();
+    REQUIRE(steps.size() > 20);
+    // Начинает с перевода в IDLE, заканчивает в IDLE; последняя запись кодов — 63/0.
+    CHECK(steps.front().msgType == msg::GetState);
+    CHECK(steps.back().expectStatus == Status::NotSupported);
+    const CheckStep* lastCodes = nullptr;
+    for (const auto& s : steps) {
+        CHECK_FALSE(s.title.empty());
+        if (s.msgType == msg::SetPhaseAtten && s.expectStatus == Status::Ok) {
+            lastCodes = &s;
+        }
+    }
+    REQUIRE(lastCodes);
+    REQUIRE(lastCodes->expectCodes.size() == kChannels);
+    for (const auto& c : lastCodes->expectCodes) {
+        CHECK(c.att == kCodeMax);
+        CHECK(c.ph == 0);
+    }
+
+    CheckStep beam;
+    beam.msgType = std::string(msg::GetBeam);
+    beam.expectFields = nlohmann::json{{"src", "azimuth"}, {"az", 12.5}};
+    CHECK(evaluate(beam, Status::Ok, {{"src", "azimuth"}, {"az", 12.5}}).verdict == CheckVerdict::Pass);
+    CHECK(evaluate(beam, Status::Ok, {{"src", "azimuth"}, {"az", 12.4}}).verdict == CheckVerdict::Fail);
+    CHECK(evaluate(beam, Status::Ok, {{"src", "azimuth"}}).detail == "в ответе нет поля az");
+    CHECK(evaluate(beam, Status::Busy, {}).verdict == CheckVerdict::Fail);
+
+    CheckStep codes = *lastCodes;
+    nlohmann::json payload;
+    REQUIRE(channelsToJson(codes.expectCodes, payload));
+    CHECK(evaluate(codes, Status::Ok, payload).verdict == CheckVerdict::Pass);
+    payload["ch"][4]["att"] = 62;
+    const auto bad = evaluate(codes, Status::Ok, payload);
+    CHECK(bad.verdict == CheckVerdict::Fail);
+    CHECK(bad.detail.find("канал 5") != std::string::npos);
+}

@@ -8,6 +8,8 @@
 #include <map>
 #include <vector>
 
+class PsPacketPage;
+class PsServiceCheckPage;
 class PsSimulator;
 class QCheckBox;
 class QComboBox;
@@ -34,6 +36,12 @@ public:
     /// Серия идёт — ручные команды запрещены (ТЗ т. 8.2).
     void setSeriesActive(bool active);
     [[nodiscard]] PsLink* link() const { return m_link; }
+    [[nodiscard]] PsServiceCheckPage* checkPage() const { return m_checkPage; }
+    [[nodiscard]] PsPacketPage* packetPage() const { return m_packetPage; }
+
+    /// Набор кодов 16 каналов в файле — payload set_phase_atten ({"ch": […]}).
+    bool saveCodes(const QString& path, QString* error = nullptr) const;
+    bool loadCodes(const QString& path, QString* error = nullptr);
 
 signals:
     /// Короткий итог для строки соединений главного окна.
@@ -122,6 +130,9 @@ private:
 
     QPlainTextEdit* m_log = nullptr;
     QCheckBox* m_logTelemetry = nullptr;
+
+    PsServiceCheckPage* m_checkPage = nullptr;
+    PsPacketPage* m_packetPage = nullptr;
 
     std::vector<QWidget*> m_serviceControls;
 };

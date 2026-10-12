@@ -204,6 +204,10 @@ add_executable(test_ps_tab
     test_ps_tab.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/PsTab.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/PsTab.h
+    ${PROJECT_SOURCE_DIR}/src/ui/PsPacketPage.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsPacketPage.h
+    ${PROJECT_SOURCE_DIR}/src/ui/PsServiceCheckPage.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsServiceCheckPage.h
 )
 target_include_directories(test_ps_tab PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
 target_link_libraries(test_ps_tab PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_ps afar_ps_sim)

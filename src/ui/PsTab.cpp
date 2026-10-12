@@ -1,11 +1,15 @@
 #include "PsTab.h"
 
+#include "PsPacketPage.h"
+#include "PsServiceCheckPage.h"
 #include "PsSimulator.h"
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDoubleSpinBox>
+#include <QFile>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -72,6 +76,10 @@ PsTab::PsTab(QWidget* parent)
     m_pages->addTab(buildBeamPage(), QStringLiteral("Луч"));
     m_pages->addTab(buildModulesPage(), QStringLiteral("Модули RS-485"));
     m_pages->addTab(buildRawPage(), QStringLiteral("RS-485 HEX"));
+    m_packetPage = new PsPacketPage(m_link, this);
+    m_pages->addTab(m_packetPage, QStringLiteral("Пакет"));
+    m_checkPage = new PsServiceCheckPage(m_link, this);
+    m_pages->addTab(m_checkPage, QStringLiteral("Приёмка"));
     middle->addWidget(m_pages, 3);
     middle->addWidget(buildTelemetryBox(), 2);
     root->addLayout(middle, 1);
@@ -97,6 +105,8 @@ PsTab::PsTab(QWidget* parent)
     connect(m_link, &PsLink::commandTimedOut, this, [this](const QString& type, int count) {
         log(QStringLiteral("Нет ответа на %1 #%2").arg(type).arg(count));
     });
+
+    connect(m_checkPage, &PsServiceCheckPage::runningChanged, this, [this](bool) { refreshEnabled(); });
 
     onLinkStateChanged(PsLink::State::Disconnected);
 }
@@ -236,8 +246,32 @@ QWidget* PsTab::buildCodesPage()
     fill->addStretch(1);
     fill->addWidget(m_writeCodes);
     fill->addWidget(m_readCodes);
+    auto* files = new QHBoxLayout;
+    auto* saveBtn = new QPushButton(QStringLiteral("Сохранить набор…"), page);
+    auto* loadBtn = new QPushButton(QStringLiteral("Загрузить набор…"), page);
+    files->addWidget(saveBtn);
+    files->addWidget(loadBtn);
+    files->addStretch(1);
     layout->addWidget(m_codes, 1);
     layout->addLayout(fill);
+    layout->addLayout(files);
+
+    const QString filter = QStringLiteral("Коды решётки (*.json)");
+    connect(saveBtn, &QPushButton::clicked, this, [this, filter] {
+        const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Сохранить набор кодов"),
+                                                          QStringLiteral("codes.json"), filter);
+        QString error;
+        if (!path.isEmpty() && !saveCodes(path, &error)) {
+            log(error);
+        }
+    });
+    connect(loadBtn, &QPushButton::clicked, this, [this, filter] {
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Загрузить набор кодов"), QString(), filter);
+        QString error;
+        if (!path.isEmpty() && !loadCodes(path, &error)) {
+            log(error);
+        }
+    });
 
     connect(fillBtn, &QPushButton::clicked, this, [this] {
         for (int row = 0; row < ps::kChannels; ++row) {
@@ -573,6 +607,60 @@ void PsTab::writeCodes()
     send(ps::msg::SetPhaseAtten, payload);
 }
 
+bool PsTab::saveCodes(const QString& path, QString* error) const
+{
+    std::vector<ps::ChannelCodes> codes;
+    for (int row = 0; row < ps::kChannels; ++row) {
+        codes.push_back({row + 1, static_cast<QSpinBox*>(m_codes->cellWidget(row, 1))->value(),
+                         static_cast<QSpinBox*>(m_codes->cellWidget(row, 2))->value()});
+    }
+    json payload;
+    std::string why;
+    if (!ps::channelsToJson(codes, payload, &why)) {
+        if (error) {
+            *error = QString::fromStdString(why);
+        }
+        return false;
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        if (error) {
+            *error = QStringLiteral("Набор кодов не сохранён: %1").arg(f.errorString());
+        }
+        return false;
+    }
+    f.write(QByteArray::fromStdString(payload.dump(2) + "\n"));
+    return true;
+}
+
+bool PsTab::loadCodes(const QString& path, QString* error)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        if (error) {
+            *error = QStringLiteral("Набор кодов не прочитан: %1").arg(f.errorString());
+        }
+        return false;
+    }
+    // Набор на 16 каналов — сотни байт; больше — не наш файл.
+    const QByteArray bytes = f.read(64 * 1024);
+    const json payload = json::parse(bytes.toStdString(), nullptr, false);
+    std::vector<ps::ChannelCodes> codes;
+    std::string why = "файл не JSON";
+    if (payload.is_discarded() || !ps::channelsFromJson(payload, codes, &why)) {
+        if (error) {
+            *error = QStringLiteral("Набор кодов отклонён: %1").arg(QString::fromStdString(why));
+        }
+        return false;
+    }
+    for (const auto& c : codes) {
+        static_cast<QSpinBox*>(m_codes->cellWidget(c.n - 1, 1))->setValue(c.ph);
+        static_cast<QSpinBox*>(m_codes->cellWidget(c.n - 1, 2))->setValue(c.att);
+    }
+    log(QStringLiteral("Набор кодов загружен: %1").arg(path));
+    return true;
+}
+
 void PsTab::applyAdc()
 {
     ps::AdcParams adc;
@@ -797,8 +885,12 @@ void PsTab::setSeriesActive(bool active)
 void PsTab::refreshEnabled()
 {
     m_connect->setEnabled(!m_seriesActive);
-    const bool ready = m_link->isReady() && !m_seriesActive;
+    // Во время приёмки команды шлёт только она: ручные мешали бы её шагам.
+    const bool checking = m_checkPage->isRunning();
+    const bool ready = m_link->isReady() && !m_seriesActive && !checking;
     const bool service = ready && m_modeKnown && m_mode == ps::Mode::Service;
+    m_checkPage->setAllowed(m_link->isReady() && !m_seriesActive);
+    m_packetPage->setAllowed(ready);
     m_toService->setEnabled(ready && (!m_modeKnown || m_mode == ps::Mode::Idle));
     m_toIdle->setEnabled(ready && m_modeKnown && m_mode != ps::Mode::Idle);
     m_getState->setEnabled(ready);
