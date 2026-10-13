@@ -124,7 +124,7 @@ void SpectrumOpenGLWidget::loadSettings() {
     state_.bandwidth_hz.store(settings.value(QStringLiteral("bandwidth_hz"),
                                               state_.bandwidth_hz.load()).toUInt());
     state_.center_freq_hz.store(settings.value(QStringLiteral("center_freq_hz"),
-                                                state_.center_freq_hz.load()).toULongLong());
+                                                static_cast<qulonglong>(state_.center_freq_hz.load())).toULongLong());
     state_.fft_size.store(settings.value(QStringLiteral("fft_size"), state_.fft_size.load()).toInt());
     state_.rf_port_idx.store(settings.value(QStringLiteral("rf_port"), state_.rf_port_idx.load()).toInt());
     state_.chan_mode.store(static_cast<PlutoChannelMode>(qBound(
