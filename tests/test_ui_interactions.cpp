@@ -39,7 +39,9 @@ QApplication& application()
     static int argc = 1;
     static char name[] = "test_ui_interactions";
     static char* argv[] = {name, nullptr};
-    static QApplication app(argc, argv);
+    // Намеренно не уничтожается: статический QApplication разрушался бы после
+    // внутренних статиков Qt и ронял процесс при выходе (Linux, Qt 6.4+).
+    static QApplication& app = *new QApplication(argc, argv);
     app.setOrganizationName(QStringLiteral("AFAR Tests"));
     app.setApplicationName(QStringLiteral("AFAR UI Interactions Tests"));
     return app;
@@ -129,12 +131,13 @@ TEST_CASE("work modes distinguish passive demo and unavailable real calibration"
     auto* controllers = bar.findChild<QComboBox*>(QStringLiteral("controllerBackend"));
     REQUIRE(controllers != nullptr);
     REQUIRE(controllers->findData(0) >= 0);
-    const int realRow = controllers->findData(2);
-    REQUIRE(realRow >= 0);
+    // Реальный контроллер — PS изделия, он доступен.
+    const int psRow = controllers->findData(3);
+    REQUIRE(psRow >= 0);
     auto* controllerModel = qobject_cast<QStandardItemModel*>(controllers->model());
     REQUIRE(controllerModel != nullptr);
-    REQUIRE(controllerModel->item(realRow) != nullptr);
-    CHECK_FALSE(controllerModel->item(realRow)->isEnabled());
+    REQUIRE(controllerModel->item(psRow) != nullptr);
+    CHECK(controllerModel->item(psRow)->isEnabled());
 }
 
 TEST_CASE("VNA timeouts are collapsed until the engineer expands them", "[ui]")

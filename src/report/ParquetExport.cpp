@@ -1,6 +1,7 @@
 #include "ParquetExport.h"
 
 #include "FileCommit.h"
+#include "NumberText.h"
 
 #include "InverseLut.h"
 #include "Normalize.h"
@@ -120,7 +121,7 @@ bool parseNum(std::string_view s, T& out)
 {
     try {
         if constexpr (std::is_same_v<T, double>) {
-            out = std::stod(std::string(s));
+            return afar::parse_double(s, out);
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
             out = static_cast<T>(std::stoull(std::string(s)));
         } else if constexpr (std::is_same_v<T, std::uint16_t>) {

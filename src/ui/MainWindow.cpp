@@ -6,6 +6,7 @@
 #include "DataFormatsTab.h"
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
+#include "PsTab.h"
 #include "RunConfig.h"
 #include "RunStateMachine.h"
 #include "StartWizard.h"
@@ -21,6 +22,7 @@
 #include <QFrame>
 #include <QFileDialog>
 #include <QGroupBox>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -48,6 +50,29 @@
 #ifndef AFAR_EXAMPLES_DIR
 #define AFAR_EXAMPLES_DIR ""
 #endif
+
+namespace {
+
+/// Каталог примеров: рядом с exe (Windows/Linux-поставка), в Resources
+/// бандла macOS, в share/ после установки; иначе — исходники сборки.
+std::filesystem::path examplesDirectory()
+{
+    const QDir appDir(QCoreApplication::applicationDirPath());
+    for (const auto* relative : {"examples", "../Resources/examples",
+                                 "../share/AfarRxCalibrationStudio/examples"}) {
+        const QString candidate = QDir::cleanPath(appDir.filePath(QString::fromLatin1(relative)));
+        if (QFileInfo(candidate).isDir()) {
+#ifdef _WIN32
+            return std::filesystem::path(candidate.toStdWString());
+#else
+            return std::filesystem::path(candidate.toStdString());
+#endif
+        }
+    }
+    return std::filesystem::path(AFAR_EXAMPLES_DIR);
+}
+
+}  // namespace
 
 MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     : QMainWindow(parent), m_spectrumEngine(&spectrumEngine)
@@ -115,6 +140,8 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     tabs->addTab(m_matrix, QStringLiteral("Матрица кодов"));
     tabs->addTab(m_formats, QStringLiteral("Форматы данных"));
     tabs->addTab(m_acceptance, QStringLiteral("Приёмка AT"));
+    m_ps = new PsTab(tabs);
+    tabs->addTab(m_ps, QStringLiteral("Параметры PS"));
 
     auto* cycle = new QFrame(root);
     cycle->setFrameShape(QFrame::StyledPanel);
@@ -461,7 +488,7 @@ MainWindow::~MainWindow()
 
 void MainWindow::loadExampleDefaults()
 {
-    const std::filesystem::path examples(AFAR_EXAMPLES_DIR);
+    const std::filesystem::path examples = examplesDirectory();
     const auto cfg1296 = examples / "run-config.c2220-1296.example.json";
     const auto cfgDefault = examples / "run-config.example.json";
     afar::RunConfig cfg;
@@ -628,6 +655,13 @@ void MainWindow::updateCycleButtons(int state)
     // UI-MEAS-001: Idle/Ready — да; Running и смежные — нет.
     const bool measureOk = st == RunState::Idle || st == RunState::Ready;
     m_measure->setMeasureNowEnabled(measureOk);
+    // Связь вкладки PS уступает серии, только если серия сама пишет коды
+    // через PS (контроллер «PS изделия»): PS держит одно соединение. Серия с
+    // любым другим контроллером работает только с анализатором и PS не трогает.
+    const bool idle = st == RunState::Idle || st == RunState::Complete
+        || st == RunState::Aborted || st == RunState::Error;
+    const bool seriesUsesPs = m_connections->controllerBackend() == MeasureWorker::CtrlPs;
+    m_ps->setSeriesActive(!idle && seriesUsesPs);
 }
 
 void MainWindow::onMeasureNow()

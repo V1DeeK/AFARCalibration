@@ -171,24 +171,24 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     cfg->addStretch(1);
     settingsLayout->addLayout(cfg);
 
-    // Контроллер изделия отсутствует: доступен только честно обозначенный деморежим.
+    // Контроллер изделия — PS (docs/contracts/ps-json-protocol.md) или деморежим.
     auto* dutCfg = new QHBoxLayout();
     dutCfg->addWidget(new QLabel(QStringLiteral("CTRL:"), this));
     m_ctrlBackend = new QComboBox(this);
     m_ctrlBackend->setObjectName(QStringLiteral("controllerBackend"));
     m_ctrlBackend->addItem(QStringLiteral("Демо-контроллер (DutSimulator)"), 0);
-    m_ctrlBackend->addItem(QStringLiteral("Реальный контроллер — отсутствует"), 2);
+    m_ctrlBackend->addItem(QStringLiteral("PS изделия (JSON, TCP :49600)"), 3);
     dutCfg->addWidget(m_ctrlBackend);
     dutCfg->addWidget(new QLabel(QStringLiteral("Host"), this));
     m_dutHost = new QLineEdit(QStringLiteral("192.168.0.10"), this);
     m_dutHost->setMaximumWidth(140);
-    m_dutHost->setToolTip(QStringLiteral("нужен протокол т.14"));
+    m_dutHost->setToolTip(QStringLiteral("адрес PS из профиля стенда"));
     dutCfg->addWidget(m_dutHost);
     dutCfg->addWidget(new QLabel(QStringLiteral("Port"), this));
     m_dutPort = new QSpinBox(this);
     m_dutPort->setRange(1, 65535);
     m_dutPort->setValue(4001);
-    m_dutPort->setToolTip(QStringLiteral("нужен протокол т.14"));
+    m_dutPort->setToolTip(QStringLiteral("TCP-порт канала управления PS"));
     dutCfg->addWidget(m_dutPort);
     dutCfg->addWidget(new QLabel(QStringLiteral("COM"), this));
     m_dutCom = new QLineEdit(QStringLiteral("COM4"), this);
@@ -322,6 +322,9 @@ void ConnectionBar::onControllerBackendChanged(int)
         disableCombatControllerItem();
         return;
     }
+    if (mode == 3 && m_dutPort->value() == 4001) {
+        m_dutPort->setValue(49600);
+    }
     m_lastCtrlBackendIndex = m_ctrlBackend->currentIndex();
     updateDutEndpointEnabled();
     saveSettings();
@@ -346,15 +349,12 @@ void ConnectionBar::disableCombatControllerItem()
 
 void ConnectionBar::updateDutEndpointEnabled()
 {
-    // Endpoint для будущего COM/TCP: всегда disabled до т. 14.
-    m_dutHost->setEnabled(false);
-    m_dutPort->setEnabled(false);
+    // Адрес нужен только PS; COM у PS нет.
+    const bool ps = controllerBackend() == 3;
+    m_dutHost->setEnabled(ps);
+    m_dutPort->setEnabled(ps);
     m_dutCom->setEnabled(false);
-    const QString tip = QStringLiteral(
-        "Контроллер изделия и его цифровой интерфейс отсутствуют");
-    m_dutHost->setToolTip(tip);
-    m_dutPort->setToolTip(tip);
-    m_dutCom->setToolTip(tip);
+    m_dutCom->setToolTip(QStringLiteral("PS управляется только по TCP"));
 }
 
 void ConnectionBar::updateFieldsEnabled()
@@ -404,7 +404,8 @@ void ConnectionBar::loadSettings()
     m_sweepMs->blockSignals(false);
     m_retries->blockSignals(false);
 
-    const int ctrl = 0;  // реальный контроллер отсутствует; старые настройки не активируем
+    // Сохранённый выбор PS восстанавливаем; прочее — деморежим.
+    const int ctrl = s.value(QStringLiteral("dut/backend"), 0).toInt() == 3 ? 3 : 0;
     m_ctrlBackend->blockSignals(true);
     m_ctrlBackend->setCurrentIndex(m_ctrlBackend->findData(ctrl));
     m_ctrlBackend->blockSignals(false);
@@ -414,6 +415,7 @@ void ConnectionBar::loadSettings()
     m_dutPort->setValue(s.value(QStringLiteral("dut/port"), 4001).toInt());
     m_dutCom->setText(s.value(QStringLiteral("dut/com"), QStringLiteral("COM4")).toString());
     disableCombatControllerItem();
+    updateDutEndpointEnabled();
     updateFieldsEnabled();
 }
 
