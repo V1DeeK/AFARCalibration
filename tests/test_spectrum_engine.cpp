@@ -1,9 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "spectrum_engine.hpp"
+#include "board_finder.hpp"
 #include "paths.hpp"
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -60,4 +62,30 @@ TEST_CASE("SpectrumEngine stops while offline IQ playback is active") {
 
     std::error_code error;
     std::filesystem::remove(path, error);
+}
+
+TEST_CASE("Board parameter reader rejects an empty address without touching hardware") {
+    const auto result = read_board_parameters("");
+    REQUIRE_FALSE(result.ok);
+    REQUIRE_FALSE(result.status.empty());
+}
+
+TEST_CASE("Board parameters can be read from explicitly requested test hardware") {
+    const char* ip = std::getenv("AFAR_TEST_BOARD_IP");
+    if (!ip || !*ip) return;
+
+    const auto result = read_board_parameters(ip);
+    REQUIRE(result.ok);
+    CHECK(result.text.find("Центральная частота RX") != std::string::npos);
+    CHECK(result.text.find("sampling_frequency") != std::string::npos);
+    CHECK(result.text.find("hardwaregain") != std::string::npos);
+}
+
+TEST_CASE("Board IP can be found by an explicitly requested test MAC") {
+    const char* mac = std::getenv("AFAR_TEST_BOARD_MAC");
+    if (!mac || !*mac) return;
+
+    const auto result = find_board_by_mac(mac);
+    REQUIRE(result.found);
+    CHECK_FALSE(result.ip.empty());
 }

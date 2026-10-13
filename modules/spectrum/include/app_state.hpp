@@ -70,7 +70,9 @@ struct AppState {
     std::string           board_mac       { "42:7e:d7:4e:0f:77" };
     std::string           board_found_ip;  // пусто, пока не найдена
     std::string           board_status;    // пояснение для UI
+    std::string           board_parameters; // снимок read-only атрибутов libiio
     std::atomic<bool>     board_find_requested{ false };
+    std::atomic<bool>     board_read_parameters_requested{ false };
     std::atomic<bool>     board_is_finding    { false };
 
     // config — UI write, capture + processing read

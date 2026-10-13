@@ -19,9 +19,19 @@ struct BoardFindResult {
     std::string status; // человекочитаемое пояснение для UI (и при успехе, и при неудаче)
 };
 
+struct BoardParametersResult {
+    bool        ok = false;
+    std::string text;
+    std::string status;
+};
+
 // Ищет MAC вида "42:7e:d7:4e:0f:77" (регистр не важен, разделитель ':' или '-').
 // Блокирует вызывающий поток на время опроса подсети — секунды.
 BoardFindResult find_board_by_mac(const std::string& mac_text);
+
+// Открывает отдельный сетевой IIO-контекст и выполняет только операции чтения.
+// Настройки, буферы и состояние радиотракта не изменяются.
+BoardParametersResult read_board_parameters(const std::string& ip);
 
 // Отдельный поток, чтобы опрос подсети не тормозил ни захват, ни отрисовку:
 // ждёт board_find_requested, кладёт результат в AppState.

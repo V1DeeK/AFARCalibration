@@ -36,13 +36,18 @@ QString macosBase(AppTheme theme)
                "QListWidget { background: %3; border: 1px solid %4; border-radius: 12px; padding: 4px; }"
                "QListWidget::item { padding: 8px 10px; border-radius: 8px; }"
                "QListWidget::item:selected { background: %6; color: %7; }"
-               "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: %3; border: 1px solid %4; "
+               "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit { background: %3; border: 1px solid %4; "
                "border-radius: 8px; padding: 4px 8px; min-height: 24px; }"
                "QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 2px solid %6; }"
                "QProgressBar { border: 1px solid %4; border-radius: 8px; background: %3; text-align: center; "
                "min-height: 16px; }"
                "QProgressBar::chunk { background: %6; border-radius: 7px; }"
                "QLabel#hintLabel { color: %5; }"
+               "QLabel#boardIpAddress { background: %6; color: %7; border-radius: 9px; "
+               "padding: 6px 12px; font-weight: 700; }"
+               "QLabel#boardParametersStatus { color: %5; padding-left: 8px; }"
+               "QPlainTextEdit#boardParametersOutput, QPlainTextEdit#boardParametersDetails { "
+               "font-family: 'Cascadia Mono', 'Consolas', monospace; font-size: 12px; padding: 10px; }"
                "QPushButton { border-radius: 10px; padding: 6px 14px; min-height: 32px; "
                "background: %3; border: 1px solid %4; }"
                "QPushButton:hover { border-color: %6; }"
@@ -58,7 +63,8 @@ QString macosBase(AppTheme theme)
                "QPushButton#btnRetry { background: #ff9f0a; color: #1d1d1f; font-weight: 600; border: none; }"
                "QPushButton#btnResume { background: #5e5ce6; color: #ffffff; font-weight: 700; border: none; min-height: 40px; }"
                "QPushButton#btnResume:disabled { background: #a5a3f5; color: #2a2870; }"
-               "QPushButton#btnPrimary { background: %6; color: %7; font-weight: 700; border: none; min-height: 40px; }")
+               "QPushButton#btnPrimary, QPushButton#readBoardParameters { background: %6; color: %7; "
+               "font-weight: 700; border: none; min-height: 40px; min-width: 190px; }")
         .arg(QLatin1String(text), QLatin1String(window), QLatin1String(card), QLatin1String(line),
              QLatin1String(muted), QLatin1String(accent), QLatin1String(selText));
 }

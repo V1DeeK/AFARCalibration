@@ -20,15 +20,19 @@
 #include <QDebug>
 #include <QFrame>
 #include <QFileDialog>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QProgressBar>
 #include <QScreen>
 #include <QScrollArea>
 #include <QSettings>
+#include <QSizePolicy>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStackedWidget>
@@ -143,6 +147,137 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     spectrumWorkspace->setObjectName(QStringLiteral("spectrumWorkspace"));
     auto* parametersWorkspace = new QWidget(m_workspaces);
     parametersWorkspace->setObjectName(QStringLiteral("parametersWorkspace"));
+    auto* parametersLayout = new QVBoxLayout(parametersWorkspace);
+    parametersLayout->setContentsMargins(18, 16, 18, 16);
+    parametersLayout->setSpacing(12);
+    auto* parametersTitle = new QLabel(QStringLiteral("Получить параметры платы"), parametersWorkspace);
+    parametersTitle->setStyleSheet(QStringLiteral("font-size: 22px; font-weight: 700;"));
+    auto* readOnlyHint = new QLabel(
+        QStringLiteral("Автоматический поиск по MAC и безопасное чтение параметров libiio. "
+                       "Настройки платы не изменяются."),
+        parametersWorkspace);
+    readOnlyHint->setWordWrap(true);
+    readOnlyHint->setObjectName(QStringLiteral("hintLabel"));
+
+    auto* searchGroup = new QGroupBox(QStringLiteral("Поиск устройства"), parametersWorkspace);
+    auto* searchLayout = new QVBoxLayout(searchGroup);
+    searchLayout->setSpacing(9);
+    auto* macRow = new QHBoxLayout();
+    macRow->addWidget(new QLabel(QStringLiteral("MAC-адрес"), searchGroup));
+    auto* boardMac = new QLineEdit(searchGroup);
+    boardMac->setObjectName(QStringLiteral("boardMacAddress"));
+    boardMac->setMaximumWidth(320);
+    boardMac->setText(QSettings().value(QStringLiteral("board/mac"),
+                                        QStringLiteral("42:7e:d7:4e:0f:77")).toString());
+    auto* readParameters = new QPushButton(QStringLiteral("Получить параметры"), searchGroup);
+    readParameters->setObjectName(QStringLiteral("readBoardParameters"));
+    macRow->addWidget(boardMac, 1);
+    macRow->addStretch(1);
+    macRow->addWidget(readParameters);
+
+    auto* stateRow = new QHBoxLayout();
+    auto* boardIp = new QLabel(QStringLiteral("IP-адрес: —"), searchGroup);
+    boardIp->setObjectName(QStringLiteral("boardIpAddress"));
+    auto* boardStatus = new QLabel(QStringLiteral("Готово к чтению"), searchGroup);
+    boardStatus->setObjectName(QStringLiteral("boardParametersStatus"));
+    boardStatus->setWordWrap(true);
+    stateRow->addWidget(boardIp);
+    stateRow->addWidget(boardStatus, 1);
+    searchLayout->addLayout(macRow);
+    searchLayout->addLayout(stateRow);
+
+    auto* resultTabs = new QTabWidget(parametersWorkspace);
+    resultTabs->setObjectName(QStringLiteral("boardParametersTabs"));
+    auto* boardOutput = new QPlainTextEdit(resultTabs);
+    boardOutput->setObjectName(QStringLiteral("boardParametersOutput"));
+    boardOutput->setReadOnly(true);
+    boardOutput->setLineWrapMode(QPlainTextEdit::NoWrap);
+    boardOutput->setPlaceholderText(
+        QStringLiteral("После нажатия здесь появятся основные параметры платы."));
+    auto* boardDetails = new QPlainTextEdit(resultTabs);
+    boardDetails->setObjectName(QStringLiteral("boardParametersDetails"));
+    boardDetails->setReadOnly(true);
+    boardDetails->setLineWrapMode(QPlainTextEdit::NoWrap);
+    boardDetails->setPlaceholderText(
+        QStringLiteral("Здесь появится полный перечень технических IIO-атрибутов."));
+    resultTabs->addTab(boardOutput, QStringLiteral("Основное"));
+    resultTabs->addTab(boardDetails, QStringLiteral("Подробно"));
+    parametersLayout->addWidget(parametersTitle);
+    parametersLayout->addWidget(readOnlyHint);
+    parametersLayout->addWidget(searchGroup);
+    parametersLayout->addWidget(resultTabs, 1);
+
+    connect(readParameters, &QPushButton::clicked, parametersWorkspace,
+            [this, parametersWorkspace, boardMac, boardIp, boardStatus, boardOutput,
+             boardDetails, resultTabs, readParameters] {
+        const QString mac = boardMac->text().trimmed();
+        QSettings().setValue(QStringLiteral("board/mac"), mac);
+        auto& state = m_spectrumEngine->state();
+        {
+            std::lock_guard<std::mutex> lock(state.board_mutex);
+            state.board_mac = mac.toStdString();
+            state.board_found_ip.clear();
+            state.board_parameters.clear();
+            state.board_status = "ожидание запуска поиска...";
+        }
+        state.board_read_parameters_requested.store(true);
+        state.board_find_requested.store(true);
+        parametersWorkspace->setProperty("operationActive", true);
+        setOperationProgress(QStringLiteral("Поиск платы по MAC"), 0, 2);
+        readParameters->setEnabled(false);
+        boardIp->setText(QStringLiteral("IP-адрес: поиск…"));
+        boardStatus->setText(QStringLiteral("Поиск платы по MAC…"));
+        boardOutput->clear();
+        boardDetails->clear();
+        resultTabs->setCurrentIndex(0);
+    });
+
+    auto* parametersTimer = new QTimer(parametersWorkspace);
+    connect(parametersTimer, &QTimer::timeout, parametersWorkspace,
+            [this, parametersWorkspace, boardIp, boardStatus, boardOutput, boardDetails,
+             readParameters, lastParameters = QString()]() mutable {
+        auto& state = m_spectrumEngine->state();
+        std::string ip;
+        std::string status;
+        std::string parameters;
+        {
+            std::lock_guard<std::mutex> lock(state.board_mutex);
+            ip = state.board_found_ip;
+            status = state.board_status;
+            parameters = state.board_parameters;
+        }
+        const bool busy = state.board_find_requested.load() || state.board_is_finding.load();
+        readParameters->setEnabled(!busy);
+        boardIp->setText(ip.empty()
+                             ? QStringLiteral("IP-адрес: —")
+                             : QStringLiteral("IP-адрес: %1").arg(QString::fromStdString(ip)));
+        if (!status.empty()) boardStatus->setText(QString::fromStdString(status));
+        const QString snapshot = QString::fromStdString(parameters);
+        if (snapshot != lastParameters) {
+            lastParameters = snapshot;
+            const QString detailsMarker =
+                QStringLiteral("\nВСЕ СТАНДАРТНЫЕ ДОСТУПНЫЕ IIO-АТРИБУТЫ\n");
+            const qsizetype detailsAt = snapshot.indexOf(detailsMarker);
+            boardOutput->setPlainText(
+                detailsAt < 0 ? snapshot.trimmed() : snapshot.left(detailsAt).trimmed());
+            boardDetails->setPlainText(
+                detailsAt < 0 ? QString() : snapshot.mid(detailsAt + detailsMarker.size()).trimmed());
+        }
+        if (parametersWorkspace->property("operationActive").toBool()) {
+            if (busy) {
+                setOperationProgress(ip.empty() ? QStringLiteral("Поиск платы по MAC")
+                                                : QStringLiteral("Чтение параметров платы"),
+                                     ip.empty() ? 0 : 1, 2);
+            } else if (!status.empty()) {
+                setOperationProgress(parameters.empty()
+                                         ? QStringLiteral("Параметры платы не получены")
+                                         : QStringLiteral("Параметры платы получены"),
+                                     2, 2);
+                parametersWorkspace->setProperty("operationActive", false);
+            }
+        }
+    });
+    parametersTimer->start(100);
     m_workspaces->addWidget(parametersWorkspace);
     m_workspaces->addWidget(viewport);
     m_workspaces->addWidget(spectrumWorkspace);
@@ -165,14 +300,17 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
 
     m_operationText = new QLabel(QStringLiteral("Готово"), this);
     m_operationText->setObjectName(QStringLiteral("operationStatusText"));
-    m_operationText->setMinimumWidth(300);
+    m_operationText->setMinimumWidth(0);
+    m_operationText->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     m_operationProgress = new QProgressBar(this);
     m_operationProgress->setObjectName(QStringLiteral("operationProgressBar"));
     m_operationProgress->setRange(0, 100);
-    m_operationProgress->setValue(100);
-    m_operationProgress->setFixedWidth(220);
+    m_operationProgress->setValue(0);
+    m_operationProgress->setFixedWidth(180);
+    m_operationProgress->setVisible(false);
     m_moduleStatus = new QLabel(this);
     m_moduleStatus->setObjectName(QStringLiteral("moduleStatusText"));
+    m_moduleStatus->setMaximumWidth(280);
     statusBar()->addWidget(m_moduleStatus);
     statusBar()->addPermanentWidget(m_operationText, 1);
     statusBar()->addPermanentWidget(m_operationProgress);
@@ -264,6 +402,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     connect(m_worker, &MeasureWorker::measureNowFinished, this,
             [this](bool ok, const QString& message) {
                 if (!ok) {
+                     setOperationProgress(QStringLiteral("Ошибка измерения"), 1, 1);
                     m_connections->setDiagnostic(
                         message.isEmpty() ? QStringLiteral("Измерить сейчас: отказ") : message);
                 } else {
@@ -277,6 +416,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
             [this](bool ok, const QString& s2p, const QString& pdf, const QString& message) {
                 m_measure->setTwoPortExportInProgress(false);
                 if (!ok) {
+                     setOperationProgress(QStringLiteral("Ошибка формирования отчёта"), 1, 1);
                     statusBar()->showMessage(QStringLiteral("Отчёт не сохранён"), 15000);
                     QMessageBox::warning(this, QStringLiteral("Экспорт измерения"), message);
                     return;
@@ -287,9 +427,6 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
                     this, QStringLiteral("Экспорт измерения"),
                     QStringLiteral("Файлы сохранены:\n\nS2P: %1\nPDF: %2").arg(s2p, pdf));
             });
-
-    statusBar()->showMessage(
-        QStringLiteral("ВАЦ (S2VNA): не подтверждена · THRU: — · Сырые данные: append-only · SHA-256"));
 
     m_thread->start();
     loadExampleDefaults();
@@ -407,7 +544,8 @@ void MainWindow::onOpenWizard()
         QStringLiteral("ВАЦ (S2VNA): %1 · THRU: %2 · Сырые данные: append-only · SHA-256")
             .arg(wizard.calConfirmed() ? QStringLiteral("подтверждена оператором")
                                        : QStringLiteral("не подтверждена"),
-                 wizard.thruSummary()));
+                 wizard.thruSummary()),
+        10000);
     QMetaObject::invokeMethod(m_worker, "prepare", Qt::QueuedConnection,
                               Q_ARG(QString, wizard.dataRoot()),
                               Q_ARG(QString, wizard.runConfigPath()),
@@ -527,8 +665,6 @@ void MainWindow::onExportTwoPort()
     }
     m_measure->setTwoPortExportInProgress(true);
     setOperationProgress(QStringLiteral("Подготовка S2P и PDF-отчёта"), 0, 2);
-    statusBar()->showMessage(
-        QStringLiteral("Формирование S2P и PDF-отчёта… Не закрывайте программу."));
     const QVector<double> markers = m_measure->graphMarkerFrequenciesGhz();
     const QString deviceName = m_measure->reportDeviceName();
     const QString deviceSerial = m_measure->reportDeviceSerial();
@@ -597,8 +733,15 @@ void MainWindow::updateModuleStatus()
         spectrumState += QStringLiteral(", запись");
     }
 
-    m_moduleStatus->setText(
-        QStringLiteral("AFAR: %1%2   |   Spectrum: %3")
+    const QString vnaState = m_vnaConnected ? QStringLiteral("подключён")
+                                            : QStringLiteral("не подключён");
+    const QString shortSpectrum = spectrum.is_playing_back.load()
+        ? QStringLiteral("воспроизведение")
+        : spectrum.is_connected.load() ? QStringLiteral("подключён")
+                                       : QStringLiteral("не подключён");
+    m_moduleStatus->setText(QStringLiteral("VNA: %1 · SDR: %2").arg(vnaState, shortSpectrum));
+    m_moduleStatus->setToolTip(
+        QStringLiteral("AFAR: %1%2\nАнализатор спектра: %3")
             .arg(m_vnaConnected ? QStringLiteral("VNA подключён") : QStringLiteral("VNA не подключён"),
                  measuring ? QStringLiteral(", измерение") : QString(), spectrumState));
 }
@@ -619,11 +762,14 @@ void MainWindow::onProgress(qint64 completed, qint64 total, int channel, int att
 void MainWindow::setOperationProgress(const QString& text, qint64 completed, qint64 total)
 {
     m_operationText->setText(text);
+    m_operationText->setToolTip(text);
     const int percent = total > 0
         ? static_cast<int>(qBound(qint64{0}, completed * 100 / total, qint64{100}))
         : 0;
+    m_operationProgress->setVisible(total <= 0 || completed < total);
+    m_operationProgress->setRange(total > 0 ? 0 : 0, total > 0 ? 100 : 0);
     m_operationProgress->setValue(percent);
-    m_operationProgress->setFormat(QStringLiteral("%1%").arg(percent));
+    m_operationProgress->setFormat(total > 0 ? QStringLiteral("%1%").arg(percent) : QString());
 }
 
 void MainWindow::onEtaChanged(const QString& text)
