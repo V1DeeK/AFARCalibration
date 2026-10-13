@@ -23,7 +23,8 @@ CMakeUserPresets.json
 *.autosave
 
 # Состояние оркестрации и рабочие файлы Cursor
-.cursor/workspace/
+.cursor/workspace/*
+!.cursor/workspace/.gitkeep
 .cursor/projects/
 
 # Локальные логи и временные файлы
@@ -31,7 +32,7 @@ CMakeUserPresets.json
 *.tmp
 *~
 
-# Не игнорировать docs/, schemas/, examples/, cmake/, .cursor/rules/, .cursor/skills/, .cursor/commands/
+# Не игнорировать docs/, schemas/, examples/, cmake/, .cursor/rules/, .cursor/skills/, .cursor/agents/
 
 # Состояние оркестрации Claude Code
 .claude/workspace/*

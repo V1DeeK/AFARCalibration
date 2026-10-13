@@ -12,6 +12,7 @@ disable-model-invocation: true
 |----------|-----------|----------------|
 | `afar_stage1_software_tz.pdf` | нормативное ТЗ этапа 1 | не правится, только сверяемся |
 | `docs/contracts/vna-c2220-scpi.md` | закрытый набор SCPI, тайм-ауты, ошибки | до правки `src/vna/` |
+| `docs/contracts/ps-json-protocol.md` | команды и телеметрия PS (JSON, TCP 49600 / UDP 49601) | до правки `src/ps/`, `src/dut/PsDutController.*` |
 | `docs/contracts/cpp-interfaces.md` | `IVna`, `IDutController`, автомат т. 8.4 | до правки `include/afar/`, `src/measure/` |
 | `docs/contracts/data-formats.md` | каталог серии, AFARH5, AFARPQ, CSV, манифест | до правки `src/data/`, `src/report/` |
 | `docs/contracts/attenuator-codes.md` | CSV кодов аттенюатора | до правки разбора кодов |

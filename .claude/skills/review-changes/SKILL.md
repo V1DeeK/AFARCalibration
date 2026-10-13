@@ -27,7 +27,7 @@ disable-model-invocation: true
 требования в задании субагенту: субагент этот чат не видит.
 
 **Шаг 3.** Запускай `security-auditor` параллельно с ревью, если диф трогает
-`src/vna/`, `src/dut/`, `src/data/`, `src/report/` или `include/afar/`. Эти
+`src/vna/`, `src/ps/`, `src/dut/`, `src/data/`, `src/report/` или `include/afar/`. Эти
 модули говорят с оборудованием и пишут метрологические данные — здесь цена
 ошибки другая.
 В задание субагенту включи чеклист из `security-guidelines`.

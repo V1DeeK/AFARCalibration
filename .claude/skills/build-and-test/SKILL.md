@@ -41,20 +41,29 @@ set AFAR_RUN_AT12=1 & build\tests\test_at12_soak.exe
 Поставка: `tools\package-windows.ps1` (runtime ZIP, SHA-256, SBOM в `dist/`).
 Проверка каталога серии: `tools\verify-series.ps1 <каталог>`.
 
-## Linux (облачная сессия Claude, без прибора)
+## Linux и macOS
+
+Зависимости — таблица «Зависимости для конфигурации» в `README.md` (Qt 6,
+libiio и FFTW3 для модуля «Анализатор спектра»; на macOS libiio ставит
+`tools/build-libiio.sh` в `~/.local/afar-deps`).
 
 ```bash
-sudo apt-get install qt6-base-dev ninja-build cmake g++
+# Linux (Ubuntu 24.04+)
+sudo apt install build-essential cmake ninja-build qt6-base-dev libgl1-mesa-dev libiio-dev libfftw3-dev
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+# macOS
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix);$HOME/.local/afar-deps"
+
 cmake --build build --parallel
-QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure --timeout 120
+ctest --test-dir build --output-on-failure      # Linux без экрана: xvfb-run -a ctest ...
+ctest --test-dir build -R "ps_" --output-on-failure   # клиент PS
 ```
 
-`-Werror` действует только на MinGW, поэтому на Linux проверяй предупреждения
-глазами. Известные особенности Linux: `verify_series_tool` не регистрируется
-без PowerShell; кейс `Socket abort interrupts a blocked read` в `c2220_driver`
-висит (на Linux `close()` не будит заблокированный `recv`); `ui_interactions`
-падает при выходе из-за статического `QApplication`.
+Предупреждения ошибками становятся на MinGW всегда, на Linux/macOS — с
+`-DAFAR_WARNINGS_AS_ERRORS=ON` (так собирает CI). Известные особенности:
+`verify_series_tool` не регистрируется без PowerShell; тесты спектра
+(`spectrum_widget`) требуют OpenGL (в CI — Mesa).
 
 ## Типовые ошибки этого тулчейна
 

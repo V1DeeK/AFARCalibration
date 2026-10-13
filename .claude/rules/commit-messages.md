@@ -10,7 +10,7 @@ docs(contracts): уточнить тайм-аут TRIG:SING
 refactor(ui): вынести панель свипа из MeasureTab
 ```
 
-Разрешённые scope: `vna`, `dut`, `measure`, `data`, `cal`, `qc`, `report`,
+Разрешённые scope: `vna`, `ps`, `dut`, `spectrum`, `measure`, `data`, `cal`, `qc`, `report`,
 `sim`, `ui`, `core`, `build`, `docs`, `contracts`, `tests`, `tools`.
 
 Тело — только если изменение неочевидно: что было не так и почему выбрано

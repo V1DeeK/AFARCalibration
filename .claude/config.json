@@ -13,6 +13,9 @@
     "testOne": "ctest --test-dir build -R {name} --output-on-failure",
     "tests": [
       "smoke",
+      "spectrum_engine",
+      "spectrum_widget",
+      "portability",
       "run_config",
       "lut_math",
       "quality_gates",
@@ -29,7 +32,13 @@
       "lut_perf",
       "at12_soak",
       "verify_series_tool",
-      "ui_interactions"
+      "ui_interactions",
+      "unified_app_shutdown",
+      "unified_workspace_switches",
+      "ps_protocol",
+      "ps_link",
+      "ps_tab",
+      "ps_dut_controller"
     ]
   },
   "documentation": {
@@ -38,6 +47,8 @@
       "plans": "docs/plans",
       "reports": "docs/reports",
       "scpiContract": "docs/contracts/vna-c2220-scpi.md",
+      "psContract": "docs/contracts/ps-json-protocol.md",
+      "psContractRmo": "V1DeeK/RMO: protocol/documentation/rmo_ps_protocol.md (только читать)",
       "interfacesContract": "docs/contracts/cpp-interfaces.md",
       "dataFormatsContract": "docs/contracts/data-formats.md",
       "attenuatorCodesContract": "docs/contracts/attenuator-codes.md",
@@ -58,6 +69,7 @@
     "requireTestsBeforeRefactor": true,
     "securitySensitivePaths": [
       "src/vna/",
+      "src/ps/",
       "src/dut/",
       "src/data/",
       "src/report/",

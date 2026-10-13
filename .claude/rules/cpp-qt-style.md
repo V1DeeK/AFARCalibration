@@ -12,7 +12,7 @@ paths:
 - Класс = пара `.h/.cpp` в каталоге своего слоя. Новый файл обязательно
   добавляется в `src/CMakeLists.txt` в нужную библиотеку `afar_*`, иначе он
   не собирается.
-- Слои `vna/`, `dut/`, `measure/`, `data/`, `cal/`, `qc/`, `sim/`, `core/` —
+- Слои `vna/`, `ps/`, `dut/`, `measure/`, `data/`, `cal/`, `qc/`, `sim/`, `core/` —
   без Qt Widgets (стандартная библиотека; `report/` использует только Qt Gui).
   Qt Widgets — только `ui/` и `app/`.
 - Имена в `include/afar/` и контрактах (`f_start_hz`, `measure_s21`,
