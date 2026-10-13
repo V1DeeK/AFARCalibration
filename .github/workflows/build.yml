@@ -44,7 +44,12 @@ jobs:
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build --output-on-failure --timeout 300
+        run: ctest --test-dir build --output-on-failure --timeout 300 -E '^spectrum_widget$'
+      - name: Test (виджет спектра, OpenGL)
+        # QOpenGLWidget не работает на offscreen — нужен оконный сервер macOS.
+        env:
+          QT_QPA_PLATFORM: cocoa
+        run: ctest --test-dir build --output-on-failure --timeout 120 -R '^spectrum_widget$'
       - name: Package
         run: cd build && cpack
       - uses: actions/upload-artifact@v4
@@ -73,6 +78,7 @@ jobs:
             mingw-w64-ucrt-x86_64-fftw
             mingw-w64-ucrt-x86_64-libiio
             mingw-w64-ucrt-x86_64-libxml2
+            mingw-w64-ucrt-x86_64-mesa
             git
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -81,7 +87,17 @@ jobs:
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build --output-on-failure --timeout 300
+        run: ctest --test-dir build --output-on-failure --timeout 300 -E '^spectrum_widget$'
+      - name: Test (виджет спектра, OpenGL)
+        # QOpenGLWidget не работает на offscreen, а у раннера нет GPU:
+        # окно Windows + программный OpenGL Mesa (opengl32.dll рядом с тестом).
+        env:
+          QT_QPA_PLATFORM: windows
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          cp /ucrt64/bin/opengl32.dll build/tests/
+          cp /ucrt64/bin/libgallium_wgl.dll build/tests/ 2>/dev/null || true
+          ctest --test-dir build --output-on-failure --timeout 120 -R '^spectrum_widget$'
       - name: Package
         run: cd build && cpack
       - uses: actions/upload-artifact@v4
