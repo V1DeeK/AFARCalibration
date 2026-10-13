@@ -7,17 +7,22 @@ Ninja, Catch2. Целевая платформа — Windows 10/11 x64, MinGW/UC
 
 Решётка, которую калибрует эта программа, — приёмная АФАР изделия, для которого
 пишется АРМ в репозитории `V1DeeK/RMO`. Результат программы — LUT кодов
-аттенюатора/фазовращателя по каналам. Код и протокол РМО ↔ PS сюда не
-переносятся.
+аттенюатора/фазовращателя по каналам. Код РМО сюда не переносится; с PS
+изделия программа говорит по тому же JSON-протоколу, что и АРМ, но только
+командами сервисного режима. Репозиторий RMO отсюда только читаем.
 
 ## Раскладка
 
 - `include/afar/` — публичные интерфейсы `IVna`, `IDutController`, типы свипа
-- `src/vna` (SCPI → S2VNA), `src/dut` (заглушка контроллера изделия),
+- `src/vna` (SCPI → S2VNA), `src/ps` (клиент PS: JSON по TCP 49600 /
+  UDP 49601), `src/dut` (`PsDutController` — решётка через PS,
+  `StubDutController` — демо),
   `src/measure` (автомат и оркестратор), `src/data`, `src/cal`, `src/qc`,
   `src/report`, `src/sim`, `src/core`, `src/ui`, `src/app`
+- `modules/spectrum` — модуль «Анализатор спектра»
 - `tests/` — Catch2 + CTest
-- `docs/contracts/` — контракты: SCPI, C++-интерфейсы, форматы данных, коды
+- `docs/contracts/` — контракты: SCPI, протокол PS (`ps-json-protocol.md`),
+  C++-интерфейсы, форматы данных, коды
 - `docs/plans/`, `docs/reports/` — планы и отчёты; рабочий план —
   `docs/plans/2026-10-03-plan-7-etapov.txt`
 - `Planar_documentation/` — руководства C2220 / S2VNA (справочно)
@@ -31,11 +36,13 @@ ctest --test-dir build --output-on-failure
 ctest --test-dir build -R c2220_driver --output-on-failure   # один тест
 ```
 
-Тесты: `smoke`, `run_config`, `lut_math`, `quality_gates`, `simulators`,
-`hdf5_store`, `probe_run`, `pause_resume`, `crash_recovery`, `faults`,
-`export_manifest`, `two_port_export`, `c2220_driver`, `full_sim_run`,
-`lut_perf`, `at12_soak`, `verify_series_tool` (только при PowerShell),
-`ui_interactions`. Подробности и типовые ошибки — скилл `build-and-test`.
+Тесты: `smoke`, `spectrum_engine`, `spectrum_widget`, `portability`,
+`run_config`, `lut_math`, `quality_gates`, `simulators`, `hdf5_store`,
+`probe_run`, `pause_resume`, `crash_recovery`, `faults`, `export_manifest`,
+`two_port_export`, `c2220_driver`, `full_sim_run`, `lut_perf`, `at12_soak`,
+`verify_series_tool` (только при PowerShell), `ui_interactions`,
+`unified_app_shutdown`, `unified_workspace_switches`, `ps_protocol`,
+`ps_link`, `ps_tab`, `ps_dut_controller`. Подробности и типовые ошибки — скилл `build-and-test`.
 
 ## Жёсткие ограничения
 
@@ -46,9 +53,13 @@ ctest --test-dir build -R c2220_driver --output-on-failure   # один тест
 - Набор SCPI закрыт контрактом `docs/contracts/vna-c2220-scpi.md`. Новая
   команда — сначала в контракт, потом в код. `SYSTem:RECeiver:DIRect:ACCess`
   программа сама не включает.
-- Протокола контроллера изделия нет (т. 14 ТЗ). Не придумывать кадры, CRC,
-  readback, тайминги и safe-state. До получения документации реальный режим
-  калибровки 64×64 остаётся заблокированным; `StubDutController` — заглушка.
+- Решёткой управляет PS изделия. Программа — только клиент PS: команды
+  сервисного режима по JSON (TCP 49600, NDJSON) и телеметрия по UDP 49601.
+  Набор команд закрыт контрактом `docs/contracts/ps-json-protocol.md`; новая
+  команда — сначала в контракт. Имитатора PS в программе нет, прямого RS-485
+  нет (кадры RS-485 собирает PS). Связь с анализатором не влияет на связь
+  с PS. Неактивные каналы и безопасное состояние — att 63, фаза 0.
+- Весь сервисный режим живёт в этой программе; РМО отсюда не правим.
 - GUI не шлёт команд оборудованию: всё через `MeasurementOrchestrator`.
   Автомат состояний — ровно по т. 8.4 (`docs/contracts/cpp-interfaces.md` §8),
   новые рёбра без решения пользователя не добавлять.
@@ -63,16 +74,18 @@ ctest --test-dir build -R c2220_driver --output-on-failure   # один тест
 
 ## Конфигурация агентов
 
-Перенесено из репозитория `V1DeeK/RMO` (`.claude/`) и адаптировано под этот
-проект. Старый `.cursor/` не тронут. Конвенции для скиллов и субагентов —
-`.claude/config.json`.
+Перенесено из репозитория `V1DeeK/RMO` (`.claude/` и `.cursor/`) и
+адаптировано под этот проект. `.claude/` — для Claude Code, `.cursor/` — то же
+самое для Cursor (описание — `.cursor/README.md`). Меняя правило, агента или
+скилл, правь обе копии. Конвенции для скиллов и субагентов —
+`.claude/config.json` (в Cursor — `.cursor/config.json`).
 
 - `.claude/rules/` — правила. `cpp-qt-style`, `testing`, `security`,
   `documentation` подгружаются по `paths`; `commit-messages` и `git-workflow`
   действуют всегда.
 - `.claude/agents/` — 11 субагентов. Субагент не видит этот чат: всё нужное
-  передаётся в задании. `hw-contracts` ведёт контракты SCPI и контроллера
-  изделия (аналог `protocolist` из RMO).
+  передаётся в задании. `hw-contracts` ведёт контракты SCPI и протокола PS
+  (аналог `protocolist` из RMO).
 - `.claude/skills/` — `/implement`, `/orchestrate`, `/refactor`,
   `/review-changes`, `/audit` и модули знаний (`build-and-test`, `git-helper`,
   `task-management`, `docs`, `architecture-principles`,
@@ -87,9 +100,9 @@ ctest --test-dir build -R c2220_driver --output-on-failure   # один тест
 | Задача | Как |
 |---|---|
 | правка в 1–3 файлах | `/implement` → `worker`/`hw-contracts` → `test-runner` → `reviewer` |
-| фича на несколько модулей, SCPI или контроллер | `/orchestrate` → `planner` → по задачам → аудит → `documenter` |
+| фича на несколько модулей, SCPI или протокол PS | `/orchestrate` → `planner` → по задачам → аудит → `documenter` |
 | код работает, но неудобен | `/refactor` → `senior-reviewer` → `refactorer` → `test-runner` |
-| перед коммитом | `/review-changes` → `reviewer` (+ `security-auditor` для `vna/`, `dut/`, `data/`, `report/`) |
+| перед коммитом | `/review-changes` → `reviewer` (+ `security-auditor` для `vna/`, `ps/`, `dut/`, `data/`, `report/`) |
 | перед выпуском | `/audit` → три ревьюера параллельно → `test-runner` → отчёт |
 
 `reviewer`, `senior-reviewer`, `security-auditor` — только чтение (без Edit/Write).

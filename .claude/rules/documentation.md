@@ -8,7 +8,7 @@ paths:
 
 - Язык — русский. Пишем для инженера, который вернётся к коду через полгода.
 - Нормативный источник — ТЗ `afar_stage1_software_tz.pdf`. Канон для кода —
-  контракты `docs/contracts/`: `vna-c2220-scpi.md` (SCPI),
+  контракты `docs/contracts/`: `vna-c2220-scpi.md` (SCPI), `ps-json-protocol.md` (PS),
   `cpp-interfaces.md` (интерфейсы и автомат), `data-formats.md` (каталог
   серии, AFARH5, AFARPQ), `attenuator-codes.md`.
 - Изменение обмена, интерфейса или формата → сначала правим контракт, потом

@@ -8,15 +8,15 @@ alwaysApply: false
 Conventional Commits, тема на русском, повелительное наклонение, до 72 символов.
 
 ```
-feat(protocol): добавить разбор кадра триангуляции
-fix(connection): не терять резервный адрес при обрыве
-test(geo): покрыть пересчёт ENU на полюсах
-docs(protocol): уточнить контракт 1.2.0
-refactor(streams): вынести подсчёт потерь в StreamHub
+feat(vna): добавить чтение активного комплекта калибровки
+fix(measure): не терять completed-слот при паузе
+test(cal): покрыть обратную LUT при пропусках valid
+docs(contracts): уточнить тайм-аут TRIG:SING
+refactor(ui): вынести панель свипа из MeasureTab
 ```
 
-Разрешённые scope: `protocol`, `connection`, `streams`, `ui`, `map`, `auth`,
-`record`, `video`, `build`, `docs`, `tests`.
+Разрешённые scope: `vna`, `ps`, `dut`, `spectrum`, `measure`, `data`, `cal`, `qc`, `report`,
+`sim`, `ui`, `core`, `build`, `docs`, `contracts`, `tests`, `tools`.
 
 Тело — только если изменение неочевидно: что было не так и почему выбрано
 такое решение. Не пересказывай диф.
@@ -26,4 +26,4 @@ refactor(streams): вынести подсчёт потерь в StreamHub
 - Не делаю `git push`, `git reset --hard`, `git rebase` и не переключаю ветки
   без явной просьбы.
 - Коммичу только то, что относится к задаче. `git add -A` вслепую — нет.
-- Артефакты сборки (`build/`, `*.exe`, `*.dll`) в коммит не попадают.
+- Артефакты сборки (`build/`, `dist/`, `*.exe`, `*.dll`) в коммит не попадают.

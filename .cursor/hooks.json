@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .cursor/hooks/guard-shell.ps1",
+        "matcher": "git\\s|rm\\s|del\\s|Remove-Item",
+        "timeout": 10,
+        "failClosed": false
+      },
+      {
+        "command": "python3 .cursor/hooks/guard-shell.py",
+        "matcher": "git\\s|rm\\s|del\\s|Remove-Item",
+        "timeout": 10,
+        "failClosed": false
+      }
+    ]
+  }
+}

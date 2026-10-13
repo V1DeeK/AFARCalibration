@@ -12,7 +12,7 @@ description: Сборка сообщения коммита в формате Co
 
 Типы: `feat`, `fix`, `refactor`, `test`, `docs`, `build`, `perf`, `chore`.
 
-Scope: `vna`, `dut`, `measure`, `data`, `cal`, `qc`, `report`, `sim`, `ui`,
+Scope: `vna`, `ps`, `dut`, `spectrum`, `measure`, `data`, `cal`, `qc`, `report`, `sim`, `ui`,
 `core`, `build`, `docs`, `contracts`, `tests`, `tools`.
 
 Примеры:
