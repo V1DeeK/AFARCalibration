@@ -36,9 +36,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: brew install qt ninja fftw libiio
+        # libiio в Homebrew нет — собираем из исходников.
+        run: |
+          brew install qt ninja fftw
+          tools/build-libiio.sh "$HOME/.local/afar-deps"
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAFAR_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix)"
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAFAR_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix);$HOME/.local/afar-deps"
       - name: Build
         run: cmake --build build --parallel
       - name: Test

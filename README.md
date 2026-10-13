@@ -40,7 +40,7 @@ CMake-имя проекта: `AfarRxCalibrationStudio`. Основная ОС с
 |----|-----------|---------------------|
 | Windows | MSYS2 UCRT64: `pacman -S mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,qt6-base,fftw,libiio,libxml2}` | `C:/msys64/ucrt64` |
 | Linux (Ubuntu 24.04+) | `sudo apt install build-essential cmake ninja-build qt6-base-dev libgl1-mesa-dev libiio-dev libfftw3-dev` | не нужен |
-| macOS | `brew install cmake ninja qt fftw libiio` (и Xcode Command Line Tools) | `$(brew --prefix qt);$(brew --prefix)` |
+| macOS | `brew install cmake ninja qt fftw` и `tools/build-libiio.sh` (libiio в Homebrew нет; ставится в `~/.local/afar-deps`), плюс Xcode Command Line Tools | `$(brew --prefix qt);$(brew --prefix);$HOME/.local/afar-deps` |
 
 Живой C1220/C2220 для сборки и обычного `ctest` не нужен: приёмка AT-01…AT-11 на имитаторах и TCP-stub. Прибор нужен для измерений на стенде и для аппаратной части AT-01.
 
@@ -57,7 +57,7 @@ ctest --test-dir build --output-on-failure
 Linux и macOS:
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release            # macOS: + -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix)"
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release            # macOS: + -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix);$HOME/.local/afar-deps"
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure   # Linux без экрана: xvfb-run -a ctest ...
 ```
