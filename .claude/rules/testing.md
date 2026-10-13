@@ -1,0 +1,28 @@
+---
+paths:
+  - "tests/**/*.cpp"
+  - "tests/**/*.h"
+---
+
+# Тесты
+
+- Фреймворк — Catch2 v3 (`Catch2::Catch2WithMain`). Каждый тест — отдельный
+  исполняемый файл, зарегистрированный в `tests/CMakeLists.txt` через
+  `add_executable` + `add_test`. Без регистрации `ctest` его не увидит.
+- Название `TEST_CASE` описывает сценарий и, где есть, пункт приёмки:
+  `"AT-05 pause keeps completed slots"`. Теги: `[c2220]`, `[full]` и т. п.
+- Тест проверяет поведение, а не реализацию.
+- Числа с плавающей точкой сравниваем через `Catch::Approx` /
+  `WithinAbs`/`WithinRel`, никогда через `==`.
+- Каждая правка `src/vna/` сопровождается кейсом в `tests/test_c2220_driver.cpp`
+  против TCP-stub: корректный ответ, ошибка, тайм-аут, недопустимая
+  конфигурация без отправленных команд.
+- Тесты не ходят к живому C2220/S2VNA и к изделию — только `VnaSimulator`,
+  `DutSimulator` и TCP-stub. Временные каталоги серии — в temp, не в репо.
+- Длинные прогоны — только по переменным окружения: `AFAR_RUN_AT04=1`
+  (тег `[full]`), `AFAR_RUN_AT12=1`. Без них такие кейсы делают `SKIP`, а не
+  падают. Быстрый CI их не включает.
+- GUI-тесты работают с `QT_QPA_PLATFORM=offscreen`.
+
+Запуск: `ctest --test-dir build --output-on-failure`.
+Один тест: `ctest --test-dir build -R c2220_driver --output-on-failure`.
