@@ -22,7 +22,7 @@ int main(int argc, char* argv[]) {
     QObject::connect(&pageTimer, &QTimer::timeout, &app, [&] {
         widget.setPage(static_cast<SpectrumRenderer::Page>(page));
         ++page;
-        if (page < 4)
+        if (page < 3)
             return;
         pageTimer.stop();
         QTimer::singleShot(120, &app, [&] {

@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cfloat>
 #include <cstdio>
+#include <filesystem>
 #include <limits>
 
 using namespace std;
@@ -82,6 +83,13 @@ bool SpectrumRenderer::initialize() {
 
     ImGuiIO& io = ImGui::GetIO();
     io.BackendPlatformName = "spectrum_qt";
+    for (const char* font : { "C:/Windows/Fonts/segoeui.ttf",
+                              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" }) {
+        if (std::filesystem::exists(font)) {
+            io.Fonts->AddFontFromFileTTF(font, 16.0f, nullptr, io.Fonts->GetGlyphRangesCyrillic());
+            break;
+        }
+    }
     return ImGui_ImplOpenGL3_Init("#version 330");
 }
 
@@ -113,7 +121,6 @@ void SpectrumRenderer::renderFrame(float width, float height, float devicePixelR
     copy_state();
     copy_peleng_state();
     copy_demod_state();
-    copy_tv_state();
     copy_clip_state();
     copy_phase_hist_state();
 
@@ -146,12 +153,6 @@ void SpectrumRenderer::renderFrame(float width, float height, float devicePixelR
         draw_peleng_contents();
         ImGui::EndChild();
         break;
-    case Page::Television:
-        update_tv_texture();
-        ImGui::BeginChild("##tv_page");
-        draw_tv_contents();
-        ImGui::EndChild();
-        break;
     case Page::Phase:
         ImGui::BeginChild("##phase_page");
         draw_phase_contents();
@@ -170,19 +171,39 @@ void SpectrumRenderer::renderFrame(float width, float height, float devicePixelR
 }
 
 void SpectrumRenderer::render_page_navigation() {
-    static constexpr const char* labels[] = {
-        "Spectrum", "Peleng", "TV", "Rx1/Rx2 phase"
+    const char* labels[] = {
+        text("Спектр", "Spectrum"),
+        text("Пеленгация", "Direction finding"),
+        text("История фазы Rx1/Rx2", "Rx1/Rx2 phase history")
     };
     if (!ImGui::BeginTable("##spectrum_pages", 4, ImGuiTableFlags_SizingStretchSame))
         return;
 
-    for (int index = 0; index < 4; ++index) {
+    ImGui::TableSetupColumn("##page_spectrum", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("##page_peleng", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("##page_phase", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("##language", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+    ImGui::TableNextRow();
+
+    for (int index = 0; index < 3; ++index) {
         ImGui::TableNextColumn();
         const auto page = static_cast<Page>(index);
-        if (ImGui::Selectable(labels[index], active_page_ == page, 0, ImVec2(-FLT_MIN, 0.0f)))
+        const float button_width = ImGui::GetContentRegionAvail().x;
+        if (ImGui::Selectable(labels[index], active_page_ == page, 0,
+                              ImVec2(button_width, ImGui::GetFrameHeight())))
             active_page_ = page;
     }
+    ImGui::TableNextColumn();
+    int language = language_ == Language::Russian ? 0 : 1;
+    ImGui::SetNextItemWidth(125.0f);
+    const char* languages[] = { "Русский", "English" };
+    if (ImGui::Combo("##spectrum_language", &language, languages, 2))
+        language_ = language == 0 ? Language::Russian : Language::English;
     ImGui::EndTable();
+}
+
+const char* SpectrumRenderer::text(const char* russian, const char* english) const noexcept {
+    return language_ == Language::Russian ? russian : english;
 }
 
 void SpectrumRenderer::render_spectrum_contents() {
@@ -273,7 +294,8 @@ void SpectrumRenderer::render_psd_pane(const char* title, const std::vector<floa
     ImPlot::SetNextAxesLimits(freq_start, freq_stop, DBM_MIN, DBM_MAX, ImPlotCond_Always);
 
     if (ImPlot::BeginPlot(title, { plot_w, plot_h }, ImPlotFlags_NoInputs)) {
-        ImPlot::SetupAxes("Frequency (MHz)", "Power (dBm)");
+        ImPlot::SetupAxes(text("Частота (МГц)", "Frequency (MHz)"),
+                          text("Мощность (дБм)", "Power (dBm)"));
         ImPlot::SetupAxisLimits(ImAxis_X1, freq_start, freq_stop, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, DBM_MIN, DBM_MAX, ImPlotCond_Always);
 
@@ -285,7 +307,7 @@ void SpectrumRenderer::render_psd_pane(const char* title, const std::vector<floa
             if (state_.peak_hold_on.load() && !peak.empty()) {
                 ImPlotSpec peak_spec;
                 peak_spec.LineColor = ImVec4(1.0f, 0.4f, 0.1f, 1.0f);
-                ImPlot::PlotLine("Peak", freq_axis_.data(), peak.data(), n, peak_spec);
+                ImPlot::PlotLine(text("Пиковое удержание", "Peak"), freq_axis_.data(), peak.data(), n, peak_spec);
             }
 
             // Шумовой пол линией и SNR подписью у пика: без этой линии «SNR 30 дБ»
@@ -296,7 +318,7 @@ void SpectrumRenderer::render_psd_pane(const char* title, const std::vector<floa
                 nf_spec.LineColor = ImVec4(0.65f, 0.65f, 0.70f, 0.75f);
                 float nf_x[2] = { static_cast<float>(freq_start), static_cast<float>(freq_stop) };
                 float nf_y[2] = { noise_dbm, noise_dbm };
-                ImPlot::PlotLine("Noise floor", nf_x, nf_y, 2, nf_spec);
+                ImPlot::PlotLine(text("Шумовой порог", "Noise floor"), nf_x, nf_y, 2, nf_spec);
 
                 float peak_mhz = static_cast<float>(peak_hz / 1e6);
                 ImPlotSpec mark_spec;
@@ -311,7 +333,7 @@ void SpectrumRenderer::render_psd_pane(const char* title, const std::vector<floa
                                     "SNR %.1f dB  (%.1f dBm)", snr_db, peak_dbm);
                 ImPlot::Annotation(freq_start + span * 0.02, noise_dbm,
                                     ImVec4(0.75f, 0.75f, 0.80f, 1.0f), ImVec2(0.0f, -9.0f), true,
-                                    "noise %.1f dBm", noise_dbm);
+                                    text("шум %.1f дБм", "noise %.1f dBm"), noise_dbm);
             }
         }
 
@@ -329,12 +351,12 @@ void SpectrumRenderer::render_psd_pane(const char* title, const std::vector<floa
                 cursor_locked_ = !cursor_locked_;
 
             ImGui::BeginTooltip();
-            ImGui::Text("%.4f MHz", cursor_freq_hz_ / 1e6f);
-            ImGui::Text("%.1f dBm", cursor_dbm_);
+            ImGui::Text(text("%.4f МГц", "%.4f MHz"), cursor_freq_hz_ / 1e6f);
+            ImGui::Text(text("%.1f дБм", "%.1f dBm"), cursor_dbm_);
             // «Над шумом» — тот же шумовой пол, что нарисован линией; для узкого
             // сигнала это и есть его SNR, а не только SNR самого сильного в полосе.
-            if (snr_valid) ImGui::Text("%+.1f dB over noise", cursor_dbm_ - noise_dbm);
-            if (cursor_locked_) ImGui::Text("[locked]");
+            if (snr_valid) ImGui::Text(text("%+.1f дБ над шумом", "%+.1f dB over noise"), cursor_dbm_ - noise_dbm);
+            if (cursor_locked_) ImGui::TextUnformatted(text("[зафиксирован]", "[locked]"));
             ImGui::EndTooltip();
 
             ImPlotSpec cur_spec;
@@ -382,11 +404,11 @@ void SpectrumRenderer::render_psd_plot() {
     bool dual = (state_.chan_mode.load() == PlutoChannelMode::Both) && !local_psd2_.empty();
     if (dual) {
         float pane_w = avail.x * 0.5f - 4.0f;
-        render_psd_pane("PSD Rx1", local_psd_, local_peak_, pane_w, h, freq_start, freq_stop, false);
+        render_psd_pane(text("Спектр мощности Rx1###psd_rx1", "PSD Rx1###psd_rx1"), local_psd_, local_peak_, pane_w, h, freq_start, freq_stop, false);
         ImGui::SameLine();
-        render_psd_pane("PSD Rx2", local_psd2_, local_peak2_, pane_w, h, freq_start, freq_stop, true);
+        render_psd_pane(text("Спектр мощности Rx2###psd_rx2", "PSD Rx2###psd_rx2"), local_psd2_, local_peak2_, pane_w, h, freq_start, freq_stop, true);
     } else {
-        render_psd_pane("PSD", local_psd_, local_peak_, avail.x, h, freq_start, freq_stop, false);
+        render_psd_pane(text("Спектр мощности###psd", "PSD###psd"), local_psd_, local_peak_, avail.x, h, freq_start, freq_stop, false);
     }
 }
 
@@ -397,7 +419,7 @@ void SpectrumRenderer::render_waterfall_pane(const char* title, const std::vecto
 
     if (ImPlot::BeginPlot(title, { plot_w, plot_h },
                           ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoInputs)) {
-        ImPlot::SetupAxes("Frequency (MHz)", nullptr,
+        ImPlot::SetupAxes(text("Частота (МГц)", "Frequency (MHz)"), nullptr,
                           ImPlotAxisFlags_None,
                           ImPlotAxisFlags_NoDecorations);
         ImPlot::SetupAxisLimits(ImAxis_X1, freq_start, freq_stop, ImPlotCond_Always);
@@ -441,11 +463,11 @@ void SpectrumRenderer::render_waterfall() {
     bool dual = (state_.chan_mode.load() == PlutoChannelMode::Both) && !local_waterfall2_.empty();
     if (dual) {
         float pane_w = avail.x * 0.5f - 4.0f;
-        render_waterfall_pane("Waterfall Rx1", local_waterfall_, pane_w, h, freq_start, freq_stop);
+        render_waterfall_pane(text("Водопад Rx1###waterfall_rx1", "Waterfall Rx1###waterfall_rx1"), local_waterfall_, pane_w, h, freq_start, freq_stop);
         ImGui::SameLine();
-        render_waterfall_pane("Waterfall Rx2", local_waterfall2_, pane_w, h, freq_start, freq_stop);
+        render_waterfall_pane(text("Водопад Rx2###waterfall_rx2", "Waterfall Rx2###waterfall_rx2"), local_waterfall2_, pane_w, h, freq_start, freq_stop);
     } else {
-        render_waterfall_pane("Waterfall", local_waterfall_, avail.x, h, freq_start, freq_stop);
+        render_waterfall_pane(text("Водопад###waterfall", "Waterfall###waterfall"), local_waterfall_, avail.x, h, freq_start, freq_stop);
     }
 }
 
@@ -477,24 +499,27 @@ void SpectrumRenderer::render_clip_pane() {
         // половина всех окон подряд требуют разных решений.
         float share = win_total ? 100.0f * static_cast<float>(windows) / static_cast<float>(win_total) : 0.0f;
         ImGui::TextColored({1.0f, 0.35f, 0.35f, 1.0f},
-                            "CLIPPING: %llu of %llu windows (%.0f%% of the time), worst %.2f%% of samples, last %.1f s ago",
+                            text("ПЕРЕГРУЗКА: %llu из %llu окон (%.0f%% времени), максимум %.2f%% отсчётов, последняя %.1f с назад",
+                                 "CLIPPING: %llu of %llu windows (%.0f%% of the time), worst %.2f%% of samples, last %.1f s ago"),
                             static_cast<unsigned long long>(windows),
                             static_cast<unsigned long long>(win_total),
                             share, worst, t_last >= 0.0 ? t_now - t_last : 0.0);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Samples that hit the ADC full scale. They are destroyed, not just loud:\n"
-                              "the spectrum grows harmonics that were never on the air, and demodulation\n"
-                              "breaks on them. Cure is less gain (or an attenuator), not a different view.");
+            ImGui::SetTooltip("%s", text(
+                "Отсчёты достигли предельного уровня АЦП и необратимо искажены. В спектре появляются ложные гармоники, а демодуляция нарушается. Уменьшите усиление или установите аттенюатор.",
+                "Samples reached the ADC full scale and are irreversibly distorted. False harmonics appear and demodulation breaks. Reduce gain or add an attenuator."));
     } else if (dual) {
-        ImGui::TextDisabled("ADC level: %s peak %.1f dBFS, Rx2 peak %.1f dBFS - no clipping",
+        ImGui::TextDisabled(text("Уровень АЦП: пик %s %.1f дБFS, пик Rx2 %.1f дБFS — перегрузки нет",
+                                 "ADC level: %s peak %.1f dBFS, Rx2 peak %.1f dBFS - no clipping"),
                             name1, state_.clip_peak_dbfs1.load(), state_.clip_peak_dbfs2.load());
     } else {
-        ImGui::TextDisabled("ADC level: %s peak %.1f dBFS - no clipping",
+        ImGui::TextDisabled(text("Уровень АЦП: пик %s %.1f дБFS — перегрузки нет",
+                                 "ADC level: %s peak %.1f dBFS - no clipping"),
                             name1, state_.clip_peak_dbfs1.load());
     }
 
     ImGui::SameLine();
-    if (ImGui::SmallButton("Reset clip stats")) {
+    if (ImGui::SmallButton(text("Сбросить статистику перегрузки", "Reset clip stats"))) {
         state_.clip_reset_requested.store(true);
         // Пока поток не идёт, забирать флаг некому — чистим сами, иначе кнопка
         // выглядела бы сломанной именно тогда, когда на неё чаще всего жмут:
@@ -516,7 +541,7 @@ void SpectrumRenderer::render_clip_pane() {
 
     int n = static_cast<int>(local_clip_t_.size());
     if (n == 0) {
-        ImGui::TextDisabled("waiting for samples...");
+        ImGui::TextDisabled("%s", text("ожидание отсчётов...", "waiting for samples..."));
         return;
     }
 
@@ -544,7 +569,7 @@ void SpectrumRenderer::render_clip_pane() {
 
     ImPlot::SetNextAxesLimits(x_min, 0.0, -60.0, 3.0, ImPlotCond_Always);
     if (ImPlot::BeginPlot("##clip", { avail.x, h }, ImPlotFlags_NoMouseText | ImPlotFlags_NoInputs)) {
-        ImPlot::SetupAxes("Time (s, 0 = now)", "dBFS");
+        ImPlot::SetupAxes(text("Время (с, 0 = сейчас)", "Time (s, 0 = now)"), "dBFS");
         ImPlot::SetupAxisLimits(ImAxis_X1, x_min, 0.0, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, -60.0, 3.0, ImPlotCond_Always);
         // Полоса низкая (~90 px): легенда в столбик заняла бы её целиком, а
@@ -557,7 +582,7 @@ void SpectrumRenderer::render_clip_pane() {
             ImPlotSpec mark_spec;
             mark_spec.LineColor  = ImVec4(1.0f, 0.25f, 0.25f, 0.55f);
             mark_spec.LineWeight = 1.0f;
-            ImPlot::PlotInfLines("clipped", clip_mark_x_.data(), static_cast<int>(clip_mark_x_.size()), mark_spec);
+            ImPlot::PlotInfLines(text("перегрузка", "clipped"), clip_mark_x_.data(), static_cast<int>(clip_mark_x_.size()), mark_spec);
 
             ImPlotSpec dot_spec;
             dot_spec.Marker          = ImPlotMarker_Square;
@@ -574,7 +599,7 @@ void SpectrumRenderer::render_clip_pane() {
         thr_spec.LineColor = ImVec4(1.0f, 0.35f, 0.35f, 0.7f);
         float thr_x[2] = { static_cast<float>(x_min), 0.0f };
         float thr_y[2] = { clip_dbfs, clip_dbfs };
-        ImPlot::PlotLine("full scale", thr_x, thr_y, 2, thr_spec);
+        ImPlot::PlotLine(text("предельный уровень", "full scale"), thr_x, thr_y, 2, thr_spec);
 
         ImPlotSpec ch1_spec;
         ch1_spec.LineColor = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
@@ -595,10 +620,10 @@ void SpectrumRenderer::render_clip_pane() {
                 if (std::fabs(clip_x_[i] - mx) < std::fabs(clip_x_[best] - mx)) best = i;
 
             ImGui::BeginTooltip();
-            ImGui::Text("%.1f s ago", -clip_x_[best]);
-            ImGui::Text("%s peak %.1f dBFS, clipped %.2f%%", name1, local_clip_dbfs1_[best], local_clip_pct1_[best]);
+            ImGui::Text(text("%.1f с назад", "%.1f s ago"), -clip_x_[best]);
+            ImGui::Text(text("%s: пик %.1f дБFS, перегрузка %.2f%%", "%s peak %.1f dBFS, clipped %.2f%%"), name1, local_clip_dbfs1_[best], local_clip_pct1_[best]);
             if (dual)
-                ImGui::Text("Rx2 peak %.1f dBFS, clipped %.2f%%", local_clip_dbfs2_[best], local_clip_pct2_[best]);
+                ImGui::Text(text("Rx2: пик %.1f дБFS, перегрузка %.2f%%", "Rx2 peak %.1f dBFS, clipped %.2f%%"), local_clip_dbfs2_[best], local_clip_pct2_[best]);
             ImGui::EndTooltip();
         }
 
@@ -610,10 +635,10 @@ void SpectrumRenderer::render_demod_pane() {
     DemodMode mode = state_.demod_mode.load();
     if (mode == DemodMode::Off) return;
 
-    ImGui::TextUnformatted("FM Audio Demod");
+    ImGui::TextUnformatted(text("FM-аудиодемодулятор", "FM Audio Demod"));
 
     if (!state_.demod_audio_has_data.load() || local_demod_waveform_.empty()) {
-        ImGui::TextDisabled("Waiting for demodulated audio...");
+        ImGui::TextDisabled("%s", text("Ожидание демодулированного аудио...", "Waiting for demodulated audio..."));
         return;
     }
 
@@ -630,15 +655,15 @@ void SpectrumRenderer::render_demod_pane() {
     }
 
     ImPlot::SetNextAxesLimits(0, n, -1.0, 1.0, ImPlotCond_Always);
-    if (ImPlot::BeginPlot("Demodulated Audio", { avail.x, h },
+    if (ImPlot::BeginPlot(text("Демодулированное аудио###demod_audio", "Demodulated Audio###demod_audio"), { avail.x, h },
                           ImPlotFlags_NoLegend | ImPlotFlags_NoInputs)) {
-        ImPlot::SetupAxes("Sample", "Amplitude");
+        ImPlot::SetupAxes(text("Отсчёт", "Sample"), text("Амплитуда", "Amplitude"));
         ImPlot::SetupAxisLimits(ImAxis_X1, 0, n, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, -1.0, 1.0, ImPlotCond_Always);
 
         ImPlotSpec spec;
         spec.LineColor = ImVec4(0.224f, 0.529f, 0.898f, 1.0f);
-        ImPlot::PlotLine("audio", x_axis.data(), local_demod_waveform_.data(), n, spec);
+        ImPlot::PlotLine(text("аудио", "audio"), x_axis.data(), local_demod_waveform_.data(), n, spec);
 
         ImPlot::EndPlot();
     }
@@ -662,11 +687,14 @@ void SpectrumRenderer::render_status_bar() {
 
     ImGui::PushStyleColor(ImGuiCol_Text, connected ? ImVec4(0.35f, 0.9f, 0.35f, 1.0f)
                                                    : ImVec4(0.9f, 0.4f, 0.4f, 1.0f));
-    ImGui::TextUnformatted(connected ? "* CONNECTED" : "* DISCONNECTED");
+    ImGui::TextUnformatted(connected
+        ? text("● ПОДКЛЮЧЕНО", "● CONNECTED")
+        : text("● НЕТ ПОДКЛЮЧЕНИЯ", "● DISCONNECTED"));
     ImGui::PopStyleColor();
 
     ImGui::SameLine();
-    ImGui::Text("|  %.3f MHz   %.1f MSPS   FFT %d   Frames %d",
+    ImGui::Text(text("|  %.3f МГц   %.1f Мвыб/с   БПФ %d   Кадров %d",
+                     "|  %.3f MHz   %.1f MSPS   FFT %d   Frames %d"),
                 static_cast<double>(state_.center_freq_hz.load()) / 1e6,
                 static_cast<float>(state_.sample_rate_hz.load()) / 1e6f,
                 state_.fft_size.load(),
@@ -674,24 +702,29 @@ void SpectrumRenderer::render_status_bar() {
 
     if (playing) {
         ImGui::SameLine();
-        ImGui::TextColored({0.4f, 0.9f, 0.4f, 1.0f}, "|  PLAYING FILE");
+        ImGui::TextColored({0.4f, 0.9f, 0.4f, 1.0f}, "%s",
+                           text("|  ВОСПРОИЗВЕДЕНИЕ ФАЙЛА", "|  PLAYING FILE"));
     }
 
     // предупреждения — только когда есть о чём предупредить, чтобы строка не
     // превращалась в постоянный шум
     if (!state_.audio_device_ok.load() && state_.demod_mode.load() != DemodMode::Off) {
         ImGui::SameLine();
-        ImGui::TextColored({0.95f, 0.5f, 0.3f, 1.0f}, "|  audio device unavailable");
+        ImGui::TextColored({0.95f, 0.5f, 0.3f, 1.0f}, "%s",
+                           text("|  аудиоустройство недоступно", "|  audio device unavailable"));
     }
     // Перегрузка входа. Стоит рядом с признаком воспроизведения не случайно:
     // на записи её уже не исправить, и знать о ней надо до того, как по этой
     // записи начнут что-то мерить.
     if (state_.clip_active.load()) {
         ImGui::SameLine();
-        ImGui::TextColored({1.0f, 0.3f, 0.3f, 1.0f}, "|  CLIP %.2f%%", state_.clip_pct1.load());
+        ImGui::TextColored({1.0f, 0.3f, 0.3f, 1.0f},
+                           text("|  ПЕРЕГРУЗКА %.2f%%", "|  CLIP %.2f%%"), state_.clip_pct1.load());
     } else if (state_.clip_windows.load() > 0) {
         ImGui::SameLine();
-        ImGui::TextColored({0.95f, 0.6f, 0.3f, 1.0f}, "|  clipping seen (%llu windows, worst %.2f%%)",
+        ImGui::TextColored({0.95f, 0.6f, 0.3f, 1.0f},
+                            text("|  была перегрузка (%llu окон, максимум %.2f%%)",
+                                 "|  clipping seen (%llu windows, worst %.2f%%)"),
                             static_cast<unsigned long long>(state_.clip_windows.load()),
                             state_.clip_worst_pct.load());
     }
@@ -699,30 +732,19 @@ void SpectrumRenderer::render_status_bar() {
     uint64_t dropped = state_.save_dropped_samples.load();
     if (!state_.is_saving.load() && dropped > 0) {
         ImGui::SameLine();
-        ImGui::TextColored({1.0f, 0.45f, 0.45f, 1.0f}, "|  last recording dropped %llu samples (disk too slow)",
+        ImGui::TextColored({1.0f, 0.45f, 0.45f, 1.0f},
+                            text("|  в последней записи потеряно %llu отсчётов (медленный диск)",
+                                 "|  last recording dropped %llu samples (disk too slow)"),
                             static_cast<unsigned long long>(dropped));
     }
 
-    // Переключатели отдельных окон живут здесь, у состояния приложения: они
-    // относятся не к какой-то одной секции настроек, а к тому, что показано
-    // на экране.
-    float btn_w = 120.0f;
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - btn_w * 3.0f - ImGui::GetStyle().ItemSpacing.x * 2.0f);
-    if (ImGui::Button("Peleng", ImVec2(btn_w, 0.0f)))
-        active_page_ = Page::Peleng;
-    ImGui::SameLine();
-    if (ImGui::Button("TV picture", ImVec2(btn_w, 0.0f)))
-        active_page_ = Page::Television;
-    ImGui::SameLine();
-    if (ImGui::Button("Phase history", ImVec2(btn_w, 0.0f)))
-        active_page_ = Page::Phase;
 }
 
 void SpectrumRenderer::render_device_section() {
     // Секция всегда раскрыта: Leaf убирает стрелку и делает заголовок
     // некликабельным, поэтому настройки не могут схлопнуться под руками —
     // ни по клику, ни при смене состояния подключения.
-    ImGui::CollapsingHeader("Device", ImGuiTreeNodeFlags_Leaf);
+    ImGui::CollapsingHeader(text("Устройство", "Device"), ImGuiTreeNodeFlags_Leaf);
 
     std::vector<std::string> local_uris;
     {
@@ -741,7 +763,7 @@ void SpectrumRenderer::render_device_section() {
     for (const auto& uri : local_uris)
         combo_items.push_back(uri.c_str());
 
-    labeled_item("Device", 250.0f);
+    labeled_item(text("Устройство", "Device"), 250.0f);
     if (ImGui::Combo("##uri", &current_uri_idx, combo_items.data(), static_cast<int>(combo_items.size()))) {
         std::lock_guard<std::mutex> lock(state_.connection_mutex);
         std::string selected_uri = local_uris[current_uri_idx];
@@ -751,16 +773,16 @@ void SpectrumRenderer::render_device_section() {
     ImGui::SameLine();
     if (state_.is_scanning.load()) {
         ImGui::BeginDisabled();
-        ImGui::Button("Scanning...");
+        ImGui::Button(text("Поиск...", "Scanning..."));
         ImGui::EndDisabled();
-    } else if (ImGui::Button("Scan")) {
+    } else if (ImGui::Button(text("Найти", "Scan"))) {
         state_.scan_requested.store(true);
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160.0f);
-    ImGui::InputTextWithHint("##manualip", "or type ip:192.168.2.1", ip_input_buf_, sizeof(ip_input_buf_));
+    ImGui::InputTextWithHint("##manualip", text("или введите ip:192.168.2.1", "or type ip:192.168.2.1"), ip_input_buf_, sizeof(ip_input_buf_));
     ImGui::SameLine();
-    if (ImGui::Button("Use")) {
+    if (ImGui::Button(text("Применить", "Use"))) {
         std::string manual = ip_input_buf_;
         if (!manual.empty()) {
             if (manual.rfind("ip:", 0) != 0 && manual != "local")
@@ -772,14 +794,14 @@ void SpectrumRenderer::render_device_section() {
 
     // Поиск платы по MAC. IP ей выдаёт DHCP и он меняется между загрузками,
     // поэтому найденный адрес не запоминаем, а ищем заново по постоянному MAC.
-    labeled_item("Board MAC", 170.0f);
+    labeled_item(text("MAC платы", "Board MAC"), 170.0f);
     ImGui::InputTextWithHint("##boardmac", "42:7e:d7:4e:0f:77", board_mac_buf_, sizeof(board_mac_buf_));
     ImGui::SameLine();
     if (state_.board_is_finding.load()) {
         ImGui::BeginDisabled();
-        ImGui::Button("Searching...");
+        ImGui::Button(text("Поиск...", "Searching..."));
         ImGui::EndDisabled();
-    } else if (ImGui::Button("Find board")) {
+    } else if (ImGui::Button(text("Найти плату", "Find board"))) {
         std::lock_guard<std::mutex> lock(state_.board_mutex);
         state_.board_mac = board_mac_buf_;
         state_.board_find_requested.store(true);
@@ -793,7 +815,7 @@ void SpectrumRenderer::render_device_section() {
     }
     if (!board_ip.empty()) {
         ImGui::SameLine();
-        if (ImGui::Button("Use as device")) {
+        if (ImGui::Button(text("Выбрать устройство", "Use as device"))) {
             std::lock_guard<std::mutex> lock(state_.connection_mutex);
             state_.pluto_ip = "ip:" + board_ip;
         }
@@ -809,7 +831,7 @@ void SpectrumRenderer::render_device_section() {
             state_.connect_requested.store(true);
     };
 
-    labeled_item("Input", 120.0f);
+    labeled_item(text("Вход", "Input"), 120.0f);
     static const char* chan_modes[] = { "Rx 1", "Rx 2", "Rx 1 + Rx 2" };
     int current_mode = static_cast<int>(state_.chan_mode.load());
     if (ImGui::Combo("##channels", &current_mode, chan_modes, 3)) {
@@ -820,7 +842,7 @@ void SpectrumRenderer::render_device_section() {
     ImGui::SetNextItemWidth(140.0f);
     static const char* port_options[] = { "A_BALANCED", "B_BALANCED", "C_BALANCED", "A_N", "A_P", "B_N", "B_P" };
     int current_port = state_.rf_port_idx.load();
-    if (ImGui::Combo("RF port", &current_port, port_options, 7)) {
+    if (ImGui::Combo(text("RF-порт", "RF port"), &current_port, port_options, 7)) {
         state_.rf_port_idx.store(current_port);
         reapply_if_connected();
     }
@@ -830,16 +852,14 @@ void SpectrumRenderer::render_device_section() {
     ImGui::TextUnformatted("");
     ImGui::SameLine(kLabelColumnWidth);
     bool phase_inversion = state_.rx_phase_inversion.load();
-    if (ImGui::Checkbox("Invert Rx2 phase", &phase_inversion)) {
+    if (ImGui::Checkbox(text("Инвертировать фазу Rx2", "Invert Rx2 phase"), &phase_inversion)) {
         state_.rx_phase_inversion.store(phase_inversion);
         reapply_if_connected();
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("AD9361 runs Rx2 in antiphase to Rx1 by default — measured 180 deg +/- 3\n"
-                          "between the channels. For peleng that is a mirrored bearing, not a small\n"
-                          "correction, so this is on by default.\n"
-                          "Sets adi,rx1-rx2-phase-inversion-enable; applied by re-initialising the\n"
-                          "chip, so it takes a reconnect and does not survive a board reboot.");
+        ImGui::SetTooltip("%s", text(
+            "По умолчанию AD9361 принимает Rx2 в противофазе к Rx1. Для пеленгации это зеркально меняет направление. Настройка применяется при переподключении и сбрасывается после перезапуска платы.",
+            "AD9361 runs Rx2 in antiphase to Rx1 by default. For direction finding this mirrors the bearing. Applied on reconnect and reset after a board reboot."));
 
     // Стабильная фаза: отключает адаптивные алгоритмы AD9361 (rf_dc_offset_tracking_en,
     // bb_dc_offset_tracking_en, quadrature_tracking_en) для получения стабильной фазы
@@ -847,15 +867,14 @@ void SpectrumRenderer::render_device_section() {
     ImGui::TextUnformatted("");
     ImGui::SameLine(kLabelColumnWidth);
     bool phase_stable = state_.phase_stable_mode.load();
-    if (ImGui::Checkbox("Phase stable mode", &phase_stable)) {
+    if (ImGui::Checkbox(text("Фазостабильный режим", "Phase stable mode"), &phase_stable)) {
         state_.phase_stable_mode.store(phase_stable);
         reapply_if_connected();
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Disable AD9361 adaptive algorithms (RF/BB DC offset tracking,\n"
-                          "quadrature tracking) for phase-stable measurements between RX1/RX2.\n"
-                          "Removes AM-to-PM effect when signal level changes (RSSI variation).\n"
-                          "Required for accurate phase calibration; applied at reconnect.");
+        ImGui::SetTooltip("%s", text(
+            "Отключает адаптивные алгоритмы AD9361 для стабильных фазовых измерений между Rx1 и Rx2. Требуется для точной фазовой калибровки; применяется при переподключении.",
+            "Disables AD9361 adaptive algorithms for phase-stable measurements between Rx1 and Rx2. Required for accurate phase calibration; applied on reconnect."));
 
     // SameLine — внутри веток, а не перед ними: в норме (плата отвечает и
     // инверсия уже применена) приписки нет, и висящий SameLine затягивал на
@@ -863,10 +882,10 @@ void SpectrumRenderer::render_device_section() {
     if (state_.is_connected.load()) {
         if (!state_.rx_phase_inversion_supported.load()) {
             ImGui::SameLine();
-            ImGui::TextDisabled("(not exposed by this firmware)");
+            ImGui::TextDisabled("%s", text("(не поддерживается прошивкой)", "(not exposed by this firmware)"));
         } else if (state_.rx_phase_inversion_applied.load() != phase_inversion) {
             ImGui::SameLine();
-            ImGui::TextDisabled("(reconnect to apply)");
+            ImGui::TextDisabled("%s", text("(переподключитесь для применения)", "(reconnect to apply)"));
         }
     }
 
@@ -878,7 +897,7 @@ void SpectrumRenderer::render_device_section() {
     bool cal_on = state_.rx_cal_enabled.load();
     bool cal_loaded = state_.rx_cal_loaded.load();
     ImGui::BeginDisabled(!cal_loaded);
-    if (ImGui::Checkbox("Apply Rx2 calibration", &cal_on))
+    if (ImGui::Checkbox(text("Применить калибровку Rx2", "Apply Rx2 calibration"), &cal_on))
         state_.rx_cal_enabled.store(cal_on);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -887,13 +906,10 @@ void SpectrumRenderer::render_device_section() {
             std::lock_guard<std::mutex> lock(state_.rx_cal_mutex);
             status = state_.rx_cal_status;
         }
-        ImGui::SetTooltip("Removes the receivers' own Rx2/Rx1 phase and amplitude error,\n"
-                          "measured with a generator over frequency and gain.\n"
-                          "Applied to the Rx2 samples themselves, so peleng, cross-phase and\n"
-                          "the spectrum all see corrected data.\n"
-                          "Only in dual-channel mode, and only with manual gain equal on both\n"
-                          "channels — that is how the table was measured.\n\n%s",
-                          status.empty() ? "no table loaded" : status.c_str());
+        ImGui::SetTooltip(text(
+            "Устраняет собственную фазовую и амплитудную ошибку Rx2/Rx1. Действует только в двухканальном режиме при одинаковом ручном усилении.\n\n%s",
+            "Removes the receivers' own Rx2/Rx1 phase and amplitude error. Applies only in dual-channel mode with equal manual gain.\n\n%s"),
+            status.empty() ? text("таблица не загружена", "no table loaded") : status.c_str());
     }
 
     // Путь редактируется здесь, а не зашит: таблица платы и таблица конкретного
@@ -905,7 +921,7 @@ void SpectrumRenderer::render_device_section() {
                               rx_cal_path_buf_, sizeof(rx_cal_path_buf_));
 
     ImGui::SameLine();
-    if (ImGui::SmallButton("Reload##rxcal")) {
+    if (ImGui::SmallButton(text("Перезагрузить##rxcal", "Reload##rxcal"))) {
         {
             std::lock_guard<std::mutex> lock(state_.rx_cal_mutex);
             state_.rx_cal_path = rx_cal_path_buf_;
@@ -915,22 +931,22 @@ void SpectrumRenderer::render_device_section() {
 
     if (!cal_loaded) {
         ImGui::SameLine();
-        ImGui::TextDisabled("(no table)");
+        ImGui::TextDisabled("%s", text("(таблица отсутствует)", "(no table)"));
     } else if (cal_on) {
         // Что именно вычитается прямо сейчас. Без этих цифр галочка — вера, а
         // не измерение: за краем сетки поправка берётся с границы, и это видно.
         ImGui::SameLine();
         if (state_.chan_mode.load() != PlutoChannelMode::Both) {
-            ImGui::TextDisabled("(dual-channel only)");
+            ImGui::TextDisabled("%s", text("(только для двух каналов)", "(dual-channel only)"));
         } else {
-            ImGui::TextDisabled("%+.2f deg  %+.2f dB%s",
+        ImGui::TextDisabled(text("%+.2f град.  %+.2f дБ%s", "%+.2f deg  %+.2f dB%s"),
                                 state_.rx_cal_phase_deg.load(),
                                 state_.rx_cal_amp_db.load(),
-                                state_.rx_cal_in_range.load() ? "" : "  outside the table");
+                                state_.rx_cal_in_range.load() ? "" : text("  вне таблицы", "  outside the table"));
         }
     }
 
-    labeled_item("Sampling", 130.0f);
+    labeled_item(text("Дискретизация", "Sampling"), 130.0f);
     int sample_rate_mhz = static_cast<int>(state_.sample_rate_hz.load() / 1'000'000);
     if (ImGui::InputInt("MSPS##rate", &sample_rate_mhz)) {
         sample_rate_mhz = max(1, min(61, sample_rate_mhz));
@@ -938,13 +954,13 @@ void SpectrumRenderer::render_device_section() {
         reapply_if_connected();
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Must match the signal you are receiving.\n"
-                          "When playing a recording, set this to the rate it was captured at —\n"
-                          "TV line timing is derived from it, and a mismatch smears the picture.");
+        ImGui::SetTooltip("%s", text(
+            "Должна соответствовать принимаемому сигналу. При воспроизведении записи укажите частоту дискретизации, с которой она была сделана.",
+            "Must match the received signal. For playback, use the sampling rate at which the recording was captured."));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(130.0f);
     int bandwidth_mhz = static_cast<int>(state_.bandwidth_hz.load() / 1'000'000);
-    if (ImGui::InputInt("MHz filter", &bandwidth_mhz)) {
+    if (ImGui::InputInt(text("МГц, фильтр", "MHz filter"), &bandwidth_mhz)) {
         bandwidth_mhz = max(1, min(56, bandwidth_mhz));
         state_.bandwidth_hz.store(bandwidth_mhz * 1'000'000);
         reapply_if_connected();
@@ -954,7 +970,8 @@ void SpectrumRenderer::render_device_section() {
     bool connected_now = state_.is_connected.load();
     ImGui::PushStyleColor(ImGuiCol_Button, connected_now ? ImVec4(0.2f, 0.5f, 0.25f, 1.0f)
                                                          : ImVec4(0.6f, 0.25f, 0.25f, 1.0f));
-    if (ImGui::Button(connected_now ? "Reconnect" : "Connect"))
+    if (ImGui::Button(connected_now ? text("Переподключить", "Reconnect")
+                                    : text("Подключить", "Connect")))
         state_.connect_requested.store(true);
     ImGui::PopStyleColor();
 
@@ -963,25 +980,28 @@ void SpectrumRenderer::render_device_section() {
     ImGui::SameLine();
     ImGui::BeginDisabled(!connected_now);
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.35f, 0.15f, 1.0f));
-    if (ImGui::Button("Disconnect"))
+    if (ImGui::Button(text("Отключить", "Disconnect")))
         state_.disconnect_requested.store(true);
     ImGui::PopStyleColor();
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Close the libiio connection and release the board.\n"
-                          "Streaming stops; settings stay as they are.");
+        ImGui::SetTooltip("%s", text(
+            "Закрывает соединение libiio и освобождает плату. Поток останавливается, настройки сохраняются.",
+            "Closes the libiio connection and releases the board. Streaming stops; settings are preserved."));
 
     // Полный снимок SPI-регистров чипа (0x000..0x3FF), а не именованных
     // debug-атрибутов вроде инверсии/initialize выше. Нужна живая связь: файл
     // пишет CaptureThread, единственный владелец phy_dev_.
     bool dump_in_progress = state_.ad9361_reg_dump_in_progress.load();
     ImGui::BeginDisabled(!connected_now || dump_in_progress);
-    if (ImGui::Button(dump_in_progress ? "Dumping..." : "Dump AD9361 registers"))
+    if (ImGui::Button(dump_in_progress ? text("Сохранение...", "Dumping...")
+                                       : text("Сохранить регистры AD9361", "Dump AD9361 registers")))
         state_.ad9361_reg_dump_requested.store(true);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Reads every AD9361 SPI register (0x000..0x3FF) via iio_device_reg_read\n"
-                          "and saves address,value pairs to data/ad9361_regs_<timestamp>.csv.");
+        ImGui::SetTooltip("%s", text(
+            "Считывает все SPI-регистры AD9361 (0x000..0x3FF) и сохраняет пары адрес/значение в data/ad9361_regs_<время>.csv.",
+            "Reads all AD9361 SPI registers (0x000..0x3FF) and saves address/value pairs to data/ad9361_regs_<time>.csv."));
 
     std::string reg_dump_status;
     {
@@ -995,11 +1015,12 @@ void SpectrumRenderer::render_device_section() {
 }
 
 void SpectrumRenderer::render_tuning_section() {
-    ImGui::SeparatorText("Tuning");
+    ImGui::SeparatorText(text("Настройка приёма", "Tuning"));
 
-    labeled_item("Frequency", 260.0f);
+    labeled_item(text("Частота", "Frequency"), 260.0f);
     float freq_mhz = static_cast<float>(state_.center_freq_hz.load()) / 1e6f;
-    if (ImGui::SliderFloat("##freqslider", &freq_mhz, 0.0f, 6000.0f, "%.1f MHz")) {
+    if (ImGui::SliderFloat("##freqslider", &freq_mhz, 0.0f, 6000.0f,
+                           text("%.1f МГц", "%.1f MHz"))) {
         state_.center_freq_hz.store(static_cast<uint64_t>(freq_mhz * 1e6f));
         freq_axis_.clear();
         state_.peak_hold_reset.store(true);
@@ -1009,7 +1030,7 @@ void SpectrumRenderer::render_tuning_section() {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100.0f);
     static float freq_input = freq_mhz;
-    if (ImGui::InputFloat("MHz##input", &freq_input, 0.0f, 0.0f, "%.3f", ImGuiInputTextFlags_EnterReturnsTrue)) {
+    if (ImGui::InputFloat(text("МГц##input", "MHz##input"), &freq_input, 0.0f, 0.0f, "%.3f", ImGuiInputTextFlags_EnterReturnsTrue)) {
         freq_input = max(0.0f, min(6000.0f, freq_input));
         state_.center_freq_hz.store(static_cast<uint64_t>(freq_input * 1e6f));
         freq_axis_.clear();
@@ -1050,7 +1071,9 @@ void SpectrumRenderer::render_tuning_section() {
         nudge_freq(1);
     ImGui::PopButtonRepeat();
     if (ImGui::IsItemHovered() || ImGui::IsItemActive())
-        ImGui::SetTooltip("Step: %s (hold to repeat, or scroll over the frequency field)", kFreqStepLabels[freq_step_idx]);
+        ImGui::SetTooltip(text("Шаг: %s (удерживайте кнопку или прокручивайте над полем частоты)",
+                               "Step: %s (hold to repeat, or scroll over the frequency field)"),
+                          kFreqStepLabels[freq_step_idx]);
 
     // mouse wheel while hovering the slider or the numeric field also steps
     // by freq_step_hz — one tick per notch, no need to grab the arrows
@@ -1064,9 +1087,12 @@ void SpectrumRenderer::render_tuning_section() {
 // Усиление AD9361. Режим и уровень применяются на лету, без переподключения,
 // поэтому здесь нет reapply_if_connected(), как у настроек из секции Device.
 void SpectrumRenderer::render_gain_controls() {
-    labeled_item("Gain", 150.0f);
+    labeled_item(text("Усиление", "Gain"), 150.0f);
 
-    static const char* gain_modes[] = { "Manual", "AGC slow", "AGC fast", "Hybrid" };
+    const char* gain_modes[] = {
+        text("Ручное", "Manual"), text("АРУ медленное", "AGC slow"),
+        text("АРУ быстрое", "AGC fast"), text("Гибридное", "Hybrid")
+    };
     GainMode mode_now = state_.gain_mode.load();
     int current_gain_mode = static_cast<int>(mode_now);
     if (ImGui::Combo("##gainmode", &current_gain_mode, gain_modes, IM_ARRAYSIZE(gain_modes))) {
@@ -1074,10 +1100,9 @@ void SpectrumRenderer::render_gain_controls() {
         state_.gain_mode.store(mode_now);
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Manual   - gain index is held at the value set below\n"
-                          "AGC slow - chip tracks average power, steps slowly (continuous signals)\n"
-                          "AGC fast - chip reacts to overload peaks inside a burst (bursty/TDD)\n"
-                          "Hybrid   - your level, but overload detectors may pull it down");
+        ImGui::SetTooltip("%s", text(
+            "Ручной — заданное усиление сохраняется.\nАРУ медленная — плавно отслеживает среднюю мощность.\nАРУ быстрая — реагирует на пики перегрузки.\nГибридный — заданный уровень может быть снижен защитой от перегрузки.",
+            "Manual - holds the selected gain.\nSlow AGC - tracks average power gradually.\nFast AGC - reacts to overload peaks.\nHybrid - overload protection may reduce the selected gain."));
 
     // Уровень задаётся только там, где индекс усиления держим мы: в режимах АРУ
     // его выбирает чип, и запись hardwaregain драйвер отклоняет. Ползунок в этих
@@ -1097,15 +1122,18 @@ void SpectrumRenderer::render_gain_controls() {
         state_.gain_db.store(gain);
     ImGui::EndDisabled();
     if (!manual_gain && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("The AGC picks the gain index in this mode.\nSwitch to Manual or Hybrid to set it by hand.");
+        ImGui::SetTooltip("%s", text(
+            "В этом режиме усиление выбирает АРУ. Для ручной настройки выберите ручной или гибридный режим.",
+            "AGC selects the gain in this mode. Switch to Manual or Hybrid to set it yourself."));
 
     if (dual) {
         ImGui::SameLine();
-        if (ImGui::Checkbox("Link Rx2", &link))
+        if (ImGui::Checkbox(text("Связать Rx2", "Link Rx2"), &link))
             state_.gain_link_channels.store(link);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Rx2 follows Rx1. Peleng compares the two channels by amplitude,\n"
-                              "so a gain difference between them biases the measurement.");
+            ImGui::SetTooltip("%s", text(
+                "Усиление Rx2 повторяет Rx1. Различие усиления каналов искажает результат пеленгации.",
+                "Rx2 follows Rx1. Different channel gain biases the direction-finding result."));
 
         ImGui::BeginDisabled(!manual_gain || link);
         ImGui::SameLine();
@@ -1124,14 +1152,15 @@ void SpectrumRenderer::render_gain_controls() {
         ImGui::TextUnformatted("");
         ImGui::SameLine(kLabelColumnWidth);
         if (dual)
-            ImGui::TextDisabled("actual  Rx1 %.0f dB (RSSI %.1f dB)   Rx2 %.0f dB (RSSI %.1f dB)",
+            ImGui::TextDisabled(text("фактически  Rx1 %.0f дБ (RSSI %.1f дБ)   Rx2 %.0f дБ (RSSI %.1f дБ)",
+                                     "actual  Rx1 %.0f dB (RSSI %.1f dB)   Rx2 %.0f dB (RSSI %.1f dB)"),
                                 state_.gain_actual_db.load(), state_.rssi_db.load(),
                                 state_.gain_actual_db2.load(), state_.rssi_db2.load());
         else if (chan_mode == PlutoChannelMode::Channel_2)
-            ImGui::TextDisabled("actual %.0f dB   RSSI %.1f dB",
+            ImGui::TextDisabled(text("фактически %.0f дБ   RSSI %.1f дБ", "actual %.0f dB   RSSI %.1f dB"),
                                 state_.gain_actual_db2.load(), state_.rssi_db2.load());
         else
-            ImGui::TextDisabled("actual %.0f dB   RSSI %.1f dB",
+            ImGui::TextDisabled(text("фактически %.0f дБ   RSSI %.1f дБ", "actual %.0f dB   RSSI %.1f dB"),
                                 state_.gain_actual_db.load(), state_.rssi_db.load());
     }
 
@@ -1154,32 +1183,31 @@ void SpectrumRenderer::render_gain_controls() {
         // сотни тысяч отсчётов, но ниже любой реальной общей засветки.
         constexpr float kCoherenceFloor = 0.1f;
         if (gamma < kCoherenceFloor) {
-            ImGui::TextDisabled("Rx1-Rx2 phase  --   (coherence %.2f: no signal common to both)", gamma);
+            ImGui::TextDisabled(text("Фаза Rx1−Rx2  —   (когерентность %.2f: общего сигнала нет)",
+                                     "Rx1-Rx2 phase  --   (coherence %.2f: no signal common to both)"), gamma);
         } else {
             bool inverted = fabsf(phase) > 90.0f;
-            ImGui::TextDisabled("Rx1-Rx2 phase");
+            ImGui::TextDisabled("%s", text("Фаза Rx1−Rx2", "Rx1-Rx2 phase"));
             ImGui::SameLine();
             ImGui::TextColored(inverted ? ImVec4(0.95f, 0.55f, 0.25f, 1.0f)
                                         : ImVec4(0.45f, 0.85f, 0.45f, 1.0f),
-                               "%+.1f deg", phase);
+                               text("%+.1f°", "%+.1f deg"), phase);
             ImGui::SameLine();
-            ImGui::TextDisabled("(coherence %.2f)%s", gamma,
-                                inverted ? "  channels are in antiphase" : "");
+            ImGui::TextDisabled(text("(когерентность %.2f)%s", "(coherence %.2f)%s"), gamma,
+                                inverted ? text("  каналы в противофазе", "  channels are in antiphase") : "");
         }
         ImGui::EndGroup();
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("arg(sum Rx1 * conj(Rx2)) over the last buffer, and the coherence\n"
-                              "that says whether to trust it. Measured across the whole band at\n"
-                              "once, so it only means something when one signal dominates:\n"
-                              "with the band full of uncorrelated noise the coherence stays near 0.\n\n"
-                              "History and manual trim: \"Phase history\" button, top right.");
+            ImGui::SetTooltip("%s", text(
+                "Разность фаз Rx1/Rx2 по последнему буферу и когерентность каналов. Результат достоверен, когда в полосе преобладает один общий сигнал. История и ручная поправка находятся на странице «История фазы Rx1/Rx2».",
+                "Rx1/Rx2 phase difference over the latest buffer and channel coherence. The result is reliable when one common signal dominates the band. History and manual trim are on the Rx1/Rx2 phase history page."));
     }
 }
 
 void SpectrumRenderer::render_display_section() {
-    ImGui::SeparatorText("Display");
+    ImGui::SeparatorText(text("Отображение", "Display"));
 
-    labeled_item("FFT size", 100.0f);
+    labeled_item(text("Размер БПФ", "FFT size"), 100.0f);
     static const char* fft_options[] = { "1024", "2048", "4096", "8192", "16384", "32768", "65536" };
     static const int   fft_values[]  = { 1024, 2048, 4096, 8192, 16384, 32768, 65536 };
     static const int   fft_option_count = static_cast<int>(sizeof(fft_values) / sizeof(fft_values[0]));
@@ -1193,170 +1221,122 @@ void SpectrumRenderer::render_display_section() {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(140.0f);
     float cal = state_.cal_offset_db.load();
-    if (ImGui::InputFloat("dB cal offset", &cal, 0.5f, 1.0f, "%.1f"))
+    if (ImGui::InputFloat(text("дБ, поправка", "dB cal offset"), &cal, 0.5f, 1.0f, "%.1f"))
         state_.cal_offset_db.store(cal);
 
     ImGui::SameLine();
     bool peak_on = state_.peak_hold_on.load();
-    if (ImGui::Checkbox("Peak hold", &peak_on))
+    if (ImGui::Checkbox(text("Удержание пика", "Peak hold"), &peak_on))
         state_.peak_hold_on.store(peak_on);
     ImGui::SameLine();
-    if (ImGui::Button("Reset peak"))
+    if (ImGui::Button(text("Сбросить пик", "Reset peak")))
         state_.peak_hold_reset.store(true);
 
     ImGui::SameLine();
     bool exclude_dc = state_.exclude_dc_bin.load();
-    if (ImGui::Checkbox("Exclude DC", &exclude_dc))
+    if (ImGui::Checkbox(text("Исключить DC", "Exclude DC"), &exclude_dc))
         state_.exclude_dc_bin.store(exclude_dc);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Hides the LO-leakage spike at the center bin by interpolating it from its neighbors.");
+        ImGui::SetTooltip("%s", text(
+            "Скрывает выброс утечки гетеродина в центральном отсчёте, интерполируя соседние значения.",
+            "Hides the LO leakage spike in the center bin by interpolating neighboring values."));
 
     // Числа SNR — здесь, где есть место под целую строку; на самом графике от
     // них остаются только линия шумового пола и подпись у пика.
     labeled_item("SNR", 0.0f);
     bool snr_overlay = state_.snr_overlay_on.load();
-    if (ImGui::Checkbox("mark on plot", &snr_overlay))
+    if (ImGui::Checkbox(text("отметить на графике", "mark on plot"), &snr_overlay))
         state_.snr_overlay_on.store(snr_overlay);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Draws the noise floor line and the SNR label at the strongest bin.");
+        ImGui::SetTooltip("%s", text(
+            "Показывает линию шумового пола и значение ОСШ у самого сильного спектрального отсчёта.",
+            "Shows the noise-floor line and SNR at the strongest spectral bin."));
 
     if (state_.snr_valid.load()) {
         ImGui::SameLine();
-        ImGui::Text("%s  peak %.1f dBm @ %.4f MHz   noise %.1f dBm   SNR %.1f dB",
+        ImGui::Text(text("%s  пик %.1f дБм @ %.4f МГц   шум %.1f дБм   ОСШ %.1f дБ",
+                         "%s  peak %.1f dBm @ %.4f MHz   noise %.1f dBm   SNR %.1f dB"),
                     state_.chan_mode.load() == PlutoChannelMode::Channel_2 ? "Rx2" : "Rx1",
                     state_.snr_peak_dbm.load(), state_.snr_peak_hz.load() / 1e6,
                     state_.snr_noise_dbm.load(), state_.snr_db.load());
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Noise floor is the median over FFT bins, signal is the strongest bin, so\n"
-                              "SNR here is peak-over-noise in ONE bin - the number a spectrum analyzer\n"
-                              "shows. A demodulator sees less: its noise is collected over the whole\n"
-                              "channel bandwidth, not one bin.");
+            ImGui::SetTooltip("%s", text(
+                "Шумовой пол вычисляется как медиана отсчётов БПФ, а сигнал — как максимальный отсчёт. Это ОСШ в одной спектральной полосе; в полосе демодулятора значение будет ниже.",
+                "Noise floor is the FFT-bin median and signal is the strongest bin. This is SNR in one spectral bin; demodulator-band SNR will be lower."));
         if (state_.snr_valid2.load()) {
-            ImGui::TextDisabled("Rx2  peak %.1f dBm @ %.4f MHz   noise %.1f dBm   SNR %.1f dB",
+            ImGui::TextDisabled(text("Rx2  пик %.1f дБм @ %.4f МГц   шум %.1f дБм   ОСШ %.1f дБ",
+                                     "Rx2  peak %.1f dBm @ %.4f MHz   noise %.1f dBm   SNR %.1f dB"),
                                 state_.snr_peak_dbm2.load(), state_.snr_peak_hz2.load() / 1e6,
                                 state_.snr_noise_dbm2.load(), state_.snr_db2.load());
         }
     } else {
         ImGui::SameLine();
-        ImGui::TextDisabled("no spectrum yet");
+        ImGui::TextDisabled("%s", text("спектр ещё не получен", "no spectrum yet"));
     }
 
     if (cursor_locked_) {
-        ImGui::TextColored({1.0f, 1.0f, 0.0f, 1.0f}, "Cursor %.4f MHz  %.1f dBm", cursor_freq_hz_ / 1e6f, cursor_dbm_);
+        ImGui::TextColored({1.0f, 1.0f, 0.0f, 1.0f},
+                           text("Курсор %.4f МГц  %.1f дБм", "Cursor %.4f MHz  %.1f dBm"),
+                           cursor_freq_hz_ / 1e6f, cursor_dbm_);
         if (state_.snr_valid.load()) {
             ImGui::SameLine();
-            ImGui::TextColored({1.0f, 1.0f, 0.0f, 1.0f}, " (%+.1f dB over noise)",
+            ImGui::TextColored({1.0f, 1.0f, 0.0f, 1.0f},
+                               text(" (%+.1f дБ над шумом)", " (%+.1f dB over noise)"),
                                 cursor_dbm_ - state_.snr_noise_dbm.load());
         }
         ImGui::SameLine();
-        if (ImGui::Button("Unlock"))
+        if (ImGui::Button(text("Снять фиксацию", "Unlock")))
             cursor_locked_ = false;
     } else {
-        ImGui::TextDisabled("click the PSD plot to lock a cursor");
+        ImGui::TextDisabled("%s", text("Щёлкните по графику спектра, чтобы зафиксировать курсор",
+                                       "click the PSD plot to lock a cursor"));
     }
 }
 
 void SpectrumRenderer::render_demod_section() {
-    ImGui::SeparatorText("Demodulation");
+    ImGui::SeparatorText(text("Демодуляция", "Demodulation"));
 
-    labeled_item("Mode", 120.0f);
-    static const char* demod_modes[] = { "Off", "FM Audio", "TV Video" };
+    labeled_item(text("Режим", "Mode"), 120.0f);
+    const char* demod_modes[] = {
+        text("Выключена", "Off"), text("FM-аудио", "FM Audio")
+    };
     DemodMode demod_mode_now = state_.demod_mode.load();
+    if (demod_mode_now == DemodMode::TvVideo) {
+        demod_mode_now = DemodMode::Off;
+        state_.demod_mode.store(DemodMode::Off);
+    }
     int current_demod_mode = static_cast<int>(demod_mode_now);
-    if (ImGui::Combo("##demodmode", &current_demod_mode, demod_modes, 3))
+    if (ImGui::Combo("##demodmode", &current_demod_mode, demod_modes, 2))
         state_.demod_mode.store(static_cast<DemodMode>(current_demod_mode));
 
     if (demod_mode_now == DemodMode::FmAudio) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(130.0f);
         int fm_bw_khz = static_cast<int>(state_.fm_channel_bw_hz.load() / 1000);
-        if (ImGui::InputInt("kHz channel", &fm_bw_khz)) {
+        if (ImGui::InputInt(text("кГц, канал", "kHz channel"), &fm_bw_khz)) {
             fm_bw_khz = max(1, min(15000, fm_bw_khz));
             state_.fm_channel_bw_hz.store(static_cast<uint32_t>(fm_bw_khz) * 1000);
         }
     }
 
-    if (demod_mode_now == DemodMode::TvVideo) {
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(90.0f);
-        static const char* tv_standards[] = { "NTSC", "PAL" };
-        int current_standard = static_cast<int>(state_.tv_standard.load());
-        if (ImGui::Combo("##tvstandard", &current_standard, tv_standards, 2))
-            state_.tv_standard.store(static_cast<TvStandard>(current_standard));
-
-        ImGui::SameLine();
-        if (ImGui::Button("Show picture"))
-            active_page_ = Page::Television;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Opens the TV page, where the picture, signal diagnostics\n"
-                              "and noise reduction live.");
-
-        // Тонкая настройка ТВ убрана под свёрнутый заголовок: в норме её не
-        // трогают, а раньше все эти ползунки лежали в общем потоке и создавали
-        // впечатление, что для картинки надо что-то настраивать.
-        ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-        if (ImGui::TreeNode("TV tuning")) {
-            labeled_item("Sync level", 150.0f);
-            float sync_thresh = state_.tv_sync_threshold.load();
-            if (ImGui::SliderFloat("##syncthresh", &sync_thresh, -0.95f, -0.05f))
-                state_.tv_sync_threshold.store(sync_thresh);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Level below which the signal counts as a sync pulse.\n"
-                                  "Lower it if the picture rolls, raise it if it never locks.");
-
-            labeled_item("White level", 150.0f);
-            bool white_auto = state_.tv_white_auto.load();
-            ImGui::BeginDisabled(white_auto);
-            float white_ratio = state_.tv_white_ratio.load();
-            if (ImGui::SliderFloat("##whitelevel", &white_ratio, 0.5f, 4.0f, "%.2f"))
-                state_.tv_white_ratio.store(white_ratio);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("White level as a multiple of the sync-to-blanking swing.\n"
-                                  "2.5 = real broadcast signal (100 IRE white, 40 IRE sync).\n"
-                                  "0.85 = .bin files produced by python/mp4_to_iq.py.");
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (ImGui::Checkbox("auto", &white_auto))
-                state_.tv_white_auto.store(white_auto);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Track the white level from the brightest part of the picture.\n"
-                                  "Works with any source, but a dark scene lifts the whole image.");
-
-            labeled_item("Audio sub", 150.0f);
-            float sub_offset_mhz = static_cast<float>(state_.tv_audio_subcarrier_offset_hz.load() / 1e6);
-            if (ImGui::InputFloat("MHz##sub", &sub_offset_mhz, 0.1f, 0.5f, "%.2f")) {
-                sub_offset_mhz = max(0.5f, min(10.0f, sub_offset_mhz));
-                state_.tv_audio_subcarrier_offset_hz.store(static_cast<double>(sub_offset_mhz) * 1e6);
-            }
-            ImGui::SameLine();
-            bool sub_on = state_.tv_audio_subcarrier_on.load();
-            if (ImGui::Checkbox("enabled##sub", &sub_on))
-                state_.tv_audio_subcarrier_on.store(sub_on);
-
-            ImGui::TreePop();
-        }
-    }
-
-    // Звук относится к обоим режимам демодуляции, поэтому стоит после них и
-    // прячется целиком, когда демодулятор выключен — раньше громкость висела
-    // на экране всегда, даже когда звука в принципе нет.
     if (demod_mode_now != DemodMode::Off) {
-        labeled_item("Volume", 200.0f);
+        labeled_item(text("Громкость", "Volume"), 200.0f);
         float volume = state_.audio_volume.load();
         if (ImGui::SliderFloat("##volume", &volume, 0.0f, 1.0f))
             state_.audio_volume.store(volume);
 
         ImGui::SameLine();
         bool muted = state_.audio_mute.load();
-        if (ImGui::Checkbox("Mute", &muted))
+        if (ImGui::Checkbox(text("Без звука", "Mute"), &muted))
             state_.audio_mute.store(muted);
 
         ImGui::SameLine();
         bool deemph_on = state_.fm_deemphasis_on.load();
-        if (ImGui::Checkbox("De-emphasis", &deemph_on))
+        if (ImGui::Checkbox(text("Частотная коррекция", "De-emphasis"), &deemph_on))
             state_.fm_deemphasis_on.store(deemph_on);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Standard FM treble correction. Leave on unless the audio sounds dull.");
+            ImGui::SetTooltip("%s", text("Стандартная коррекция высоких частот FM. Оставьте включённой, если звук не кажется глухим.",
+                                         "Standard FM treble correction. Leave on unless the audio sounds dull."));
     }
 }
 
@@ -1368,18 +1348,20 @@ static bool path_says_dual_channel(const char* path) {
 }
 
 void SpectrumRenderer::render_record_section() {
-    ImGui::SeparatorText("Record & playback");
+    ImGui::SeparatorText(text("Запись и воспроизведение", "Record & playback"));
 
-    labeled_item("Capture", 0.0f);
+    labeled_item(text("Запись", "Capture"), 0.0f);
     bool is_saving = state_.is_saving.load();
     if (is_saving) ImGui::BeginDisabled();
-    if (ImGui::Button(is_saving ? "Recording..." : "Save IQ to file")) {
+    if (ImGui::Button(is_saving ? text("Идёт запись...", "Recording...")
+                                : text("Сохранить IQ в файл", "Save IQ to file"))) {
         state_.save_requested.store(true);
         cout << "[display] IQ save requested\n";
     }
     if (is_saving) ImGui::EndDisabled();
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Writes raw IQ next to the executable, in data/.");
+        ImGui::SetTooltip("%s", text("Сохраняет необработанные IQ-данные в папку data рядом с программой.",
+                                     "Saves raw IQ data in the data folder next to the application."));
 
     // Длина записи и имя файла — рядом с кнопкой, а не в отдельной секции:
     // это те два параметра, которые смотрят прямо перед нажатием.
@@ -1396,8 +1378,8 @@ void SpectrumRenderer::render_record_section() {
     if (is_saving) ImGui::EndDisabled();
     if (ImGui::IsItemHovered()) {
         uint32_t rate = std::max(state_.sample_rate_hz.load(), 1u);
-        ImGui::SetTooltip("Samples to record, always a power of two so the file is a whole\n"
-                          "number of FFT windows. %u samples = %.1f ms at %.1f MSPS.",
+        ImGui::SetTooltip(text("Число сохраняемых отсчётов. Используется степень двойки для целого числа окон БПФ. %u отсчётов = %.1f мс при %.1f Мвыб/с.",
+                               "Samples to record. A power of two produces a whole number of FFT windows. %u samples = %.1f ms at %.1f MSPS."),
                           1u << log2n,
                           1000.0 * static_cast<double>(1u << log2n) / static_cast<double>(rate),
                           static_cast<double>(rate) / 1e6);
@@ -1406,19 +1388,19 @@ void SpectrumRenderer::render_record_section() {
     ImGui::SameLine();
     if (is_saving) ImGui::BeginDisabled();
     ImGui::SetNextItemWidth(200.0f);
-    if (ImGui::InputTextWithHint("##iq_name", "file name (auto)", save_name_buf_, sizeof(save_name_buf_))) {
+    if (ImGui::InputTextWithHint("##iq_name", text("имя файла (автоматически)", "file name (auto)"), save_name_buf_, sizeof(save_name_buf_))) {
         std::lock_guard<std::mutex> lock(state_.save_mutex);
         state_.save_file_name = save_name_buf_;
     }
     if (is_saving) ImGui::EndDisabled();
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Name of the file inside data/. Leave empty for the automatic\n"
-                          "iq_pluto_<time>_<freq>MHz name. The .bin extension and the _2ch\n"
-                          "suffix (in \"Rx 1 + Rx 2\" mode) are added if missing.");
+        ImGui::SetTooltip("%s", text(
+            "Имя файла в папке data. Оставьте пустым для автоматического имени. Расширение .bin и суффикс _2ch добавляются автоматически.",
+            "File name inside data. Leave empty for an automatic name. The .bin extension and _2ch suffix are added automatically."));
 
-    labeled_item("Playback", 0.0f);
+    labeled_item(text("Воспроизведение", "Playback"), 0.0f);
     ImGui::SetNextItemWidth(220.0f);
-    if (ImGui::InputTextWithHint("##playbackfile", "path to a recorded .bin to play", playback_path_buf_, sizeof(playback_path_buf_))) {
+    if (ImGui::InputTextWithHint("##playbackfile", text("путь к записанному файлу .bin", "path to a recorded .bin to play"), playback_path_buf_, sizeof(playback_path_buf_))) {
         bool now_2ch = path_says_dual_channel(playback_path_buf_);
         if (now_2ch != playback_path_was_2ch_) {
             state_.playback_dual_channel.store(now_2ch);
@@ -1429,7 +1411,7 @@ void SpectrumRenderer::render_record_section() {
     bool playing = state_.is_playing_back.load();
     ImGui::SameLine();
     if (playing) ImGui::BeginDisabled();
-    if (ImGui::Button("Play")) {
+    if (ImGui::Button(text("Воспроизвести", "Play"))) {
         std::string path = playback_path_buf_;
         if (!path.empty()) {
             std::lock_guard<std::mutex> lock(state_.playback_mutex);
@@ -1441,13 +1423,13 @@ void SpectrumRenderer::render_record_section() {
 
     ImGui::SameLine();
     if (!playing) ImGui::BeginDisabled();
-    if (ImGui::Button("Stop"))
+    if (ImGui::Button(text("Остановить", "Stop")))
         state_.playback_stop_requested.store(true);
     if (!playing) ImGui::EndDisabled();
 
     ImGui::SameLine();
     bool loop = state_.playback_loop.load();
-    if (ImGui::Checkbox("Loop", &loop))
+    if (ImGui::Checkbox(text("Повтор", "Loop"), &loop))
         state_.playback_loop.store(loop);
 
     // Раскладка защёлкивается на старте файла, менять её на ходу нечему —
@@ -1458,14 +1440,13 @@ void SpectrumRenderer::render_record_section() {
     // playback_path_was_2ch_ намеренно не трогаем: он помнит, что сказало ИМЯ,
     // а не что выбрал человек. Иначе снятая вручную галочка возвращалась бы
     // обратно на первой же правке пути, в котором остался суффикс _2ch.
-    if (ImGui::Checkbox("2 ch", &dual_file))
+    if (ImGui::Checkbox(text("2 канала", "2 ch"), &dual_file))
         state_.playback_dual_channel.store(dual_file);
     if (playing) ImGui::EndDisabled();
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("File holds both RX channels (i1,q1,i2,q2 per sample), as recorded in\n"
-                          "\"Rx 1 + Rx 2\" mode. Set automatically for names containing _2ch.\n"
-                          "Direction finding needs this - monopulse has nothing to work with\n"
-                          "from a single channel.");
+        ImGui::SetTooltip("%s", text(
+            "Файл содержит оба канала Rx (i1,q1,i2,q2 для каждого отсчёта). Для имён с _2ch определяется автоматически. Двухканальные данные необходимы для пеленгации.",
+            "The file contains both Rx channels (i1,q1,i2,q2 per sample). Detected automatically for names containing _2ch. Dual-channel data is required for direction finding."));
 
     // Итог по последней записи. Ставится сразу после неё, потому что убавить
     // усиление можно только пока стенд ещё собран; из готового файла зажатые
@@ -1474,13 +1455,16 @@ void SpectrumRenderer::render_record_section() {
         float pct = state_.save_clip_pct.load();
         if (pct > 0.0f)
             ImGui::TextColored({1.0f, 0.35f, 0.35f, 1.0f},
-                                "last recording: %.2f%% of samples clipped, peak %.1f dBFS - reduce gain and record again",
+                                text("последняя запись: перегружено %.2f%% отсчётов, пик %.1f дБFS — уменьшите усиление и повторите запись",
+                                     "last recording: %.2f%% of samples clipped, peak %.1f dBFS - reduce gain and record again"),
                                 pct, state_.save_peak_dbfs.load());
         else
-            ImGui::TextDisabled("last recording: no clipping, peak %.1f dBFS", state_.save_peak_dbfs.load());
+            ImGui::TextDisabled(text("последняя запись: перегрузки нет, пик %.1f дБFS",
+                                     "last recording: no clipping, peak %.1f dBFS"), state_.save_peak_dbfs.load());
     }
 
-    ImGui::TextDisabled("set Sampling to the rate the file was recorded at");
+    ImGui::TextDisabled("%s", text("Установите частоту дискретизации, с которой был записан файл",
+                                   "set Sampling to the rate the file was recorded at"));
 }
 
 void SpectrumRenderer::render_controls() {
@@ -1618,41 +1602,39 @@ void SpectrumRenderer::render_peleng_frame() {
 void SpectrumRenderer::draw_peleng_source_controls() {
     bool use_network = state_.peleng_use_network.load();
 
-    ImGui::TextUnformatted("Statistics source:");
+    ImGui::TextUnformatted(text("Источник статистики:", "Statistics source:"));
     ImGui::SameLine();
-    if (ImGui::RadioButton("Local IQ (PL model)", !use_network))
+    if (ImGui::RadioButton(text("Локальные IQ (модель PL)", "Local IQ (PL model)"), !use_network))
         state_.peleng_use_network.store(false);
     ImGui::SameLine();
-    if (ImGui::RadioButton("Board over TCP", use_network))
+    if (ImGui::RadioButton(text("Плата по TCP", "Board over TCP"), use_network))
         state_.peleng_use_network.store(true);
 
     ImGui::SameLine();
     bool compare = state_.peleng_compare_mode.load();
-    if (ImGui::Checkbox("Compare local vs board", &compare))
+    if (ImGui::Checkbox(text("Сравнить ПК и плату", "Compare local vs board"), &compare))
         state_.peleng_compare_mode.store(compare);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Runs the local PC model and the board's network statistics at the same\n"
-                          "time, whichever radio button above is not chosen for the graph. The\n"
-                          "local accumulator switches to the board's N_FFT/B/M so subbands line\n"
-                          "up by index. The CSV log below then tags every row with a numeric\n"
-                          "'source' column (0 = local, 1 = network) for offline comparison in\n"
-                          "python/peleng_analysis.py.\n"
-                          "Needs Rx1+Rx2 connected locally AND the board reachable over TCP.");
+        ImGui::SetTooltip("%s", text(
+            "Одновременно получает локальную статистику ПК и сетевую статистику платы. В CSV поле source равно 0 для ПК и 1 для платы. Требуются локально подключённые Rx1+Rx2 и доступная по TCP плата.",
+            "Collects local PC and board network statistics simultaneously. In CSV, source is 0 for PC and 1 for board. Requires local Rx1+Rx2 and a board reachable over TCP."));
 
     if (!use_network && !compare) return;
 
     int port = static_cast<int>(state_.peleng_net_port.load());
     ImGui::SetNextItemWidth(120.0f);
-    if (ImGui::InputInt("Listen port", &port, 0, 0)) {
+    if (ImGui::InputInt(text("Порт прослушивания", "Listen port"), &port, 0, 0)) {
         port = std::clamp(port, 1, 65535);
         state_.peleng_net_port.store(static_cast<uint16_t>(port));
     }
 
     ImGui::SameLine();
     if (state_.peleng_net_connected.load())
-        ImGui::TextColored(ImVec4(0.098f, 0.620f, 0.439f, 1.0f), "board connected");
+        ImGui::TextColored(ImVec4(0.098f, 0.620f, 0.439f, 1.0f), "%s",
+                           text("плата подключена", "board connected"));
     else
-        ImGui::TextColored(ImVec4(0.851f, 0.349f, 0.149f, 1.0f), "waiting for board...");
+        ImGui::TextColored(ImVec4(0.851f, 0.349f, 0.149f, 1.0f), "%s",
+                           text("ожидание платы...", "waiting for board..."));
 }
 
 // categorical slots from the project palette: blue = series 1, orange = series 2, aqua = series 3
@@ -1665,23 +1647,21 @@ static const ImVec4 kPelengAqua  { 0.098f, 0.620f, 0.439f, 1.0f };
 // дошла ли она до пеленгатора и с какой задержкой.
 void SpectrumRenderer::draw_peleng_calibration_status() {
     if (!state_.peleng_cal_active.load()) {
-        ImGui::TextDisabled("C1/C2: off — enable \"Apply Rx2 calibration\" in the device panel");
+        ImGui::TextDisabled("%s", text("C1/C2: выкл. — включите «Применить калибровку Rx2» в панели устройства",
+                                       "C1/C2: off — enable \"Apply Rx2 calibration\" in the device panel"));
         return;
     }
 
     float tau = state_.peleng_cal_delay_ns.load();
-    ImGui::TextColored(kPelengAqua, "C1/C2: on");
+    ImGui::TextColored(kPelengAqua, "%s", text("C1/C2: вкл.", "C1/C2: on"));
     ImGui::SameLine();
-    ImGui::Text("delay %+.3f ns (%+.2f deg at the band edge)", tau,
+    ImGui::Text(text("задержка %+.3f нс (%+.2f° на краю полосы)",
+                     "delay %+.3f ns (%+.2f deg at the band edge)"), tau,
                  360.0f * 0.5f * static_cast<float>(state_.sample_rate_hz.load()) * tau * 1e-9f);
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "Per-bin channel calibration from data/rx_calibration.csv.\n"
-            "Locally the constant part is already taken off the samples by the\n"
-            "capture thread, and only the delay is applied here, per bin, before\n"
-            "Sigma/Delta. Blocks arriving from the board never saw the capture\n"
-            "thread, so for those the whole correction is recomputed from\n"
-            "S11/S22/S12 instead.");
+        ImGui::SetTooltip("%s", text(
+            "Поканальная калибровка по data/rx_calibration.csv. Для локальных данных здесь применяется задержка по частотным отсчётам; для данных платы поправка рассчитывается полностью.",
+            "Per-bin calibration from data/rx_calibration.csv. Local data applies per-bin delay here; board data recomputes the full correction."));
     }
 }
 
@@ -1742,7 +1722,7 @@ void SpectrumRenderer::draw_peleng_log_controls() {
     bool logging  = state_.peleng_is_logging.load();
     bool starting = state_.peleng_log_start_requested.load();
 
-    ImGui::TextUnformatted("CSV log:");
+    ImGui::TextUnformatted(text("Журнал CSV:", "CSV log:"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(240.0f);
     if (logging) ImGui::BeginDisabled();
@@ -1752,10 +1732,10 @@ void SpectrumRenderer::draw_peleng_log_controls() {
 
     ImGui::SameLine();
     if (logging || starting) {
-        if (ImGui::Button("Stop##peleng_log"))
+        if (ImGui::Button(text("Остановить##peleng_log", "Stop##peleng_log")))
             state_.peleng_log_stop_requested.store(true);
     } else {
-        if (ImGui::Button("Start##peleng_log")) {
+        if (ImGui::Button(text("Начать##peleng_log", "Start##peleng_log"))) {
             std::string path = peleng_log_path_buf_;
             if (!path.empty()) {
                 {
@@ -1767,28 +1747,29 @@ void SpectrumRenderer::draw_peleng_log_controls() {
             }
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Writes every accumulated subband block to CSV, next to the executable.\n"
-                              "Read it back with python/peleng_analysis.py.");
+            ImGui::SetTooltip("%s", text(
+                "Сохраняет каждый накопленный блок подполос в CSV рядом с программой. Для анализа используйте python/peleng_analysis.py.",
+                "Saves every accumulated subband block to CSV next to the application. Analyze it with python/peleng_analysis.py."));
     }
 
     ImGui::SameLine();
     bool selected_only = state_.peleng_log_selected_only.load();
     if (logging) ImGui::BeginDisabled();
-    if (ImGui::Checkbox("selected subband only", &selected_only))
+    if (ImGui::Checkbox(text("только выбранная подполоса", "selected subband only"), &selected_only))
         state_.peleng_log_selected_only.store(selected_only);
     if (logging) ImGui::EndDisabled();
 
     ImGui::SameLine();
     if (state_.peleng_log_error.load()) {
-        ImGui::TextColored(kPelengOrange, "log error - check the path");
+        ImGui::TextColored(kPelengOrange, "%s", text("ошибка журнала — проверьте путь", "log error - check the path"));
     } else if (logging) {
-        ImGui::TextColored(kPelengAqua, "writing %llu rows / %llu blocks",
+        ImGui::TextColored(kPelengAqua, text("записано %llu строк / %llu блоков", "writing %llu rows / %llu blocks"),
                             static_cast<unsigned long long>(state_.peleng_log_rows_written.load()),
                             static_cast<unsigned long long>(state_.peleng_log_blocks_written.load()));
     } else if (starting) {
-        ImGui::TextDisabled("waiting for the next block...");
+        ImGui::TextDisabled("%s", text("ожидание следующего блока...", "waiting for the next block..."));
     } else {
-        ImGui::TextDisabled("idle");
+        ImGui::TextDisabled("%s", text("ожидание", "idle"));
     }
 }
 
@@ -1802,18 +1783,21 @@ void SpectrumRenderer::draw_peleng_contents() {
 
     int n = static_cast<int>(peleng_freq_mhz_.size());
     if (n == 0 || !state_.peleng_has_data.load()) {
-        ImGui::TextDisabled("Waiting for subband statistics...");
+        ImGui::TextDisabled("%s", text("Ожидание статистики подполос...", "Waiting for subband statistics..."));
         if (use_network || compare)
-            ImGui::TextDisabled("Waiting for the board to connect and send accumulated PL statistics.");
+            ImGui::TextDisabled("%s", text("Ожидание подключения платы и накопленной статистики PL.",
+                                           "Waiting for the board to connect and send accumulated PL statistics."));
         if (!use_network || compare)
-            ImGui::TextDisabled("Needs Rx1+Rx2 (\"Rx 1 + Rx 2\") channel mode to be connected.");
+            ImGui::TextDisabled("%s", text("Необходимо подключение в режиме каналов Rx1+Rx2.",
+                                           "Needs Rx1+Rx2 (\"Rx 1 + Rx 2\") channel mode to be connected."));
         return;
     }
 
     int active = 0;
     for (uint8_t v : peleng_valid_) active += v ? 1 : 0;
 
-    ImGui::Text("Beam: boresight, 0 deg (v1, no scanning)   |   Subbands: %d   Active: %d   Updates: %llu",
+    ImGui::Text(text("Луч: нормаль, 0° (v1, без сканирования)   |   Подполос: %d   Активных: %d   Обновлений: %llu",
+                     "Beam: boresight, 0 deg (v1, no scanning)   |   Subbands: %d   Active: %d   Updates: %llu"),
                 n, active, static_cast<unsigned long long>(peleng_update_count_));
     ImGui::Text("N_FFT: %d   B: %d   M: %d", state_.peleng_fft_size.load(),
                 state_.peleng_subband_size.load(), state_.peleng_accum_frames.load());
@@ -1839,19 +1823,19 @@ void SpectrumRenderer::draw_peleng_contents() {
     // плоскости читается только в примерно квадратной области, а деление
     // высоты окна ещё на одну часть сделало бы нечитаемыми и его, и остальные.
     if (ImGui::BeginTabBar("##peleng_tabs")) {
-        if (ImGui::BeginTabItem("Spectrum")) {
+        if (ImGui::BeginTabItem(text("Спектр", "Spectrum"))) {
             draw_peleng_spectrum_tab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Rho plane")) {
+        if (ImGui::BeginTabItem(text("Плоскость rho", "Rho plane"))) {
             draw_peleng_rho_plane_tab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Phase history")) {
+        if (ImGui::BeginTabItem(text("История фазы", "Phase history"))) {
             draw_peleng_phase_history_tab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Table")) {
+        if (ImGui::BeginTabItem(text("Таблица", "Table"))) {
             draw_peleng_table_tab();
             ImGui::EndTabItem();
         }
@@ -1867,8 +1851,8 @@ void SpectrumRenderer::draw_peleng_spectrum_tab() {
     double freq_lo = peleng_freq_mhz_.front();
     double freq_hi = peleng_freq_mhz_.back();
 
-    if (ImPlot::BeginPlot("Sigma power", ImVec2(avail.x, plot_h))) {
-        ImPlot::SetupAxes("Frequency (MHz)", "dBFS");
+    if (ImPlot::BeginPlot(text("Мощность Sigma###sigma_power", "Sigma power###sigma_power"), ImVec2(avail.x, plot_h))) {
+        ImPlot::SetupAxes(text("Частота (МГц)", "Frequency (MHz)"), "dBFS");
         ImPlot::SetupAxisLimits(ImAxis_X1, freq_lo, freq_hi, ImPlotCond_Always);
         ImPlotSpec spec;
         spec.LineColor = kPelengBlue;
@@ -1876,8 +1860,9 @@ void SpectrumRenderer::draw_peleng_spectrum_tab() {
         ImPlot::EndPlot();
     }
 
-    if (ImPlot::BeginPlot("Monopulse ratio (rho = Delta / Sigma)", ImVec2(avail.x, plot_h))) {
-        ImPlot::SetupAxes("Frequency (MHz)", "rho");
+    if (ImPlot::BeginPlot(text("Моноимпульсное отношение (rho = Delta / Sigma)###rho_ratio",
+                               "Monopulse ratio (rho = Delta / Sigma)###rho_ratio"), ImVec2(avail.x, plot_h))) {
+        ImPlot::SetupAxes(text("Частота (МГц)", "Frequency (MHz)"), "rho");
         ImPlot::SetupAxisLimits(ImAxis_X1, freq_lo, freq_hi, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, -2.0, 2.0, ImPlotCond_Once);
         ImPlotSpec re_spec;
@@ -1892,8 +1877,8 @@ void SpectrumRenderer::draw_peleng_spectrum_tab() {
         ImPlot::EndPlot();
     }
 
-    if (ImPlot::BeginPlot("SNR", ImVec2(avail.x, plot_h))) {
-        ImPlot::SetupAxes("Frequency (MHz)", "dB");
+    if (ImPlot::BeginPlot(text("ОСШ###peleng_snr", "SNR###peleng_snr"), ImVec2(avail.x, plot_h))) {
+        ImPlot::SetupAxes(text("Частота (МГц)", "Frequency (MHz)"), text("дБ", "dB"));
         ImPlot::SetupAxisLimits(ImAxis_X1, freq_lo, freq_hi, ImPlotCond_Always);
         ImPlotSpec spec;
         spec.LineColor = kPelengBlue;
@@ -1901,8 +1886,9 @@ void SpectrumRenderer::draw_peleng_spectrum_tab() {
         ImPlot::EndPlot();
     }
 
-    if (ImPlot::BeginPlot("Coherence RX1/RX2 (gamma^2)", ImVec2(avail.x, plot_h))) {
-        ImPlot::SetupAxes("Frequency (MHz)", "gamma^2");
+    if (ImPlot::BeginPlot(text("Когерентность Rx1/Rx2 (gamma²)###peleng_coherence",
+                               "Coherence RX1/RX2 (gamma^2)###peleng_coherence"), ImVec2(avail.x, plot_h))) {
+        ImPlot::SetupAxes(text("Частота (МГц)", "Frequency (MHz)"), "gamma²");
         ImPlot::SetupAxisLimits(ImAxis_X1, freq_lo, freq_hi, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImPlotCond_Always);
         ImPlotSpec spec;
@@ -2005,7 +1991,7 @@ void SpectrumRenderer::draw_peleng_rho_plane_tab() {
     int n        = static_cast<int>(peleng_freq_mhz_.size());
     int selected = peleng_trail_subband_;
     if (selected < 0 || selected >= n) {
-        ImGui::TextDisabled("No subband selected.");
+        ImGui::TextDisabled("%s", text("Подполоса не выбрана.", "No subband selected."));
         return;
     }
 
@@ -2014,18 +2000,19 @@ void SpectrumRenderer::draw_peleng_rho_plane_tab() {
 
     ImGui::SetNextItemWidth(160.0f);
     float sel_mhz = static_cast<float>(peleng_sel_freq_mhz_);
-    if (ImGui::InputFloat("MHz", &sel_mhz, 0.1f, 1.0f, "%.3f"))
+    if (ImGui::InputFloat(text("МГц", "MHz"), &sel_mhz, 0.1f, 1.0f, "%.3f"))
         peleng_sel_freq_mhz_ = std::clamp(sel_mhz, freq_lo, freq_hi);
 
     ImGui::SameLine();
-    ImGui::Text("subband %d of %d", selected, n);
+    ImGui::Text(text("подполоса %d из %d", "subband %d of %d"), selected, n);
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160.0f);
-    ImGui::SliderInt("Trail", &peleng_trail_len_, 1, kPelengTrailMax, "%d pts");
+    ImGui::SliderInt(text("История", "Trail"), &peleng_trail_len_, 1, kPelengTrailMax,
+                     text("%d точек", "%d pts"));
 
     ImGui::SameLine();
-    if (ImGui::Button("Clear")) {
+    if (ImGui::Button(text("Очистить", "Clear"))) {
         peleng_trail_re_.clear();
         peleng_trail_im_.clear();
     }
@@ -2035,9 +2022,10 @@ void SpectrumRenderer::draw_peleng_rho_plane_tab() {
     float mag    = std::sqrt(rho_re * rho_re + rho_im * rho_im);
     float arg    = std::atan2(rho_im, rho_re) * 180.0f / PI;
 
-    ImGui::Text("rho = %+.4f %+.4fj   |rho| = %.4f   arg = %+.1f deg   gamma^2 = %.3f   SNR = %.1f dB   %s",
+    ImGui::Text(text("rho = %+.4f %+.4fj   |rho| = %.4f   аргумент = %+.1f°   gamma² = %.3f   ОСШ = %.1f дБ   %s",
+                     "rho = %+.4f %+.4fj   |rho| = %.4f   arg = %+.1f deg   gamma^2 = %.3f   SNR = %.1f dB   %s"),
                 rho_re, rho_im, mag, arg, peleng_gamma2_[selected], peleng_snr_db_[selected],
-                peleng_valid_[selected] ? "valid" : "masked out");
+                 peleng_valid_[selected] ? text("достоверно", "valid") : text("скрыто", "masked out"));
 
     // Разбаланс каналов — то же rho, пересчитанное в отношение Rx2/Rx1: текущее
     // значение и его разброс по всему следу. Стоит рядом с самим rho, потому что
@@ -2047,28 +2035,26 @@ void SpectrumRenderer::draw_peleng_rho_plane_tab() {
     ChannelImbalanceStats imb = channel_imbalance_stats(peleng_trail_re_, peleng_trail_im_);
 
     if (now_ok)
-        ImGui::Text("Rx2/Rx1 now:    phase %+7.2f deg      amplitude %+6.2f dB", now_phase, now_amp);
+        ImGui::Text(text("Rx2/Rx1 сейчас:    фаза %+7.2f°      амплитуда %+6.2f дБ",
+                         "Rx2/Rx1 now:    phase %+7.2f deg      amplitude %+6.2f dB"), now_phase, now_amp);
     else
-        ImGui::TextDisabled("Rx2/Rx1 now:    undefined (Sigma null - channels equal and antiphase)");
+        ImGui::TextDisabled("%s", text("Rx2/Rx1 сейчас:    не определено (Sigma равна нулю — каналы равны и противофазны)",
+                                       "Rx2/Rx1 now:    undefined (Sigma null - channels equal and antiphase)"));
 
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Channel ratio z = Rx2/Rx1, recovered from rho as z = (1-rho)/(1+rho)\n"
-                          "(exact while one signal dominates the subband).\n"
-                          "arg z is the phase imbalance, |z| the amplitude imbalance;\n"
-                          "rho = 0 at the center of the plane means z = 1, perfectly matched channels.\n\n"
-                          "This is the TOTAL difference: propagation phase from the angle of arrival\n"
-                          "plus the receivers' own imbalance. It reads as pure hardware imbalance\n"
-                          "only at a known bearing, or with one signal split into both inputs.\n"
-                          "Spread over the trail says whether the number is stable enough to calibrate with;\n"
-                          "it is meaningless while the subband is masked out (low SNR or low gamma^2).");
+        ImGui::SetTooltip("%s", text(
+            "Отношение каналов z = Rx2/Rx1 восстанавливается из rho. Аргумент z показывает фазовый, а модуль — амплитудный дисбаланс. Значение содержит фазу распространения и собственный дисбаланс приёмников; оценивать аппаратный дисбаланс следует при известном направлении или при подаче одного сигнала на оба входа.",
+            "Channel ratio z = Rx2/Rx1 is recovered from rho. Its argument is phase imbalance and magnitude is amplitude imbalance. It includes propagation phase and receiver imbalance; assess hardware imbalance at a known bearing or with one signal split to both inputs."));
 
     if (imb.n > 0)
-        ImGui::Text("        trail:   phase %+7.2f +/- %.2f deg   amplitude %+6.2f +/- %.2f dB   (%d pts)",
+        ImGui::Text(text("        история:   фаза %+7.2f ± %.2f°   амплитуда %+6.2f ± %.2f дБ   (%d точек)",
+                         "        trail:   phase %+7.2f +/- %.2f deg   amplitude %+6.2f +/- %.2f dB   (%d pts)"),
                     imb.phase_mean_deg, imb.phase_std_deg, imb.amp_mean_db, imb.amp_std_db, imb.n);
     else
-        ImGui::TextDisabled("        trail:   no usable points yet");
+        ImGui::TextDisabled("%s", text("        история:   достоверных точек пока нет",
+                                       "        trail:   no usable points yet"));
 
     ImVec2 avail   = ImGui::GetContentRegionAvail();
     float  strip_h = 110.0f;
@@ -2080,7 +2066,7 @@ void SpectrumRenderer::draw_peleng_rho_plane_tab() {
     // Узкая полоска спектра над плоскостью: белая линия — выбранная частота,
     // её же можно тащить мышью, не уходя на другую вкладку.
     if (ImPlot::BeginPlot("##peleng_pick", ImVec2(avail.x, strip_h))) {
-        ImPlot::SetupAxes("Frequency (MHz)", "dBFS");
+        ImPlot::SetupAxes(text("Частота (МГц)", "Frequency (MHz)"), "dBFS");
         ImPlot::SetupAxisLimits(ImAxis_X1, freq_lo, freq_hi, ImPlotCond_Always);
         ImPlotSpec spec;
         spec.LineColor = kPelengBlue;
@@ -2092,7 +2078,8 @@ void SpectrumRenderer::draw_peleng_rho_plane_tab() {
     if (plane_h < 120.0f) plane_h = 120.0f;
 
     char title[128];
-    snprintf(title, sizeof(title), "rho at %.3f MHz (Re horizontal, Im vertical)###peleng_plane",
+    snprintf(title, sizeof(title), text("rho на %.3f МГц (Re по горизонтали, Im по вертикали)###peleng_plane",
+                                        "rho at %.3f MHz (Re horizontal, Im vertical)###peleng_plane"),
              static_cast<double>(peleng_freq_mhz_[selected]));
 
     if (ImPlot::BeginPlot(title, ImVec2(avail.x, plane_h), ImPlotFlags_Equal)) {
@@ -2124,7 +2111,7 @@ void SpectrumRenderer::draw_peleng_rho_plane_tab() {
             trail_spec.MarkerLineColor = kPelengBlue;
             trail_spec.MarkerFillColor = ImVec4(kPelengBlue.x, kPelengBlue.y, kPelengBlue.z, 0.55f);
             // всё, кроме последней точки — она рисуется отдельно, красной
-            ImPlot::PlotScatter("history", peleng_trail_re_.data(), peleng_trail_im_.data(),
+            ImPlot::PlotScatter(text("история", "history"), peleng_trail_re_.data(), peleng_trail_im_.data(),
                                  trail_n - 1, trail_spec);
         }
 
@@ -2136,14 +2123,15 @@ void SpectrumRenderer::draw_peleng_rho_plane_tab() {
             now_spec.LineColor       = red;
             now_spec.MarkerLineColor = red;
             now_spec.MarkerFillColor = red;
-            ImPlot::PlotScatter("latest", &peleng_trail_re_[trail_n - 1],
+            ImPlot::PlotScatter(text("последнее", "latest"), &peleng_trail_re_[trail_n - 1],
                                  &peleng_trail_im_[trail_n - 1], 1, now_spec);
         }
 
         ImPlot::EndPlot();
     }
 
-    ImGui::TextDisabled("%d points - tight cluster = repeatable bearing, smeared cloud = noise-dominated",
+    ImGui::TextDisabled(text("%d точек — плотное облако означает устойчивый пеленг, размытое определяется шумом",
+                             "%d points - tight cluster = repeatable bearing, smeared cloud = noise-dominated"),
                         static_cast<int>(peleng_trail_re_.size()));
 }
 
@@ -2156,7 +2144,7 @@ void SpectrumRenderer::draw_peleng_phase_history_tab() {
     int n        = static_cast<int>(peleng_freq_mhz_.size());
     int selected = peleng_trail_subband_;
     if (selected < 0 || selected >= n) {
-        ImGui::TextDisabled("No subband selected.");
+        ImGui::TextDisabled("%s", text("Подполоса не выбрана.", "No subband selected."));
         return;
     }
 
@@ -2167,24 +2155,26 @@ void SpectrumRenderer::draw_peleng_phase_history_tab() {
     // тем же кодом, что уже подтягивает peleng_trail_subband_ к нему.
     int subband_idx = selected;
     ImGui::SetNextItemWidth(80.0f);
-    if (ImGui::InputInt("Subband##phase_hist", &subband_idx)) {
+    if (ImGui::InputInt(text("Подполоса##phase_hist", "Subband##phase_hist"), &subband_idx)) {
         subband_idx = std::clamp(subband_idx, 0, n - 1);
         peleng_sel_freq_mhz_ = peleng_freq_mhz_[subband_idx];
     }
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(220.0f);
-    if (ImGui::SliderInt("##phase_hist_subband_slider", &subband_idx, 0, n - 1, "subband %d"))
+    if (ImGui::SliderInt("##phase_hist_subband_slider", &subband_idx, 0, n - 1,
+                         text("подполоса %d", "subband %d")))
         peleng_sel_freq_mhz_ = peleng_freq_mhz_[subband_idx];
 
     ImGui::SameLine();
     ImGui::Text("%.3f MHz", static_cast<double>(peleng_freq_mhz_[selected]));
 
     ImGui::SetNextItemWidth(160.0f);
-    ImGui::SliderInt("Trail##phase_hist", &peleng_trail_len_, 1, kPelengTrailMax, "%d pts");
+    ImGui::SliderInt(text("История##phase_hist", "Trail##phase_hist"), &peleng_trail_len_, 1,
+                     kPelengTrailMax, text("%d точек", "%d pts"));
 
     ImGui::SameLine();
-    if (ImGui::Button("Clear##phase_hist")) {
+    if (ImGui::Button(text("Очистить##phase_hist", "Clear##phase_hist"))) {
         peleng_trail_re_.clear();
         peleng_trail_im_.clear();
         peleng_trail_time_s_.clear();
@@ -2210,7 +2200,8 @@ void SpectrumRenderer::draw_peleng_phase_history_tab() {
     }
 
     if (ImPlot::BeginPlot("##phase_hist_pick_snr", ImVec2(full_avail.x, strip_h))) {
-        ImPlot::SetupAxes("Frequency (MHz)", "SNR dB");
+        ImPlot::SetupAxes(text("Частота (МГц)", "Frequency (MHz)"),
+                          text("ОСШ, дБ", "SNR dB"));
         ImPlot::SetupAxisLimits(ImAxis_X1, freq_lo, freq_hi, ImPlotCond_Always);
         ImPlotSpec spec;
         spec.LineColor = kPelengAqua;
@@ -2221,7 +2212,7 @@ void SpectrumRenderer::draw_peleng_phase_history_tab() {
 
     int trail_n = static_cast<int>(peleng_trail_re_.size());
     if (trail_n == 0) {
-        ImGui::TextDisabled("waiting for blocks...");
+        ImGui::TextDisabled("%s", text("ожидание блоков...", "waiting for blocks..."));
         return;
     }
 
@@ -2245,7 +2236,8 @@ void SpectrumRenderer::draw_peleng_phase_history_tab() {
 
     ImPlot::SetNextAxesLimits(x_min, 0.0, -180.0, 180.0, ImPlotCond_Always);
     if (ImPlot::BeginPlot("##peleng_phase_hist", avail, ImPlotFlags_NoMouseText | ImPlotFlags_NoLegend)) {
-        ImPlot::SetupAxes("Time (s, 0 = now)", "deg");
+        ImPlot::SetupAxes(text("Время (с, 0 = сейчас)", "Time (s, 0 = now)"),
+                          text("градусы", "deg"));
         ImPlot::SetupAxisLimits(ImAxis_X1, x_min, 0.0, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, -180.0, 180.0, ImPlotCond_Always);
 
@@ -2259,11 +2251,12 @@ void SpectrumRenderer::draw_peleng_phase_history_tab() {
 
         ImPlotSpec spec;
         spec.LineColor = kPelengBlue;
-        ImPlot::PlotLine("Rx2/Rx1 phase", peleng_phase_hist_x_.data(), peleng_phase_hist_deg_.data(), trail_n, spec);
+        ImPlot::PlotLine(text("Фаза Rx2/Rx1", "Rx2/Rx1 phase"), peleng_phase_hist_x_.data(), peleng_phase_hist_deg_.data(), trail_n, spec);
         ImPlot::EndPlot();
     }
 
-    ImGui::TextDisabled("gaps = Sigma null in that block (channels equal and antiphase, undefined ratio)");
+    ImGui::TextDisabled("%s", text("разрывы = Sigma в блоке равна нулю (каналы равны и противофазны)",
+                                   "gaps = Sigma null in that block (channels equal and antiphase, undefined ratio)"));
 }
 
 // Табличный вид тех же данных подполос, что и на вкладке Spectrum, — читать
@@ -2275,16 +2268,17 @@ void SpectrumRenderer::draw_peleng_phase_history_tab() {
 void SpectrumRenderer::draw_peleng_table_tab() {
     int n = static_cast<int>(peleng_freq_mhz_.size());
     if (n == 0) {
-        ImGui::TextDisabled("No subband data.");
+        ImGui::TextDisabled("%s", text("Нет данных подполос.", "No subband data."));
         return;
     }
 
-    ImGui::Checkbox("Valid only", &peleng_table_valid_only_);
+    ImGui::Checkbox(text("Только достоверные", "Valid only"), &peleng_table_valid_only_);
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Hides subbands masked out by the SNR/gamma^2 thresholds (section 19.11 of the PDF) --\n"
-                          "their rho and phase are noise, not a real reading.");
+        ImGui::SetTooltip("%s", text(
+            "Скрывает подполосы, не прошедшие пороги ОСШ и gamma²: их rho и фаза являются шумом, а не достоверным измерением.",
+            "Hides subbands below the SNR and gamma² thresholds: their rho and phase are noise, not a valid measurement."));
 
     // Порядок строк собирается заново каждый кадр из фильтра/сортировки —
     // сами вектора данных (peleng_freq_mhz_ и т.д.) не трогаются, на их
@@ -2303,15 +2297,15 @@ void SpectrumRenderer::draw_peleng_table_tab() {
     if (ImGui::BeginTable("##peleng_table", 10, flags, avail)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("#",                  ImGuiTableColumnFlags_DefaultSort, 0.0f, 0);
-        ImGui::TableSetupColumn("Freq MHz",           ImGuiTableColumnFlags_None, 0.0f, 1);
+        ImGui::TableSetupColumn(text("Частота, МГц", "Freq MHz"), ImGuiTableColumnFlags_None, 0.0f, 1);
         ImGui::TableSetupColumn("Sigma dBFS",         ImGuiTableColumnFlags_None, 0.0f, 2);
         ImGui::TableSetupColumn("SNR dB",             ImGuiTableColumnFlags_None, 0.0f, 3);
         ImGui::TableSetupColumn("gamma^2",            ImGuiTableColumnFlags_None, 0.0f, 4);
         ImGui::TableSetupColumn("|rho|",              ImGuiTableColumnFlags_None, 0.0f, 5);
-        ImGui::TableSetupColumn("arg(rho) deg",       ImGuiTableColumnFlags_None, 0.0f, 6);
-        ImGui::TableSetupColumn("Rx2/Rx1 phase deg",  ImGuiTableColumnFlags_None, 0.0f, 7);
-        ImGui::TableSetupColumn("Rx2/Rx1 amp dB",     ImGuiTableColumnFlags_None, 0.0f, 8);
-        ImGui::TableSetupColumn("Valid",              ImGuiTableColumnFlags_None, 0.0f, 9);
+        ImGui::TableSetupColumn(text("arg(rho), град.", "arg(rho) deg"), ImGuiTableColumnFlags_None, 0.0f, 6);
+        ImGui::TableSetupColumn(text("Фаза Rx2/Rx1, град.", "Rx2/Rx1 phase deg"), ImGuiTableColumnFlags_None, 0.0f, 7);
+        ImGui::TableSetupColumn(text("Амплитуда Rx2/Rx1, дБ", "Rx2/Rx1 amp dB"), ImGuiTableColumnFlags_None, 0.0f, 8);
+        ImGui::TableSetupColumn(text("Достоверность", "Valid"), ImGuiTableColumnFlags_None, 0.0f, 9);
         ImGui::TableHeadersRow();
 
         // |rho|/arg(rho) и Rx2/Rx1 phase/amp не хранятся отдельными векторами
@@ -2410,9 +2404,10 @@ void SpectrumRenderer::draw_peleng_table_tab() {
 
                 ImGui::TableNextColumn();
                 if (peleng_valid_[i])
-                    ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "valid");
+                    ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "%s",
+                                       text("достоверно", "valid"));
                 else
-                    ImGui::TextDisabled("masked");
+                    ImGui::TextDisabled("%s", text("скрыто", "masked"));
             }
         }
         ImGui::EndTable();
@@ -2796,20 +2791,20 @@ void SpectrumRenderer::draw_phase_contents() {
     // осталось от окна, и тянется вместе с ним при ресайзе.
     float trim = state_.manual_phase_trim_deg.load();
     ImGui::SetNextItemWidth(140.0f);
-    if (ImGui::InputFloat("deg manual trim", &trim, 0.5f, 5.0f, "%+.1f"))
+    if (ImGui::InputFloat(text("град., ручная поправка", "deg manual trim"), &trim, 0.5f, 5.0f, "%+.1f"))
         state_.manual_phase_trim_deg.store(trim);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Extra Rx2 phase rotation, independent of the calibration table in\n"
-                          "the device panel and not saved anywhere. Adds directly to the\n"
-                          "Rx1-Rx2 phase reading: to bring that reading to 0, enter it here\n"
-                          "with the opposite sign.");
+        ImGui::SetTooltip("%s", text(
+            "Дополнительная несохраняемая поправка фазы Rx2, независимая от таблицы калибровки. Чтобы привести показание Rx1−Rx2 к нулю, введите его с противоположным знаком.",
+            "Additional unsaved Rx2 phase trim, independent of the calibration table. To bring Rx1-Rx2 to zero, enter the reading with the opposite sign."));
     ImGui::SameLine();
-    if (ImGui::SmallButton("Reset"))
+    if (ImGui::SmallButton(text("Сбросить", "Reset")))
         state_.manual_phase_trim_deg.store(0.0f);
 
     if (state_.cross_phase_valid.load()) {
         ImGui::SameLine();
-        ImGui::TextDisabled("|  %+.1f deg  (coherence %.2f)",
+        ImGui::TextDisabled(text("|  %+.1f°  (когерентность %.2f)",
+                                 "|  %+.1f deg  (coherence %.2f)"),
                             state_.cross_phase_deg.load(), state_.cross_coherence.load());
     }
 
@@ -2817,7 +2812,7 @@ void SpectrumRenderer::draw_phase_contents() {
 
     int hn = static_cast<int>(local_phase_hist_deg_.size());
     if (hn == 0) {
-        ImGui::TextDisabled("waiting for samples...");
+        ImGui::TextDisabled("%s", text("ожидание отсчётов...", "waiting for samples..."));
         return;
     }
 
@@ -2831,7 +2826,8 @@ void SpectrumRenderer::draw_phase_contents() {
 
     ImPlot::SetNextAxesLimits(x_min, 0.0, -180.0, 180.0, ImPlotCond_Always);
     if (ImPlot::BeginPlot("##phase_hist", avail, ImPlotFlags_NoMouseText | ImPlotFlags_NoInputs | ImPlotFlags_NoLegend)) {
-        ImPlot::SetupAxes("Time (s, 0 = now)", "deg");
+        ImPlot::SetupAxes(text("Время (с, 0 = сейчас)", "Time (s, 0 = now)"),
+                          text("градусы", "deg"));
         ImPlot::SetupAxisLimits(ImAxis_X1, x_min, 0.0, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, -180.0, 180.0, ImPlotCond_Always);
 
@@ -2844,7 +2840,7 @@ void SpectrumRenderer::draw_phase_contents() {
 
         ImPlotSpec spec;
         spec.LineColor = ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
-        ImPlot::PlotLine("phase", phase_hist_x_.data(), local_phase_hist_deg_.data(), hn, spec);
+        ImPlot::PlotLine(text("фаза", "phase"), phase_hist_x_.data(), local_phase_hist_deg_.data(), hn, spec);
         ImPlot::EndPlot();
     }
 }

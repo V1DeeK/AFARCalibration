@@ -149,7 +149,7 @@ void SpectrumOpenGLWidget::loadSettings() {
                                                state_.cal_offset_db.load()).toFloat());
     state_.demod_mode.store(static_cast<DemodMode>(qBound(
         0, settings.value(QStringLiteral("demod_mode"),
-                          static_cast<int>(state_.demod_mode.load())).toInt(), 2)));
+                          static_cast<int>(state_.demod_mode.load())).toInt(), 1)));
     state_.audio_volume.store(settings.value(QStringLiteral("audio_volume"),
                                               state_.audio_volume.load()).toFloat());
     state_.audio_mute.store(settings.value(QStringLiteral("audio_mute"),
@@ -173,13 +173,12 @@ void SpectrumOpenGLWidget::loadSettings() {
         state_.playback_file_path = settings.value(QStringLiteral("playback_path"),
                                                     QString::fromStdString(state_.playback_file_path)).toString().toStdString();
     }
-    {
-        std::lock_guard<std::mutex> lock(state_.tv_record_mutex);
-        state_.tv_record_file_path = settings.value(QStringLiteral("tv_record_path"),
-                                                     QString::fromStdString(state_.tv_record_file_path)).toString().toStdString();
-    }
     renderer_.setPage(static_cast<SpectrumRenderer::Page>(qBound(
-        0, settings.value(QStringLiteral("active_page"), 0).toInt(), 3)));
+        0, settings.value(QStringLiteral("active_page"), 0).toInt(), 2)));
+    renderer_.setLanguage(settings.value(QStringLiteral("language"), QStringLiteral("ru")).toString()
+                                  == QStringLiteral("en")
+                              ? SpectrumRenderer::Language::English
+                              : SpectrumRenderer::Language::Russian);
     settings.endGroup();
 }
 
@@ -213,6 +212,9 @@ void SpectrumOpenGLWidget::saveSettings() const {
     settings.setValue(QStringLiteral("peleng_use_network"), state_.peleng_use_network.load());
     settings.setValue(QStringLiteral("peleng_port"), state_.peleng_net_port.load());
     settings.setValue(QStringLiteral("active_page"), static_cast<int>(renderer_.page()));
+    settings.setValue(QStringLiteral("language"),
+                      renderer_.language() == SpectrumRenderer::Language::English
+                          ? QStringLiteral("en") : QStringLiteral("ru"));
     {
         std::lock_guard<std::mutex> lock(state_.rx_cal_mutex);
         settings.setValue(QStringLiteral("calibration_path"), QString::fromStdString(state_.rx_cal_path));
@@ -220,10 +222,6 @@ void SpectrumOpenGLWidget::saveSettings() const {
     {
         std::lock_guard<std::mutex> lock(state_.playback_mutex);
         settings.setValue(QStringLiteral("playback_path"), QString::fromStdString(state_.playback_file_path));
-    }
-    {
-        std::lock_guard<std::mutex> lock(state_.tv_record_mutex);
-        settings.setValue(QStringLiteral("tv_record_path"), QString::fromStdString(state_.tv_record_file_path));
     }
     settings.endGroup();
 }

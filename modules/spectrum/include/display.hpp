@@ -10,7 +10,8 @@ struct ImPlotContext;
 
 class SpectrumRenderer {
 public:
-    enum class Page { Spectrum, Peleng, Television, Phase };
+    enum class Page { Spectrum, Peleng, Phase };
+    enum class Language { Russian, English };
 
     explicit SpectrumRenderer(AppState& state);
     ~SpectrumRenderer();
@@ -21,6 +22,8 @@ public:
     ImGuiContext* imguiContext() const noexcept { return main_imgui_ctx_; }
     void setPage(Page page) noexcept { active_page_ = page; }
     Page page() const noexcept { return active_page_; }
+    void setLanguage(Language language) noexcept { language_ = language; }
+    Language language() const noexcept { return language_; }
     void syncTextFieldsFromState();
 
 private:
@@ -38,9 +41,8 @@ private:
 
     void copy_phase_hist_state(); // lock phase_hist_mutex, snapshot the Rx1-Rx2 phase history, unlock
 
-    // Phase history window — opened via a button next to Peleng/TV picture on
-    // the status bar, same independent-GLFW-window pattern as those two (own
-    // ImGui/ImPlot context, so it can be dragged/resized on its own).
+    // Legacy independent phase window support; the normal entry point is now
+    // the phase-history page in the main navigation bar.
     void open_phase_window();
     void close_phase_window();
     void render_phase_frame();
@@ -62,6 +64,7 @@ private:
     void render_record_section();  // запись IQ и воспроизведение файла
     // подпись слева от поля с выравниванием по колонке (ImGui ставит справа)
     void labeled_item(const char* label, float item_width);
+    const char* text(const char* russian, const char* english) const noexcept;
     static constexpr float kLabelColumnWidth  = 96.0f;
     // сколько по высоте резервируется под панель управления (она прокручиваемая,
     // так что содержимое влезет в любом случае)
@@ -120,6 +123,7 @@ private:
 
     AppState& state_;
     Page active_page_{ Page::Spectrum };
+    Language language_{ Language::Russian };
 
     // local copies so psd_mutex isn't held during rendering
     // ch2 copies are only meaningful when chan_mode == Both
