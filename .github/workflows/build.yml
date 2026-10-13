@@ -93,13 +93,18 @@ jobs:
         run: ctest --test-dir build --output-on-failure --timeout 300 -E '^spectrum_widget$'
       - name: Test (виджет спектра, OpenGL)
         # QOpenGLWidget не работает на offscreen, а у раннера нет GPU:
-        # окно Windows + программный OpenGL Mesa (opengl32.dll рядом с тестом).
+        # окно Windows + программный OpenGL Mesa.
+        # Qt с QT_OPENGL=software грузит opengl32sw.dll — кладём туда Mesa.
         env:
           QT_QPA_PLATFORM: windows
+          QT_OPENGL: software
           GALLIUM_DRIVER: llvmpipe
+          QT_LOGGING_RULES: "qt.qpa.gl=true"
         run: |
-          cp /ucrt64/bin/opengl32.dll build/tests/
+          ls /ucrt64/bin | grep -iE 'opengl|gallium|glapi' || true
+          cp /ucrt64/bin/opengl32.dll build/tests/opengl32sw.dll
           cp /ucrt64/bin/libgallium_wgl.dll build/tests/ 2>/dev/null || true
+          cp /ucrt64/bin/libglapi.dll build/tests/ 2>/dev/null || true
           ctest --test-dir build --output-on-failure --timeout 120 -R '^spectrum_widget$'
       - name: Package
         run: cd build && cpack
