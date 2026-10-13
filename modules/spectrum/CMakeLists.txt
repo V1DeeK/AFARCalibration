@@ -2,8 +2,10 @@ find_path(SPECTRUM_FFTW3_INCLUDE_DIR fftw3.h REQUIRED)
 find_library(SPECTRUM_FFTW3_LIBRARY NAMES fftw3f REQUIRED)
 find_path(SPECTRUM_IIO_INCLUDE_DIR iio.h REQUIRED)
 find_library(SPECTRUM_IIO_LIBRARY NAMES iio REQUIRED)
-find_path(SPECTRUM_AD9361_INCLUDE_DIR ad9361.h REQUIRED)
-find_library(SPECTRUM_AD9361_LIBRARY NAMES ad9361 REQUIRED)
+# libad9361-iio в коде сейчас не вызывается (#include <ad9361.h> закомментирован
+# в capture.cpp), поэтому не обязателен: в Homebrew его нет.
+find_path(SPECTRUM_AD9361_INCLUDE_DIR ad9361.h)
+find_library(SPECTRUM_AD9361_LIBRARY NAMES ad9361)
 
 add_library(spectrum_core STATIC
     src/spectrum_engine.cpp
@@ -28,7 +30,6 @@ target_include_directories(spectrum_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${SPECTRUM_FFTW3_INCLUDE_DIR}
     ${SPECTRUM_IIO_INCLUDE_DIR}
-    ${SPECTRUM_AD9361_INCLUDE_DIR}
 )
 target_include_directories(spectrum_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio
@@ -36,8 +37,11 @@ target_include_directories(spectrum_core PRIVATE
 target_link_libraries(spectrum_core PUBLIC
     ${SPECTRUM_FFTW3_LIBRARY}
     ${SPECTRUM_IIO_LIBRARY}
-    ${SPECTRUM_AD9361_LIBRARY}
 )
+if(SPECTRUM_AD9361_INCLUDE_DIR AND SPECTRUM_AD9361_LIBRARY)
+    target_include_directories(spectrum_core PUBLIC ${SPECTRUM_AD9361_INCLUDE_DIR})
+    target_link_libraries(spectrum_core PUBLIC ${SPECTRUM_AD9361_LIBRARY})
+endif()
 
 if(WIN32)
     target_compile_definitions(spectrum_core PRIVATE LIBIIO_STATIC)
