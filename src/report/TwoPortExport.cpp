@@ -202,10 +202,6 @@ void drawFooter(QPainter& painter, const QRectF& page, int pageNumber, int pageC
     painter.setFont(QFont(QStringLiteral("Sans Serif"), 7));
     painter.drawText(QRectF(page.left() + 24, page.bottom() - 21,
                             page.width() - 48, 16),
-                     Qt::AlignLeft | Qt::AlignVCenter,
-                     QStringLiteral("AFAR RX Calibration Studio | Протокол S-параметров"));
-    painter.drawText(QRectF(page.left() + 24, page.bottom() - 21,
-                            page.width() - 48, 16),
                      Qt::AlignRight | Qt::AlignVCenter,
                      QStringLiteral("Страница %1 из %2").arg(pageNumber).arg(pageCount));
     painter.restore();
@@ -418,16 +414,16 @@ void drawMagnitudeChart(QPainter& painter,
 
 void drawModeBadge(QPainter& painter, const QRectF& area, bool demoMode)
 {
+    if (!demoMode) {
+        return;
+    }
     painter.save();
-    const QColor color = demoMode ? QColor(181, 43, 43) : QColor(33, 126, 78);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(color);
+    painter.setBrush(QColor(181, 43, 43));
     painter.drawRoundedRect(area, 5, 5);
     painter.setPen(Qt::white);
     painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::Bold));
-    painter.drawText(area, Qt::AlignCenter,
-                     demoMode ? QStringLiteral("DEMO · НЕ МЕТРОЛОГИЯ")
-                              : QStringLiteral("LIVE · ЖИВОЙ VNA"));
+    painter.drawText(area, Qt::AlignCenter, QStringLiteral("DEMO · НЕ МЕТРОЛОГИЯ"));
     painter.restore();
 }
 
@@ -698,7 +694,7 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
         painter.setFont(QFont(QStringLiteral("Sans Serif"), 10));
         painter.drawText(banner.adjusted(34, 166, -34, -18),
                          Qt::AlignLeft | Qt::AlignTop,
-                         QStringLiteral("Полный двухпортовый свип S11 / S21 / S12 / S22"));
+                         QStringLiteral("Полное двухпортовое измерение S11 / S21 / S12 / S22"));
         drawModeBadge(painter, QRectF(page.right() - 216, page.top() + 22, 182, 28),
                       measurement.demo_mode);
 
@@ -723,7 +719,7 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
                          .arg(instrumentName.isEmpty() ? QStringLiteral("не указан") : instrumentName),
                      measurement.demo_mode
                          ? QStringLiteral("Источник: S2VNA DEMO — имитация, не метрология")
-                         : QStringLiteral("Источник: живой VNA"),
+                         : QStringLiteral("Источник: анализатор цепей векторный ПЛАНАР C2220"),
                       QStringLiteral("Серийный номер: %1; версия S2VNA/прибора: %2")
                          .arg(instrument.serial.isEmpty() ? QStringLiteral("не указан") : instrument.serial,
                               instrument.firmware.isEmpty() ? QStringLiteral("не указана") : instrument.firmware),
@@ -1000,7 +996,7 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
                      QStringLiteral("Источник: %1")
                          .arg(measurement.demo_mode
                                   ? QStringLiteral("DEMO — неметрологическая имитация")
-                                  : QStringLiteral("LIVE — живой VNA")),
+                                  : QStringLiteral("анализатор цепей векторный ПЛАНАР C2220")),
                      QStringLiteral("Повторное измерение при экспорте: не выполнялось")
                  });
         drawCard(painter, QRectF(page.left() + 34, page.top() + 320, page.width() - 68, 145),

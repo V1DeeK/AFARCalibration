@@ -50,6 +50,13 @@ std::string last_socket_error(const char* what)
     return std::string(what) + ": WSA " + std::to_string(::WSAGetLastError());
 }
 #else
+// Linux: запись в сокет, закрытый S2VNA, не должна завершать процесс SIGPIPE.
+#  ifdef MSG_NOSIGNAL
+constexpr int kSendFlags = MSG_NOSIGNAL;
+#  else
+constexpr int kSendFlags = 0;  // macOS: SO_NOSIGPIPE ставится в connect()
+#  endif
+
 void ensure_winsock() {}
 
 std::string last_socket_error(const char* what)
@@ -287,6 +294,11 @@ void ScpiSocketTransport::connect()
             continue;
         }
 
+#ifdef SO_NOSIGPIPE
+        // macOS: без этого запись в закрытый S2VNA сокет убивает процесс SIGPIPE.
+        const int noSigPipe = 1;
+        (void)::setsockopt(candidate, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
+#endif
         const int flags = ::fcntl(candidate, F_GETFL, 0);
         if (flags < 0 || ::fcntl(candidate, F_SETFL, flags | O_NONBLOCK) < 0) {
             lastErr = last_socket_error("ScpiSocketTransport: fcntl");
@@ -383,7 +395,7 @@ void ScpiSocketTransport::write_line(const std::string& line)
                              static_cast<int>(payload.size() - sent), 0);
 #else
         const ssize_t n = ::send(static_cast<int>(sock_), payload.data() + sent,
-                                 payload.size() - sent, 0);
+                                 payload.size() - sent, kSendFlags);
 #endif
         if (n <= 0) {
             throw std::runtime_error(last_socket_error("ScpiSocketTransport: send"));

@@ -4,7 +4,7 @@
 
 Программа задаёт состояние изделия и снимает комплексную S21 через ПО **S2VNA**. Серийный цикл АФАР и LUT сохранён, а отдельный одиночный свип поддерживает двухпортовые **ПЛАНАР C1220/C2220**. Нормативные требования — в [`afar_stage1_software_tz.pdf`](afar_stage1_software_tz.pdf); этот файл — вход в репозиторий, а не пересказ ТЗ.
 
-CMake-имя проекта: `AfarRxCalibrationStudio`. Целевая ОС: Windows 10/11 x64.
+CMake-имя проекта: `AfarRxCalibrationStudio`. Основная ОС стенда — Windows 10/11 x64; программа также собирается и работает на Linux и macOS (сборка и тесты на трёх ОС — `.github/workflows/build.yml`).
 
 ## Границы v1.0
 
@@ -20,7 +20,7 @@ CMake-имя проекта: `AfarRxCalibrationStudio`. Целевая ОС: Win
 |-----------|----------------|
 | Язык | C++20 (`CMAKE_CXX_STANDARD 20`, расширения выключены) |
 | Сборка | CMake ≥ 3.22, Ninja, CTest |
-| Компилятор | MinGW/UCRT64 (`g++`) |
+| Компилятор | Windows: MinGW/UCRT64 (`g++`); Linux: GCC ≥ 13; macOS: Apple Clang (Xcode 15+) |
 | GUI | Qt 6 |
 | Тесты | Catch2 v3.7.1 (FetchContent при конфигурации) |
 | Сырой S21 / LUT | собственные контейнеры **AFARH5** и **AFARPQ** (имена файлов `raw-s21.h5`, `*.parquet` по каталогу серии) — **без** системных libhdf5 и Apache Arrow |
@@ -33,9 +33,14 @@ CMake-имя проекта: `AfarRxCalibrationStudio`. Целевая ОС: Win
 
 ## Зависимости для конфигурации
 
-1. **CMake 3.22+** и **Git** (первый `cmake -S` качает Catch2 и nlohmann_json).
-2. **MinGW/UCRT64** — в `PATH` сессии: `g++.exe`, `mingw32-make.exe`.
-3. **Qt 6** — префикс через `CMAKE_PREFIX_PATH`. Qt Widgets используется GUI, Qt Gui — генератором двухпортового PDF-отчёта.
+1. **CMake 3.22+**, **Ninja** и **Git** (первый `cmake -S` качает Catch2 и nlohmann_json).
+2. Компилятор C++20, **Qt 6** (Widgets, Gui, OpenGLWidgets) и библиотеки модуля «Анализатор спектра» — **libiio** и **FFTW3** (libad9361 необязателен):
+
+| ОС | Установка | `CMAKE_PREFIX_PATH` |
+|----|-----------|---------------------|
+| Windows | MSYS2 UCRT64: `pacman -S mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,qt6-base,fftw,libiio,libxml2}` | `C:/msys64/ucrt64` |
+| Linux (Ubuntu 24.04+) | `sudo apt install build-essential cmake ninja-build qt6-base-dev libgl1-mesa-dev libiio-dev libfftw3-dev` | не нужен |
+| macOS | `brew install cmake ninja qt fftw` и `tools/build-libiio.sh` (libiio в Homebrew нет; ставится в `~/.local/afar-deps`), плюс Xcode Command Line Tools | `$(brew --prefix qt);$(brew --prefix);$HOME/.local/afar-deps` |
 
 Живой C1220/C2220 для сборки и обычного `ctest` не нужен: приёмка AT-01…AT-11 на имитаторах и TCP-stub. Прибор нужен для измерений на стенде и для аппаратной части AT-01.
 
@@ -49,7 +54,15 @@ cmake --build build --parallel 12
 ctest --test-dir build --output-on-failure
 ```
 
-Если MinGW `bin` уже в `PATH` и задан `CMAKE_PREFIX_PATH`:
+Linux и macOS:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release            # macOS: + -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix);$HOME/.local/afar-deps"
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure   # Linux без экрана: xvfb-run -a ctest ...
+```
+
+Windows, если MinGW `bin` уже в `PATH` и задан `CMAKE_PREFIX_PATH`:
 
 ```bat
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -57,9 +70,9 @@ cmake --build build --parallel 12
 ctest --test-dir build --output-on-failure
 ```
 
-На MinGW 13 флаг `-O3` в Release заменяется на `-O2` (ICE GCC). Предупреждения — как ошибки (`-Wall -Wextra -Wpedantic -Werror`).
+На MinGW 13 флаг `-O3` в Release заменяется на `-O2` (ICE GCC). Предупреждения `-Wall -Wextra -Wpedantic` включены на всех ОС; ошибками они становятся на MinGW по умолчанию и на Linux/macOS с `-DAFAR_WARNINGS_AS_ERRORS=ON` (так собирает CI).
 
-### Список CTest (18 на Windows)
+### Список CTest (19 при установленном PowerShell)
 
 | Имя | Назначение |
 |-----|------------|
@@ -81,6 +94,7 @@ ctest --test-dir build --output-on-failure
 | `at12_soak` | AT-12: 24-часовой прогон и контроль роста RSS; без переменной окружения — SKIP |
 | `verify_series_tool` | самотест независимого PowerShell-верификатора серии |
 | `ui_interactions` | режимы работы, диапазон частот и форматы графиков |
+| `portability` | разбор чисел независимо от локали ОС, телеметрия процесса на Windows/Linux/macOS |
 
 Вкладка AT-12 автоматически пишет CSV с RSS, private bytes, количеством handles/потоков
 и свободным местом раз в минуту. Это телеметрия длительного прогона, а не замена
@@ -123,6 +137,15 @@ build\tests\test_at12_soak.exe
 Утилита сверяет полный охват файлов манифестом, SHA-256, magic контейнеров,
 структуру CSV/LUT/PDF/JSONL и согласованность `run_id`.
 
+### Поставка на любой ОС
+
+```bash
+cmake --install build --prefix <каталог>   # программа + examples; Qt рядом на Windows/macOS (и на Linux при Qt ≥ 6.5)
+cd build && cpack                          # Windows — ZIP, macOS — DMG, Linux — TGZ
+```
+
+На Linux с Qt < 6.5 (Ubuntu 24.04) архив содержит только программу: Qt 6 ставится из пакетов ОС (`qt6-base`). Готовые архивы для трёх ОС собирает CI на каждый PR (артефакты запуска `build`).
+
 ### Переносимая Windows-поставка
 
 ```powershell
@@ -137,10 +160,12 @@ build\tests\test_at12_soak.exe
 После сборки запускается только этот файл:
 
 ```bat
-build\src\AfarRxCalibrationStudio.exe
+build\src\AfarRxCalibrationStudio.exe                         # Windows
+build/src/AfarRxCalibrationStudio                             # Linux
+open build/src/AfarRxCalibrationStudio.app                    # macOS
 ```
 
-Нужны DLL Qt в `PATH` (или рядом с exe). Во всех режимах оператор сам запускает S2VNA и включает Socket Server; программа никогда не запускает, не скрывает, не перенастраивает и не закрывает процесс S2VNA. Подключение выполняется только после ручного нажатия **«Проверить связь»** или **«Подключить C2220 и измерить всё»**. Это правило действует и для **S2VNA Demo C2220**. Режим **Имитатор** остаётся для разработки без прибора. Подробности: [`docs/S2VNA-setup.md`](docs/S2VNA-setup.md).
+На Windows нужны DLL Qt в `PATH` (или рядом с exe). Программа и S2VNA не обязаны быть на одном компьютере: на Linux/macOS программа подключается к S2VNA на ПК стенда по сети (адрес и порт Socket Server вводятся вручную) либо работает в режиме **Имитатор**. Во всех режимах оператор сам запускает S2VNA и включает Socket Server; программа никогда не запускает, не скрывает, не перенастраивает и не закрывает процесс S2VNA. Подключение выполняется только после ручного нажатия **«Проверить связь»** или **«Подключить C2220 и измерить всё»**. Это правило действует и для **S2VNA Demo C2220**. Режим **Имитатор** остаётся для разработки без прибора. Подробности: [`docs/S2VNA-setup.md`](docs/S2VNA-setup.md).
 
 В режиме **«Двухпортовое устройство»** доступны все страницы этапов; страницы LUT заполняются результатами серии калибровки канала. Диапазон задаётся как **начальная/конечная** либо **центральная/полоса** частот с единицами Гц/кГц/МГц/ГГц. Форматы отображения: амплитуда + фаза, амплитуда в дБ, линейный модуль, развёрнутая фаза, групповая задержка; отдельно доступны КСВН-1 и КСВН-2.
 

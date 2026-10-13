@@ -2,6 +2,7 @@
 
 #include "DutSimulator.h"
 #include "MeasurementOrchestrator.h"
+#include "ProcessMetrics.h"
 #include "VnaSimulator.h"
 #include "probe_fixtures.h"
 #include "qt_test_application.h"
@@ -13,13 +14,6 @@
 #include <iostream>
 #include <limits>
 #include <string>
-
-#if defined(_WIN32)
-#include <windows.h>
-#include <psapi.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace {
 
@@ -44,23 +38,7 @@ std::uint64_t envSeconds(const char* name, std::uint64_t fallback)
 
 std::uint64_t residentBytes()
 {
-#if defined(_WIN32)
-    PROCESS_MEMORY_COUNTERS_EX counters{};
-    counters.cb = sizeof(counters);
-    if (!GetProcessMemoryInfo(GetCurrentProcess(),
-                              reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
-                              sizeof(counters))) {
-        return 0;
-    }
-    return static_cast<std::uint64_t>(counters.WorkingSetSize);
-#else
-    std::ifstream statm("/proc/self/statm");
-    std::uint64_t total_pages = 0;
-    std::uint64_t resident_pages = 0;
-    statm >> total_pages >> resident_pages;
-    (void)total_pages;
-    return resident_pages * static_cast<std::uint64_t>(::sysconf(_SC_PAGESIZE));
-#endif
+    return afar::current_process_metrics().rss_bytes;
 }
 
 }  // namespace

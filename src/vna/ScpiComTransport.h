@@ -35,7 +35,7 @@ private:
 #endif
 
     std::string portName_;
-    std::uint32_t baudRate_{115200};
+    [[maybe_unused]] std::uint32_t baudRate_{115200};  // используется только в Windows-ветке
     std::uint32_t ioTimeoutMs_{30000};
 #ifdef _WIN32
     void* handle_{nullptr};  // HANDLE, без windows.h в публичном заголовке

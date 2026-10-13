@@ -1,5 +1,7 @@
 #include "AttenuatorCodes.h"
 
+#include "NumberText.h"
+
 #include <fstream>
 #include <sstream>
 #include <unordered_set>
@@ -79,18 +81,11 @@ bool parseDouble(std::string_view s, double& out, std::string& diagnostics, int 
         diagnostics = "line " + std::to_string(line) + ": empty " + field;
         return false;
     }
-    try {
-        std::size_t idx = 0;
-        out = std::stod(std::string(s), &idx);
-        if (idx != s.size()) {
-            diagnostics = "line " + std::to_string(line) + ": invalid number for " + field;
-            return false;
-        }
-        return true;
-    } catch (...) {
+    if (!afar::parse_double(s, out)) {
         diagnostics = "line " + std::to_string(line) + ": invalid number for " + field;
         return false;
     }
+    return true;
 }
 
 }  // namespace

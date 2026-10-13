@@ -12,7 +12,8 @@ inline QGuiApplication& guiApplication()
     static int argc = 1;
     static char name[] = "afar_test";
     static char* argv[] = {name, nullptr};
-    static QGuiApplication application(argc, argv);
+    // Намеренно не уничтожается — см. test_ui_interactions.cpp.
+    static QGuiApplication& application = *new QGuiApplication(argc, argv);
     return application;
 }
 

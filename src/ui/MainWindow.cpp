@@ -6,30 +6,41 @@
 #include "DataFormatsTab.h"
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
+#include "PsTab.h"
 #include "RunConfig.h"
 #include "RunStateMachine.h"
 #include "StartWizard.h"
 #include "afar/C2220Limits.h"
 #include "Theme.h"
+#include "spectrum_engine.hpp"
+#include "spectrum_opengl_widget.hpp"
 
 #include <QApplication>
+#include <QButtonGroup>
 #include <QDir>
 #include <QDebug>
 #include <QFrame>
 #include <QFileDialog>
+#include <QGroupBox>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QProgressBar>
 #include <QScreen>
 #include <QScrollArea>
 #include <QSettings>
+#include <QSizePolicy>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QStackedWidget>
 #include <QTabWidget>
 #include <QThread>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <cmath>
@@ -40,18 +51,72 @@
 #define AFAR_EXAMPLES_DIR ""
 #endif
 
-MainWindow::MainWindow(QWidget* parent)
-    : QMainWindow(parent)
+namespace {
+
+/// Каталог примеров: рядом с exe (Windows/Linux-поставка), в Resources
+/// бандла macOS, в share/ после установки; иначе — исходники сборки.
+std::filesystem::path examplesDirectory()
 {
-    setWindowTitle(QStringLiteral("AFAR RX Calibration Studio"));
+    const QDir appDir(QCoreApplication::applicationDirPath());
+    for (const auto* relative : {"examples", "../Resources/examples",
+                                 "../share/AfarRxCalibrationStudio/examples"}) {
+        const QString candidate = QDir::cleanPath(appDir.filePath(QString::fromLatin1(relative)));
+        if (QFileInfo(candidate).isDir()) {
+#ifdef _WIN32
+            return std::filesystem::path(candidate.toStdWString());
+#else
+            return std::filesystem::path(candidate.toStdString());
+#endif
+        }
+    }
+    return std::filesystem::path(AFAR_EXAMPLES_DIR);
+}
+
+}  // namespace
+
+MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
+    : QMainWindow(parent), m_spectrumEngine(&spectrumEngine)
+{
+    setWindowTitle(QStringLiteral("AFAR RX Calibration Studio / Spectrum Analyzer"));
 
     const QRect workArea = screen() ? screen()->availableGeometry()
                                     : QGuiApplication::primaryScreen()->availableGeometry();
-    resize(qMin(1000, qMax(1, workArea.width() - 32)),
-           qMin(620, qMax(1, workArea.height() - 32)));
+    resize(qMin(1200, qMax(1, workArea.width() - 32)),
+           qMin(800, qMax(1, workArea.height() - 32)));
     move(workArea.center() - rect().center());
 
-    auto* viewport = new QScrollArea(this);
+    auto* shell = new QWidget(this);
+    auto* shellLayout = new QVBoxLayout(shell);
+    shellLayout->setContentsMargins(4, 4, 4, 4);
+    shellLayout->setSpacing(4);
+
+    auto* navigation = new QFrame(shell);
+    navigation->setFrameShape(QFrame::StyledPanel);
+    auto* navigationLayout = new QHBoxLayout(navigation);
+    navigationLayout->setContentsMargins(4, 2, 4, 2);
+    m_parametersWorkspaceButton = new QPushButton(QStringLiteral("Получить параметры"), navigation);
+    m_parametersWorkspaceButton->setObjectName(QStringLiteral("btnParametersWorkspace"));
+    m_afarWorkspaceButton = new QPushButton(QStringLiteral("Калибровка AFAR"), navigation);
+    m_afarWorkspaceButton->setObjectName(QStringLiteral("btnAfarWorkspace"));
+    m_spectrumWorkspaceButton = new QPushButton(QStringLiteral("Анализатор спектра"), navigation);
+    m_spectrumWorkspaceButton->setObjectName(QStringLiteral("btnSpectrumWorkspace"));
+    m_parametersWorkspaceButton->setCheckable(true);
+    m_afarWorkspaceButton->setCheckable(true);
+    m_spectrumWorkspaceButton->setCheckable(true);
+    auto* workspaceButtons = new QButtonGroup(navigation);
+    workspaceButtons->setExclusive(true);
+    workspaceButtons->addButton(m_parametersWorkspaceButton, 0);
+    workspaceButtons->addButton(m_afarWorkspaceButton, 1);
+    workspaceButtons->addButton(m_spectrumWorkspaceButton, 2);
+    navigationLayout->addWidget(m_parametersWorkspaceButton);
+    navigationLayout->addWidget(m_afarWorkspaceButton);
+    navigationLayout->addWidget(m_spectrumWorkspaceButton);
+    navigationLayout->addStretch(1);
+
+    m_workspaces = new QStackedWidget(shell);
+    m_workspaces->setObjectName(QStringLiteral("mainWorkspaces"));
+
+    auto* viewport = new QScrollArea(m_workspaces);
     viewport->setWidgetResizable(true);
     viewport->setFrameShape(QFrame::NoFrame);
 
@@ -75,6 +140,8 @@ MainWindow::MainWindow(QWidget* parent)
     tabs->addTab(m_matrix, QStringLiteral("Матрица кодов"));
     tabs->addTab(m_formats, QStringLiteral("Форматы данных"));
     tabs->addTab(m_acceptance, QStringLiteral("Приёмка AT"));
+    m_ps = new PsTab(tabs);
+    tabs->addTab(m_ps, QStringLiteral("Параметры PS"));
 
     auto* cycle = new QFrame(root);
     cycle->setFrameShape(QFrame::StyledPanel);
@@ -102,16 +169,176 @@ MainWindow::MainWindow(QWidget* parent)
     rootLayout->addWidget(tabs, 1);
     rootLayout->addWidget(cycle);
     viewport->setWidget(root);
-    setCentralWidget(viewport);
+
+    auto* spectrumWorkspace = new SpectrumOpenGLWidget(spectrumEngine.state(), m_workspaces);
+    spectrumWorkspace->setObjectName(QStringLiteral("spectrumWorkspace"));
+    auto* parametersWorkspace = new QWidget(m_workspaces);
+    parametersWorkspace->setObjectName(QStringLiteral("parametersWorkspace"));
+    auto* parametersLayout = new QVBoxLayout(parametersWorkspace);
+    parametersLayout->setContentsMargins(18, 16, 18, 16);
+    parametersLayout->setSpacing(12);
+    auto* parametersTitle = new QLabel(QStringLiteral("Получить параметры платы"), parametersWorkspace);
+    parametersTitle->setStyleSheet(QStringLiteral("font-size: 22px; font-weight: 700;"));
+    auto* readOnlyHint = new QLabel(
+        QStringLiteral("Автоматический поиск по MAC и безопасное чтение параметров libiio. "
+                       "Настройки платы не изменяются."),
+        parametersWorkspace);
+    readOnlyHint->setWordWrap(true);
+    readOnlyHint->setObjectName(QStringLiteral("hintLabel"));
+
+    auto* searchGroup = new QGroupBox(QStringLiteral("Поиск устройства"), parametersWorkspace);
+    auto* searchLayout = new QVBoxLayout(searchGroup);
+    searchLayout->setSpacing(9);
+    auto* macRow = new QHBoxLayout();
+    macRow->addWidget(new QLabel(QStringLiteral("MAC-адрес"), searchGroup));
+    auto* boardMac = new QLineEdit(searchGroup);
+    boardMac->setObjectName(QStringLiteral("boardMacAddress"));
+    boardMac->setMaximumWidth(320);
+    boardMac->setText(QSettings().value(QStringLiteral("board/mac"),
+                                        QStringLiteral("42:7e:d7:4e:0f:77")).toString());
+    auto* readParameters = new QPushButton(QStringLiteral("Получить параметры"), searchGroup);
+    readParameters->setObjectName(QStringLiteral("readBoardParameters"));
+    macRow->addWidget(boardMac, 1);
+    macRow->addStretch(1);
+    macRow->addWidget(readParameters);
+
+    auto* stateRow = new QHBoxLayout();
+    auto* boardIp = new QLabel(QStringLiteral("IP-адрес: —"), searchGroup);
+    boardIp->setObjectName(QStringLiteral("boardIpAddress"));
+    auto* boardStatus = new QLabel(QStringLiteral("Готово к чтению"), searchGroup);
+    boardStatus->setObjectName(QStringLiteral("boardParametersStatus"));
+    boardStatus->setWordWrap(true);
+    stateRow->addWidget(boardIp);
+    stateRow->addWidget(boardStatus, 1);
+    searchLayout->addLayout(macRow);
+    searchLayout->addLayout(stateRow);
+
+    auto* resultTabs = new QTabWidget(parametersWorkspace);
+    resultTabs->setObjectName(QStringLiteral("boardParametersTabs"));
+    auto* boardOutput = new QPlainTextEdit(resultTabs);
+    boardOutput->setObjectName(QStringLiteral("boardParametersOutput"));
+    boardOutput->setReadOnly(true);
+    boardOutput->setLineWrapMode(QPlainTextEdit::NoWrap);
+    boardOutput->setPlaceholderText(
+        QStringLiteral("После нажатия здесь появятся основные параметры платы."));
+    auto* boardDetails = new QPlainTextEdit(resultTabs);
+    boardDetails->setObjectName(QStringLiteral("boardParametersDetails"));
+    boardDetails->setReadOnly(true);
+    boardDetails->setLineWrapMode(QPlainTextEdit::NoWrap);
+    boardDetails->setPlaceholderText(
+        QStringLiteral("Здесь появится полный перечень технических IIO-атрибутов."));
+    resultTabs->addTab(boardOutput, QStringLiteral("Основное"));
+    resultTabs->addTab(boardDetails, QStringLiteral("Подробно"));
+    parametersLayout->addWidget(parametersTitle);
+    parametersLayout->addWidget(readOnlyHint);
+    parametersLayout->addWidget(searchGroup);
+    parametersLayout->addWidget(resultTabs, 1);
+
+    connect(readParameters, &QPushButton::clicked, parametersWorkspace,
+            [this, parametersWorkspace, boardMac, boardIp, boardStatus, boardOutput,
+             boardDetails, resultTabs, readParameters] {
+        const QString mac = boardMac->text().trimmed();
+        QSettings().setValue(QStringLiteral("board/mac"), mac);
+        auto& state = m_spectrumEngine->state();
+        {
+            std::lock_guard<std::mutex> lock(state.board_mutex);
+            state.board_mac = mac.toStdString();
+            state.board_found_ip.clear();
+            state.board_parameters.clear();
+            state.board_status = "ожидание запуска поиска...";
+        }
+        state.board_read_parameters_requested.store(true);
+        state.board_find_requested.store(true);
+        parametersWorkspace->setProperty("operationActive", true);
+        setOperationProgress(QStringLiteral("Поиск платы по MAC"), 0, 2);
+        readParameters->setEnabled(false);
+        boardIp->setText(QStringLiteral("IP-адрес: поиск…"));
+        boardStatus->setText(QStringLiteral("Поиск платы по MAC…"));
+        boardOutput->clear();
+        boardDetails->clear();
+        resultTabs->setCurrentIndex(0);
+    });
+
+    auto* parametersTimer = new QTimer(parametersWorkspace);
+    connect(parametersTimer, &QTimer::timeout, parametersWorkspace,
+            [this, parametersWorkspace, boardIp, boardStatus, boardOutput, boardDetails,
+             readParameters, lastParameters = QString()]() mutable {
+        auto& state = m_spectrumEngine->state();
+        std::string ip;
+        std::string status;
+        std::string parameters;
+        {
+            std::lock_guard<std::mutex> lock(state.board_mutex);
+            ip = state.board_found_ip;
+            status = state.board_status;
+            parameters = state.board_parameters;
+        }
+        const bool busy = state.board_find_requested.load() || state.board_is_finding.load();
+        readParameters->setEnabled(!busy);
+        boardIp->setText(ip.empty()
+                             ? QStringLiteral("IP-адрес: —")
+                             : QStringLiteral("IP-адрес: %1").arg(QString::fromStdString(ip)));
+        if (!status.empty()) boardStatus->setText(QString::fromStdString(status));
+        const QString snapshot = QString::fromStdString(parameters);
+        if (snapshot != lastParameters) {
+            lastParameters = snapshot;
+            const QString detailsMarker =
+                QStringLiteral("\nВСЕ СТАНДАРТНЫЕ ДОСТУПНЫЕ IIO-АТРИБУТЫ\n");
+            const qsizetype detailsAt = snapshot.indexOf(detailsMarker);
+            boardOutput->setPlainText(
+                detailsAt < 0 ? snapshot.trimmed() : snapshot.left(detailsAt).trimmed());
+            boardDetails->setPlainText(
+                detailsAt < 0 ? QString() : snapshot.mid(detailsAt + detailsMarker.size()).trimmed());
+        }
+        if (parametersWorkspace->property("operationActive").toBool()) {
+            if (busy) {
+                setOperationProgress(ip.empty() ? QStringLiteral("Поиск платы по MAC")
+                                                : QStringLiteral("Чтение параметров платы"),
+                                     ip.empty() ? 0 : 1, 2);
+            } else if (!status.empty()) {
+                setOperationProgress(parameters.empty()
+                                         ? QStringLiteral("Параметры платы не получены")
+                                         : QStringLiteral("Параметры платы получены"),
+                                     2, 2);
+                parametersWorkspace->setProperty("operationActive", false);
+            }
+        }
+    });
+    parametersTimer->start(100);
+    m_workspaces->addWidget(parametersWorkspace);
+    m_workspaces->addWidget(viewport);
+    m_workspaces->addWidget(spectrumWorkspace);
+    shellLayout->addWidget(navigation);
+    shellLayout->addWidget(m_workspaces, 1);
+    setCentralWidget(shell);
+
+    QSettings settings;
+    const QString workspaceKey = QStringLiteral("ui/active_workspace_v2");
+    const int savedWorkspace = settings.contains(workspaceKey)
+        ? qBound(0, settings.value(workspaceKey, 1).toInt(), 2)
+        : qBound(0, settings.value(QStringLiteral("ui/active_workspace"), 0).toInt(), 1) + 1;
+    settings.setValue(workspaceKey, savedWorkspace);
+    m_workspaces->setCurrentIndex(savedWorkspace);
+    workspaceButtons->button(savedWorkspace)->setChecked(true);
+    connect(workspaceButtons, &QButtonGroup::idClicked, this, [this](int index) {
+        m_workspaces->setCurrentIndex(index);
+        QSettings().setValue(QStringLiteral("ui/active_workspace_v2"), index);
+    });
 
     m_operationText = new QLabel(QStringLiteral("Готово"), this);
     m_operationText->setObjectName(QStringLiteral("operationStatusText"));
-    m_operationText->setMinimumWidth(300);
+    m_operationText->setMinimumWidth(0);
+    m_operationText->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     m_operationProgress = new QProgressBar(this);
     m_operationProgress->setObjectName(QStringLiteral("operationProgressBar"));
     m_operationProgress->setRange(0, 100);
-    m_operationProgress->setValue(100);
-    m_operationProgress->setFixedWidth(220);
+    m_operationProgress->setValue(0);
+    m_operationProgress->setFixedWidth(180);
+    m_operationProgress->setVisible(false);
+    m_moduleStatus = new QLabel(this);
+    m_moduleStatus->setObjectName(QStringLiteral("moduleStatusText"));
+    m_moduleStatus->setMaximumWidth(280);
+    statusBar()->addWidget(m_moduleStatus);
     statusBar()->addPermanentWidget(m_operationText, 1);
     statusBar()->addPermanentWidget(m_operationProgress);
 
@@ -202,6 +429,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_worker, &MeasureWorker::measureNowFinished, this,
             [this](bool ok, const QString& message) {
                 if (!ok) {
+                     setOperationProgress(QStringLiteral("Ошибка измерения"), 1, 1);
                     m_connections->setDiagnostic(
                         message.isEmpty() ? QStringLiteral("Измерить сейчас: отказ") : message);
                 } else {
@@ -215,6 +443,7 @@ MainWindow::MainWindow(QWidget* parent)
             [this](bool ok, const QString& s2p, const QString& pdf, const QString& message) {
                 m_measure->setTwoPortExportInProgress(false);
                 if (!ok) {
+                     setOperationProgress(QStringLiteral("Ошибка формирования отчёта"), 1, 1);
                     statusBar()->showMessage(QStringLiteral("Отчёт не сохранён"), 15000);
                     QMessageBox::warning(this, QStringLiteral("Экспорт измерения"), message);
                     return;
@@ -226,15 +455,18 @@ MainWindow::MainWindow(QWidget* parent)
                     QStringLiteral("Файлы сохранены:\n\nS2P: %1\nPDF: %2").arg(s2p, pdf));
             });
 
-    statusBar()->showMessage(
-        QStringLiteral("ВАЦ (S2VNA): не подтверждена · THRU: — · Сырые данные: append-only · SHA-256"));
-
     m_thread->start();
     loadExampleDefaults();
     refreshThemeButton();
     scanUnfinishedSeries();
     onApplyVnaSettings();
     onApplyControllerSettings();
+
+    auto* moduleStatusTimer = new QTimer(this);
+    moduleStatusTimer->setInterval(500);
+    connect(moduleStatusTimer, &QTimer::timeout, this, &MainWindow::updateModuleStatus);
+    moduleStatusTimer->start();
+    updateModuleStatus();
 }
 
 MainWindow::~MainWindow()
@@ -256,7 +488,7 @@ MainWindow::~MainWindow()
 
 void MainWindow::loadExampleDefaults()
 {
-    const std::filesystem::path examples(AFAR_EXAMPLES_DIR);
+    const std::filesystem::path examples = examplesDirectory();
     const auto cfg1296 = examples / "run-config.c2220-1296.example.json";
     const auto cfgDefault = examples / "run-config.example.json";
     afar::RunConfig cfg;
@@ -339,7 +571,8 @@ void MainWindow::onOpenWizard()
         QStringLiteral("ВАЦ (S2VNA): %1 · THRU: %2 · Сырые данные: append-only · SHA-256")
             .arg(wizard.calConfirmed() ? QStringLiteral("подтверждена оператором")
                                        : QStringLiteral("не подтверждена"),
-                 wizard.thruSummary()));
+                 wizard.thruSummary()),
+        10000);
     QMetaObject::invokeMethod(m_worker, "prepare", Qt::QueuedConnection,
                               Q_ARG(QString, wizard.dataRoot()),
                               Q_ARG(QString, wizard.runConfigPath()),
@@ -405,6 +638,7 @@ void MainWindow::onStateChanged(int state, const QString& russianText, const QSt
     } else if (st == RunState::Complete) {
         m_measure->setStageHighlight(6);
     }
+    updateModuleStatus();
 }
 
 void MainWindow::updateCycleButtons(int state)
@@ -421,6 +655,13 @@ void MainWindow::updateCycleButtons(int state)
     // UI-MEAS-001: Idle/Ready — да; Running и смежные — нет.
     const bool measureOk = st == RunState::Idle || st == RunState::Ready;
     m_measure->setMeasureNowEnabled(measureOk);
+    // Связь вкладки PS уступает серии, только если серия сама пишет коды
+    // через PS (контроллер «PS изделия»): PS держит одно соединение. Серия с
+    // любым другим контроллером работает только с анализатором и PS не трогает.
+    const bool idle = st == RunState::Idle || st == RunState::Complete
+        || st == RunState::Aborted || st == RunState::Error;
+    const bool seriesUsesPs = m_connections->controllerBackend() == MeasureWorker::CtrlPs;
+    m_ps->setSeriesActive(!idle && seriesUsesPs);
 }
 
 void MainWindow::onMeasureNow()
@@ -458,8 +699,6 @@ void MainWindow::onExportTwoPort()
     }
     m_measure->setTwoPortExportInProgress(true);
     setOperationProgress(QStringLiteral("Подготовка S2P и PDF-отчёта"), 0, 2);
-    statusBar()->showMessage(
-        QStringLiteral("Формирование S2P и PDF-отчёта… Не закрывайте программу."));
     const QVector<double> markers = m_measure->graphMarkerFrequenciesGhz();
     const QString deviceName = m_measure->reportDeviceName();
     const QString deviceSerial = m_measure->reportDeviceSerial();
@@ -498,9 +737,47 @@ void MainWindow::onConnectionChanged(const QString& vnaModel,
                                      const QString& vnaSerial,
                                      const QString& vnaFirmware)
 {
+    m_vnaConnected = vnaConnected;
     m_connections->setVnaInfo(vnaModel, vnaAddress, vnaConnected, vnaSerial, vnaFirmware);
     m_connections->setControllerInfo(controllerIface, dutConnected);
     m_connections->setTemperatureC(temperatureC, temperatureValid);
+    updateModuleStatus();
+}
+
+void MainWindow::updateModuleStatus()
+{
+    if (!m_moduleStatus || !m_spectrumEngine) {
+        return;
+    }
+
+    using afar::RunState;
+    const auto runState = static_cast<RunState>(m_state);
+    const bool measuring = runState == RunState::Running || runState == RunState::Pausing
+        || runState == RunState::Paused || runState == RunState::Stopping
+        || runState == RunState::Finalizing;
+
+    const AppState& spectrum = m_spectrumEngine->state();
+    QString spectrumState = QStringLiteral("SDR не подключён");
+    if (spectrum.is_playing_back.load()) {
+        spectrumState = QStringLiteral("IQ playback");
+    } else if (spectrum.is_connected.load()) {
+        spectrumState = QStringLiteral("SDR подключён");
+    }
+    if (spectrum.is_saving.load() || spectrum.tv_is_recording.load()) {
+        spectrumState += QStringLiteral(", запись");
+    }
+
+    const QString vnaState = m_vnaConnected ? QStringLiteral("подключён")
+                                            : QStringLiteral("не подключён");
+    const QString shortSpectrum = spectrum.is_playing_back.load()
+        ? QStringLiteral("воспроизведение")
+        : spectrum.is_connected.load() ? QStringLiteral("подключён")
+                                       : QStringLiteral("не подключён");
+    m_moduleStatus->setText(QStringLiteral("VNA: %1 · SDR: %2").arg(vnaState, shortSpectrum));
+    m_moduleStatus->setToolTip(
+        QStringLiteral("AFAR: %1%2\nАнализатор спектра: %3")
+            .arg(m_vnaConnected ? QStringLiteral("VNA подключён") : QStringLiteral("VNA не подключён"),
+                 measuring ? QStringLiteral(", измерение") : QString(), spectrumState));
 }
 
 void MainWindow::onProgress(qint64 completed, qint64 total, int channel, int attCode, int phaseCode)
@@ -519,11 +796,14 @@ void MainWindow::onProgress(qint64 completed, qint64 total, int channel, int att
 void MainWindow::setOperationProgress(const QString& text, qint64 completed, qint64 total)
 {
     m_operationText->setText(text);
+    m_operationText->setToolTip(text);
     const int percent = total > 0
         ? static_cast<int>(qBound(qint64{0}, completed * 100 / total, qint64{100}))
         : 0;
+    m_operationProgress->setVisible(total <= 0 || completed < total);
+    m_operationProgress->setRange(total > 0 ? 0 : 0, total > 0 ? 100 : 0);
     m_operationProgress->setValue(percent);
-    m_operationProgress->setFormat(QStringLiteral("%1%").arg(percent));
+    m_operationProgress->setFormat(total > 0 ? QStringLiteral("%1%").arg(percent) : QString());
 }
 
 void MainWindow::onEtaChanged(const QString& text)

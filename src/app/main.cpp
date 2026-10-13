@@ -1,7 +1,12 @@
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
+#include "spectrum_engine.hpp"
 
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QPushButton>
+#include <QSettings>
+#include <QTimer>
 #ifndef _WIN32
 #include <QDir>
 #include <QLockFile>
@@ -48,12 +53,60 @@ int main(int argc, char* argv[])
 
     applyAppTheme(app, loadAppTheme());
 
+    bool autoExitValid = false;
+    const int autoExitMs = qEnvironmentVariableIntValue("AFAR_TEST_AUTO_EXIT_MS", &autoExitValid);
+    if (autoExitValid && autoExitMs > 0)
+        QTimer::singleShot(autoExitMs, &app, &QCoreApplication::quit);
+
     // S2VNA всегда запускает и настраивает оператор; приложение — только SCPI-клиент.
     int result = 0;
     {
-        MainWindow window;
+        SpectrumEngine spectrumEngine;
+        MainWindow window(spectrumEngine);
+        spectrumEngine.start();
         window.show();
+
+        bool switchCountValid = false;
+        const int switchCount = qEnvironmentVariableIntValue(
+            "AFAR_TEST_SWITCH_COUNT", &switchCountValid);
+        if (switchCountValid && switchCount > 0) {
+            auto* parametersButton = window.findChild<QPushButton*>(
+                QStringLiteral("btnParametersWorkspace"));
+            auto* afarButton = window.findChild<QPushButton*>(QStringLiteral("btnAfarWorkspace"));
+            auto* spectrumButton = window.findChild<QPushButton*>(
+                QStringLiteral("btnSpectrumWorkspace"));
+            if (!parametersButton || !afarButton || !spectrumButton) {
+                QTimer::singleShot(0, &app, [&app] { app.exit(3); });
+            } else {
+                QSettings settings;
+                const QString workspaceKey = QStringLiteral("ui/active_workspace_v2");
+                const int originalWorkspace = settings.contains(workspaceKey)
+                    ? qBound(0, settings.value(workspaceKey, 1).toInt(), 2)
+                    : qBound(0, settings.value(QStringLiteral("ui/active_workspace"), 0).toInt(), 1) + 1;
+                const QVector<QPushButton*> workspaceButtons{
+                    parametersButton, afarButton, spectrumButton};
+                auto* switchTimer = new QTimer(&window);
+                switchTimer->setInterval(1);
+                QObject::connect(switchTimer, &QTimer::timeout, &window,
+                        [&, switchTimer, workspaceButtons, originalWorkspace,
+                         completed = 0, maxSwitchNs = qint64{0}]() mutable {
+                    QElapsedTimer elapsed;
+                    elapsed.start();
+                    workspaceButtons.at(completed % workspaceButtons.size())->click();
+                    maxSwitchNs = qMax(maxSwitchNs, elapsed.nsecsElapsed());
+                    ++completed;
+                    if (completed < switchCount)
+                        return;
+
+                    switchTimer->stop();
+                    workspaceButtons.at(originalWorkspace)->click();
+                    app.exit(maxSwitchNs <= 200'000'000 ? 0 : 4);
+                });
+                switchTimer->start();
+            }
+        }
         result = app.exec();
+        spectrumEngine.stopAndJoin();
     }
 #ifdef _WIN32
     CloseHandle(instanceMutex);

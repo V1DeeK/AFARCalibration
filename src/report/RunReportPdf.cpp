@@ -114,17 +114,18 @@ void drawChannelHeader(QPainter& painter, const QRectF& page, const QString& tit
     painter.drawRoundedRect(headerArea, 4, 4);
     painter.setPen(Qt::white);
     painter.setFont(QFont(QStringLiteral("Sans Serif"), 18, QFont::Bold));
-    painter.drawText(headerArea.adjusted(28, 15, -260, -15),
+    painter.drawText(headerArea.adjusted(28, 15, demoMode ? -260 : -28, -15),
                      Qt::AlignLeft | Qt::AlignVCenter, title);
-    const QRectF badgeArea(headerArea.right() - 230, headerArea.top() + 18, 202, 30);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(demoMode ? QColor(181, 43, 43) : QColor(33, 126, 78));
-    painter.drawRoundedRect(badgeArea, 5, 5);
-    painter.setPen(Qt::white);
-    painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::Bold));
-    painter.drawText(badgeArea, Qt::AlignCenter,
-                     demoMode ? QStringLiteral("DEMO - НЕ МЕТРОЛОГИЯ")
-                              : QStringLiteral("LIVE - ЖИВОЙ VNA"));
+    if (demoMode) {
+        const QRectF badgeArea(headerArea.right() - 230, headerArea.top() + 18, 202, 30);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(181, 43, 43));
+        painter.drawRoundedRect(badgeArea, 5, 5);
+        painter.setPen(Qt::white);
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::Bold));
+        painter.drawText(badgeArea, Qt::AlignCenter,
+                         QStringLiteral("DEMO - НЕ МЕТРОЛОГИЯ"));
+    }
     painter.setPen(QColor(90, 100, 115));
     painter.setFont(QFont(QStringLiteral("Sans Serif"), 7));
     painter.drawText(QRectF(page.left() + 28, page.bottom() - 22, page.width() - 56, 14),
@@ -367,8 +368,9 @@ bool writeDetailedChannelReportPdf(const std::filesystem::path& path,
                          QStringLiteral("Серия: %1; канал: %2")
                              .arg(qString(info.run_id)).arg(channel.channel),
                          QStringLiteral("Источник: %1")
-                             .arg(info.demo_mode ? QStringLiteral("DEMO - не метрология")
-                                                 : QStringLiteral("LIVE")),
+                             .arg(info.demo_mode
+                                      ? QStringLiteral("DEMO - не метрология")
+                                      : QStringLiteral("анализатор цепей векторный ПЛАНАР C2220")),
                          QStringLiteral("VNA: %1").arg(qString(info.vna_idn)),
                          QStringLiteral("Диапазон: %1 - %2 ГГц; точек: %3")
                              .arg(static_cast<double>(info.f_start_hz) / 1e9, 0, 'f', 6)

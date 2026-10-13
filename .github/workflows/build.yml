@@ -1,0 +1,113 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux (Ubuntu 24.04, GCC, Qt 6)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build qt6-base-dev libgl1-mesa-dev libiio-dev libfftw3-dev xvfb
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAFAR_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        # Виджет спектра (QOpenGLWidget) падает на платформе offscreen — нужен X-сервер.
+        run: xvfb-run -a ctest --test-dir build --output-on-failure --timeout 300
+      - name: Package
+        run: cd build && cpack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AfarRxCalibrationStudio-linux
+          path: build/AfarRxCalibrationStudio-*.tar.gz
+
+  macos:
+    name: macOS (Apple Clang, Qt 6)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        # libiio в Homebrew нет — собираем из исходников.
+        run: |
+          brew install qt ninja fftw
+          tools/build-libiio.sh "$HOME/.local/afar-deps"
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAFAR_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix);$HOME/.local/afar-deps"
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure --timeout 300 -E '^spectrum_widget$'
+      - name: Test (виджет спектра, OpenGL)
+        # QOpenGLWidget не работает на offscreen — нужен оконный сервер macOS.
+        env:
+          QT_QPA_PLATFORM: cocoa
+        run: ctest --test-dir build --output-on-failure --timeout 120 -R '^spectrum_widget$'
+      - name: Package
+        run: cd build && cpack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AfarRxCalibrationStudio-macos
+          path: build/AfarRxCalibrationStudio-*.dmg
+
+  windows:
+    name: Windows (MSYS2 UCRT64, MinGW, Qt 6)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          path-type: inherit
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-fftw
+            mingw-w64-ucrt-x86_64-libiio
+            mingw-w64-ucrt-x86_64-libxml2
+            mingw-w64-ucrt-x86_64-mesa
+            git
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure --timeout 300 -E '^spectrum_widget$'
+      - name: Test (виджет спектра, OpenGL)
+        # QOpenGLWidget не работает на offscreen, а у раннера нет GPU:
+        # окно Windows + программный OpenGL Mesa.
+        # Qt и загрузчик ImGui должны работать с одним и тем же opengl32.dll,
+        # поэтому Mesa кладётся рядом с тестом под системным именем.
+        env:
+          QT_QPA_PLATFORM: windows
+          QT_OPENGL: desktop
+          GALLIUM_DRIVER: llvmpipe
+          QT_LOGGING_RULES: "qt.qpa.gl=true"
+        run: |
+          cp /ucrt64/bin/opengl32.dll build/tests/
+          cp /ucrt64/bin/libgallium_wgl.dll build/tests/
+          ctest --test-dir build --output-on-failure --timeout 120 -R '^spectrum_widget$'
+      - name: Package
+        run: cd build && cpack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AfarRxCalibrationStudio-windows
+          path: build/AfarRxCalibrationStudio-*.zip

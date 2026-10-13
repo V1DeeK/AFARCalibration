@@ -1,17 +1,17 @@
+include(${PROJECT_SOURCE_DIR}/cmake/AfarWarnings.cmake)
+
 function(afar_add_interface_module stem)
     add_library(afar_${stem} INTERFACE)
     target_include_directories(afar_${stem} INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/${stem}
         ${PROJECT_SOURCE_DIR}/include
     )
-    if(MINGW)
-        target_compile_options(afar_${stem} INTERFACE -Wall -Wextra -Wpedantic -Werror)
+    if(AFAR_WARNING_FLAGS)
+        target_compile_options(afar_${stem} INTERFACE ${AFAR_WARNING_FLAGS})
     endif()
 endfunction()
 
 afar_add_interface_module(ui)
-
-include(${PROJECT_SOURCE_DIR}/cmake/AfarWarnings.cmake)
 include(${PROJECT_SOURCE_DIR}/cmake/Json.cmake)
 
 add_library(afar_interfaces INTERFACE)
@@ -27,22 +27,30 @@ target_include_directories(afar_vna PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/vna
     ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(afar_vna PUBLIC afar_interfaces)
-if(WIN32)
-    target_link_libraries(afar_vna PUBLIC ws2_32)
-endif()
 afar_enable_warnings(afar_vna)
 
 add_library(afar_core STATIC
     core/RunId.cpp
     core/RunId.h
+    core/NumberText.cpp
+    core/NumberText.h
+    core/ProcessMetrics.cpp
+    core/ProcessMetrics.h
 )
 target_include_directories(afar_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core
     ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(afar_core PUBLIC afar_interfaces)
+if(WIN32)
+    target_link_libraries(afar_core PRIVATE Psapi)
+endif()
 afar_enable_warnings(afar_core)
+
+target_link_libraries(afar_vna PUBLIC afar_interfaces afar_core)
+if(WIN32)
+    target_link_libraries(afar_vna PUBLIC ws2_32)
+endif()
 
 add_library(afar_data STATIC
     data/RunConfig.cpp
@@ -84,7 +92,7 @@ target_include_directories(afar_qc PUBLIC
 )
 afar_enable_warnings(afar_qc)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets)
 
 # RPT-001…003: Parquet(AFARPQ)/манифест/PDF без Apache Arrow и OpenSSL.
 # До afar_measure: оркестратор линкует report для Finalizing (LUT/PDF/manifest).
@@ -162,6 +170,43 @@ target_include_directories(afar_sim PUBLIC
 target_link_libraries(afar_sim PUBLIC afar_interfaces)
 afar_enable_warnings(afar_sim)
 
+# Обмен с PS изделия (docs/contracts/ps-json-protocol.md): кодек без Qt и
+# асинхронная связь TCP + UDP на Qt Network.
+add_library(afar_ps_protocol STATIC
+    ps/PsProtocol.cpp
+    ps/PsProtocol.h
+    ps/PsServiceCheck.cpp
+    ps/PsServiceCheck.h
+)
+target_include_directories(afar_ps_protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ps)
+target_link_libraries(afar_ps_protocol PUBLIC nlohmann_json::nlohmann_json)
+afar_enable_warnings(afar_ps_protocol)
+
+find_package(Qt6 REQUIRED COMPONENTS Network)
+
+add_library(afar_ps STATIC
+    ps/PsLink.cpp
+    ps/PsLink.h
+    ps/PsServiceCheckRunner.cpp
+    ps/PsServiceCheckRunner.h
+)
+set_target_properties(afar_ps PROPERTIES AUTOMOC ON)
+target_include_directories(afar_ps PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ps)
+target_link_libraries(afar_ps PUBLIC afar_ps_protocol Qt6::Network)
+afar_enable_warnings(afar_ps)
+
+# IDutController через PS изделия: блокирующий драйвер для рабочего потока.
+add_library(afar_dut_ps STATIC
+    dut/PsDutController.cpp
+    dut/PsDutController.h
+)
+target_include_directories(afar_dut_ps PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/dut
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(afar_dut_ps PUBLIC afar_interfaces afar_ps_protocol Qt6::Network)
+afar_enable_warnings(afar_dut_ps)
+
 add_library(afar_dut STATIC
     dut/StubDutController.cpp
 )
@@ -183,7 +228,7 @@ configure_file(
 )
 target_include_directories(afar_report PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/report)
 
-add_executable(AfarRxCalibrationStudio WIN32
+add_executable(AfarRxCalibrationStudio WIN32 MACOSX_BUNDLE
     app/main.cpp
     ui/Theme.cpp
     ui/Theme.h
@@ -205,6 +250,14 @@ add_executable(AfarRxCalibrationStudio WIN32
     ui/StartWizard.h
     ui/MeasureWorker.cpp
     ui/MeasureWorker.h
+    ui/PsTab.cpp
+    ui/PsTab.h
+    ui/PsModulesPage.cpp
+    ui/PsModulesPage.h
+    ui/PsPacketPage.cpp
+    ui/PsPacketPage.h
+    ui/PsServiceCheckPage.cpp
+    ui/PsServiceCheckPage.h
 )
 target_include_directories(AfarRxCalibrationStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -219,6 +272,10 @@ unset(_afar_examples_dir)
 set_target_properties(AfarRxCalibrationStudio PROPERTIES AUTOMOC_COMPILER_PREDEFINES OFF)
 target_link_libraries(AfarRxCalibrationStudio PRIVATE
     Qt6::Widgets
+    Qt6::OpenGLWidgets
+    OpenGL::GL
+    spectrum_core
+    spectrum_qt
     afar_measure
     afar_vna
     afar_sim
@@ -227,8 +284,66 @@ target_link_libraries(AfarRxCalibrationStudio PRIVATE
     afar_data
     afar_cal
     afar_qc
+    afar_ps
+    afar_dut_ps
 )
+foreach(_spectrum_table IN LISTS SPECTRUM_CALIBRATION_TABLES)
+    get_filename_component(_spectrum_table_name "${_spectrum_table}" NAME)
+    add_custom_command(TARGET AfarRxCalibrationStudio POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                $<TARGET_FILE_DIR:AfarRxCalibrationStudio>/data/spectrum
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_spectrum_table}"
+                $<TARGET_FILE_DIR:AfarRxCalibrationStudio>/data/spectrum/${_spectrum_table_name}
+    )
+endforeach()
+unset(_spectrum_table)
+unset(_spectrum_table_name)
 if(WIN32)
     target_link_libraries(AfarRxCalibrationStudio PRIVATE Psapi)
 endif()
 afar_enable_warnings(AfarRxCalibrationStudio)
+
+# macOS: .app с понятным именем; примеры кладутся в Contents/Resources.
+if(APPLE)
+    set_target_properties(AfarRxCalibrationStudio PROPERTIES
+        MACOSX_BUNDLE_BUNDLE_NAME "AFAR RX Calibration Studio"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "ru.afar.rxcalibrationstudio"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    )
+endif()
+
+# Установка: cmake --install build --prefix <каталог>. Qt-библиотеки рядом с
+# программой разворачивает скрипт Qt (Windows/macOS с Qt 6.3, Linux с Qt 6.5);
+# на более старом Qt для Linux берутся системные пакеты Qt 6.
+include(GNUInstallDirs)
+install(TARGETS AfarRxCalibrationStudio
+    BUNDLE DESTINATION .
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+if(APPLE)
+    install(DIRECTORY ${PROJECT_SOURCE_DIR}/examples/
+        DESTINATION AfarRxCalibrationStudio.app/Contents/Resources/examples)
+elseif(WIN32)
+    install(DIRECTORY ${PROJECT_SOURCE_DIR}/examples/
+        DESTINATION ${CMAKE_INSTALL_BINDIR}/examples)
+else()
+    install(DIRECTORY ${PROJECT_SOURCE_DIR}/examples/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/AfarRxCalibrationStudio/examples)
+endif()
+if(Qt6_VERSION VERSION_GREATER_EQUAL 6.5)
+    qt_generate_deploy_app_script(
+        TARGET AfarRxCalibrationStudio
+        OUTPUT_SCRIPT _afar_deploy_script
+        NO_UNSUPPORTED_PLATFORM_ERROR
+    )
+    install(SCRIPT ${_afar_deploy_script})
+elseif(Qt6_VERSION VERSION_GREATER_EQUAL 6.3 AND (WIN32 OR APPLE))
+    qt_generate_deploy_app_script(
+        TARGET AfarRxCalibrationStudio
+        FILENAME_VARIABLE _afar_deploy_script
+        NO_UNSUPPORTED_PLATFORM_ERROR
+    )
+    install(SCRIPT ${_afar_deploy_script})
+endif()

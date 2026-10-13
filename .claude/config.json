@@ -1,0 +1,67 @@
+{
+  "$comment": "Собственный файл конвенций этой сборки агентов, а не настройка Claude Code. Его читают скиллы .claude/skills/* и субагенты .claude/agents/*. Перенесено из V1DeeK/RMO и адаптировано под AFAR RX Calibration Studio.",
+  "project": {
+    "name": "AfarRxCalibrationStudio",
+    "language": "cpp20",
+    "framework": "Qt6",
+    "docsLanguage": "ru"
+  },
+  "build": {
+    "configure": "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/msys64/ucrt64",
+    "build": "cmake --build build --parallel",
+    "test": "ctest --test-dir build --output-on-failure",
+    "testOne": "ctest --test-dir build -R {name} --output-on-failure",
+    "tests": [
+      "smoke",
+      "run_config",
+      "lut_math",
+      "quality_gates",
+      "simulators",
+      "hdf5_store",
+      "probe_run",
+      "pause_resume",
+      "crash_recovery",
+      "faults",
+      "export_manifest",
+      "two_port_export",
+      "c2220_driver",
+      "full_sim_run",
+      "lut_perf",
+      "at12_soak",
+      "verify_series_tool",
+      "ui_interactions"
+    ]
+  },
+  "documentation": {
+    "paths": {
+      "root": "docs",
+      "plans": "docs/plans",
+      "reports": "docs/reports",
+      "scpiContract": "docs/contracts/vna-c2220-scpi.md",
+      "interfacesContract": "docs/contracts/cpp-interfaces.md",
+      "dataFormatsContract": "docs/contracts/data-formats.md",
+      "attenuatorCodesContract": "docs/contracts/attenuator-codes.md",
+      "tz": "afar_stage1_software_tz.pdf"
+    },
+    "enabled": {
+      "plans": true,
+      "reports": true
+    }
+  },
+  "workspace": {
+    "path": ".claude/workspace",
+    "committed": false
+  },
+  "orchestration": {
+    "maxFixAttempts": 2,
+    "stopOnContractChange": true,
+    "requireTestsBeforeRefactor": true,
+    "securitySensitivePaths": [
+      "src/vna/",
+      "src/dut/",
+      "src/data/",
+      "src/report/",
+      "include/afar/"
+    ]
+  }
+}

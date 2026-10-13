@@ -10,16 +10,19 @@ class ConnectionBar;
 class DataFormatsTab;
 class MeasureTab;
 class MeasureWorker;
+class PsTab;
 class QLabel;
 class QProgressBar;
 class QPushButton;
+class QStackedWidget;
 class QThread;
+class SpectrumEngine;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent = nullptr);
     ~MainWindow() override;
 
 private slots:
@@ -117,24 +120,33 @@ private:
     void scanUnfinishedSeries();
     void beginVnaProbe(bool measureAfterSuccess);
     void setOperationProgress(const QString& text, qint64 completed, qint64 total);
+    void updateModuleStatus();
     [[nodiscard]] QString defaultDataRoot() const;
 
     QString m_unfinishedSeries;
+    SpectrumEngine* m_spectrumEngine = nullptr;
 
     ConnectionBar* m_connections = nullptr;
     MeasureTab* m_measure = nullptr;
     CodeMatrixTab* m_matrix = nullptr;
     DataFormatsTab* m_formats = nullptr;
     AcceptanceAtTab* m_acceptance = nullptr;
+    PsTab* m_ps = nullptr;
     QPushButton* m_wizardBtn = nullptr;
     QPushButton* m_start = nullptr;
     QPushButton* m_pause = nullptr;
     QPushButton* m_stop = nullptr;
     QLabel* m_operationText = nullptr;
     QProgressBar* m_operationProgress = nullptr;
+    QLabel* m_moduleStatus = nullptr;
+    QStackedWidget* m_workspaces = nullptr;
+    QPushButton* m_parametersWorkspaceButton = nullptr;
+    QPushButton* m_afarWorkspaceButton = nullptr;
+    QPushButton* m_spectrumWorkspaceButton = nullptr;
 
     QThread* m_thread = nullptr;
     MeasureWorker* m_worker = nullptr;
     int m_state = 0;
+    bool m_vnaConnected = false;
     bool m_measureAfterProbe = false;
 };
