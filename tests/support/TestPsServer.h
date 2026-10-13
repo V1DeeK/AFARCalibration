@@ -15,7 +15,7 @@ class QTcpSocket;
 /// Тестовый сервер на localhost для автотестов TCP и UDP. Только в tests/:
 /// в программу не входит, PS изделия делает разработчик PS. Отвечает по
 /// контракту docs/contracts/ps-json-protocol.md: hello, keep_alive,
-/// set_mode/get_state, сервисные команды v3 (с модулями §4.5), UDP-телеметрия.
+/// set_mode/get_state, полное сканирование (§4.6), сервисные команды v3 (с модулями §4.5), UDP-телеметрия.
 /// Одно соединение; новое закрывает старое.
 class TestPsServer final : public QObject {
     Q_OBJECT
@@ -45,6 +45,7 @@ public:
     /// Состояние модулей: addr 1, 2 — гетеродины, 4 — видеоприёмник.
     [[nodiscard]] const nlohmann::json& moduleState(int addr) const;
     [[nodiscard]] const nlohmann::json& mixerState() const { return m_mixer; }
+    [[nodiscard]] const afar::ps::SffParams& sffParams() const { return m_sff; }
     /// Модуль не отвечает по RS-485 — HW_NOT_READY на команды §4.5.
     void setModulesSilent(bool silent) { m_modulesSilent = silent; }
 
@@ -53,6 +54,7 @@ private:
     void onReadyRead();
     void handle(const afar::ps::Envelope& cmd);
     void handleModule(const afar::ps::Envelope& cmd);
+    void handleSff(const afar::ps::Envelope& cmd);
     void reply(const afar::ps::Envelope& cmd, afar::ps::Status status,
                nlohmann::json payload = nlohmann::json::object());
     void sendTelemetry();
@@ -85,4 +87,6 @@ private:
     nlohmann::json m_video;
     nlohmann::json m_mixer;  ///< {"ch":[4 канала], "temp"}
     bool m_modulesSilent = false;
+    afar::ps::SffParams m_sff;
+    quint8 m_eventCount = 0;
 };

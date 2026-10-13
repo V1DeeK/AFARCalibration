@@ -790,4 +790,96 @@ std::string selfTestRu(std::string_view id)
     return it == names.end() ? std::string(id) : std::string(it->second);
 }
 
+// ---------------------------------------------------- полное сканирование
+
+bool SffParams::validate(std::string* error) const
+{
+    if (freq_min <= 0 || freq_max > kFrequencyLimitHz || freq_min >= freq_max) {
+        setError(error, "частоты обзора: нужно 0 < от < до ≤ 100 ГГц");
+        return false;
+    }
+    if (az_min < -kAzimuthLimitDeg || az_max > kAzimuthLimitDeg || az_min >= az_max) {
+        setError(error, "сектор обзора: нужно −30° ≤ от < до ≤ +30°");
+        return false;
+    }
+    if (period < 0 || period > kSffPeriodMaxSec) {
+        setError(error, "период обзора: 0…3600 с");
+        return false;
+    }
+    return true;
+}
+
+nlohmann::json SffParams::toJson() const
+{
+    return json{{"freq_min", freq_min}, {"freq_max", freq_max}, {"az_min", az_min},
+                {"az_max", az_max},     {"period", period}};
+}
+
+bool SffParams::fromJson(const nlohmann::json& o, SffParams& out, std::string* error)
+{
+    SffParams p;
+    std::int64_t period = 0;
+    if (!readInt(o, "freq_min", p.freq_min) || !readInt(o, "freq_max", p.freq_max) ||
+        !readNumber(o, "az_min", p.az_min) || !readNumber(o, "az_max", p.az_max) ||
+        !readInt(o, "period", period)) {
+        setError(error, "нет параметров обзора freq_min, freq_max, az_min, az_max, period");
+        return false;
+    }
+    p.period = static_cast<int>(std::clamp<std::int64_t>(period, -1, kSffPeriodMaxSec + 1));
+    if (!p.validate(error)) {
+        return false;
+    }
+    out = p;
+    return true;
+}
+
+bool SffResult::peak(double& power, double& azimuth) const
+{
+    bool any = false;
+    for (const auto& point : fft) {
+        for (double v : point.pwr) {
+            if (!any || v > power) {
+                power = v;
+                azimuth = point.az;
+                any = true;
+            }
+        }
+    }
+    return any;
+}
+
+bool SffResult::fromJson(const nlohmann::json& o, SffResult& out, std::string* error)
+{
+    SffResult r;
+    std::string cal;
+    if (!readInt(o, "freq", r.freq) || r.freq <= 0 || !readString(o, "cal", cal) ||
+        (cal != "OK" && cal != "NO")) {
+        setError(error, "send_sff_result: нужны freq > 0 и cal \"OK\"/\"NO\"");
+        return false;
+    }
+    r.cal = cal == "OK";
+    const auto it = o.find("fft");
+    if (it == o.end() || !it->is_array()) {
+        setError(error, "send_sff_result: нет массива fft");
+        return false;
+    }
+    for (const auto& item : *it) {
+        SffPoint point;
+        if (!item.is_object() || !readNumber(item, "az", point.az)) {
+            setError(error, "send_sff_result: элемент fft без az");
+            return false;
+        }
+        if (const auto pw = item.find("pwr"); pw != item.end() && pw->is_array()) {
+            for (const auto& v : *pw) {
+                if (v.is_number()) {
+                    point.pwr.push_back(v.get<double>());
+                }
+            }
+        }
+        r.fft.push_back(std::move(point));
+    }
+    out = std::move(r);
+    return true;
+}
+
 }  // namespace afar::ps

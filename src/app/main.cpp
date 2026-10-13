@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QPushButton>
 #include <QSettings>
+#include <QTabWidget>
 #include <QTimer>
 #ifndef _WIN32
 #include <QDir>
@@ -70,40 +71,44 @@ int main(int argc, char* argv[])
         const int switchCount = qEnvironmentVariableIntValue(
             "AFAR_TEST_SWITCH_COUNT", &switchCountValid);
         if (switchCountValid && switchCount > 0) {
-            auto* parametersButton = window.findChild<QPushButton*>(
-                QStringLiteral("btnParametersWorkspace"));
-            auto* afarButton = window.findChild<QPushButton*>(QStringLiteral("btnAfarWorkspace"));
-            auto* spectrumButton = window.findChild<QPushButton*>(
-                QStringLiteral("btnSpectrumWorkspace"));
-            if (!parametersButton || !afarButton || !spectrumButton) {
+            auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("mainTabs"));
+            if (!tabs || tabs->count() != 6) {
                 QTimer::singleShot(0, &app, [&app] { app.exit(3); });
             } else {
-                QSettings settings;
-                const QString workspaceKey = QStringLiteral("ui/active_workspace_v2");
-                const int originalWorkspace = settings.contains(workspaceKey)
-                    ? qBound(0, settings.value(workspaceKey, 1).toInt(), 2)
-                    : qBound(0, settings.value(QStringLiteral("ui/active_workspace"), 0).toInt(), 1) + 1;
-                const QVector<QPushButton*> workspaceButtons{
-                    parametersButton, afarButton, spectrumButton};
+                const int originalTab = tabs->currentIndex();
                 auto* switchTimer = new QTimer(&window);
                 switchTimer->setInterval(1);
                 QObject::connect(switchTimer, &QTimer::timeout, &window,
-                        [&, switchTimer, workspaceButtons, originalWorkspace,
+                        [&, switchTimer, tabs, originalTab,
                          completed = 0, maxSwitchNs = qint64{0}]() mutable {
                     QElapsedTimer elapsed;
                     elapsed.start();
-                    workspaceButtons.at(completed % workspaceButtons.size())->click();
+                    tabs->setCurrentIndex(completed % tabs->count());
                     maxSwitchNs = qMax(maxSwitchNs, elapsed.nsecsElapsed());
                     ++completed;
                     if (completed < switchCount)
                         return;
 
                     switchTimer->stop();
-                    workspaceButtons.at(originalWorkspace)->click();
+                    tabs->setCurrentIndex(originalTab);
                     app.exit(maxSwitchNs <= 200'000'000 ? 0 : 4);
                 });
                 switchTimer->start();
             }
+        }
+        // Снимки всех вкладок для документации: AFAR_TEST_SCREENSHOTS=<каталог>.
+        const QString shotsDir = qEnvironmentVariable("AFAR_TEST_SCREENSHOTS");
+        if (!shotsDir.isEmpty()) {
+            QTimer::singleShot(1500, &window, [&app, &window, shotsDir] {
+                auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("mainTabs"));
+                QDir().mkpath(shotsDir);
+                for (int i = 0; tabs && i < tabs->count(); ++i) {
+                    tabs->setCurrentIndex(i);
+                    QCoreApplication::processEvents();
+                    window.grab().save(QDir(shotsDir).filePath(QStringLiteral("tab-%1.png").arg(i + 1)));
+                }
+                app.exit(tabs ? 0 : 3);
+            });
         }
         result = app.exec();
         spectrumEngine.stopAndJoin();

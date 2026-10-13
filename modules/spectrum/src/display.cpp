@@ -83,8 +83,11 @@ bool SpectrumRenderer::initialize() {
 
     ImGuiIO& io = ImGui::GetIO();
     io.BackendPlatformName = "spectrum_qt";
+    // Шрифт с кириллицей: Windows, Linux, macOS (у ImGui по умолчанию её нет).
     for (const char* font : { "C:/Windows/Fonts/segoeui.ttf",
-                              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" }) {
+                              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                              "/System/Library/Fonts/Supplemental/Arial.ttf",
+                              "/Library/Fonts/Arial Unicode.ttf" }) {
         if (std::filesystem::exists(font)) {
             io.Fonts->AddFontFromFileTTF(font, 16.0f, nullptr, io.Fonts->GetGlyphRangesCyrillic());
             break;
@@ -126,6 +129,19 @@ void SpectrumRenderer::renderFrame(float width, float height, float devicePixelR
 
     ImGui::SetCurrentContext(main_imgui_ctx_);
     ImPlot::SetCurrentContext(main_implot_ctx_);
+    if (theme_dirty_) {
+        // Тема вкладки «Спектр» следует теме программы; ImPlot берёт цвета из ImGui.
+        theme_dirty_ = false;
+        if (light_theme_) {
+            ImGui::StyleColorsLight();
+            ImPlot::StyleColorsLight();
+        } else {
+            ImGui::StyleColorsDark();
+            ImPlot::StyleColorsDark();
+        }
+        ImGui::GetStyle().WindowRounding = 0.0f;
+        ImGui::GetStyle().FrameRounding  = 3.0f;
+    }
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(width, height);
     io.DisplayFramebufferScale = ImVec2(devicePixelRatio, devicePixelRatio);
@@ -165,7 +181,10 @@ void SpectrumRenderer::renderFrame(float width, float height, float devicePixelR
     const int framebufferWidth = static_cast<int>(width * devicePixelRatio);
     const int framebufferHeight = static_cast<int>(height * devicePixelRatio);
     glViewport(0, 0, framebufferWidth, framebufferHeight);
-    glClearColor(0.08f, 0.08f, 0.08f, 1.0f);
+    if (light_theme_)
+        glClearColor(0.94f, 0.94f, 0.94f, 1.0f);
+    else
+        glClearColor(0.08f, 0.08f, 0.08f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }

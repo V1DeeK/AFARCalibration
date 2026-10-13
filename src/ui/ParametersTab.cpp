@@ -1,8 +1,9 @@
-#include "PsTab.h"
+#include "ParametersTab.h"
+
+#include "PsExchangeView.h"
+#include "PsSession.h"
 
 #include "PsModulesPage.h"
-#include "PsPacketPage.h"
-#include "PsServiceCheckPage.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -32,8 +33,6 @@ using nlohmann::json;
 namespace {
 
 constexpr int kLogLines = 500;
-constexpr int kExchangeRows = 2000;
-enum ExCol { ExColTime, ExColChannel, ExColDir, ExColType, ExColMsgCount, ExColStatus, ExColJson, ExColCount };
 
 QString qs(std::string_view s)
 {
@@ -47,122 +46,78 @@ QString hzText(double hz)
 
 }  // namespace
 
-PsTab::PsTab(QWidget* parent)
+ParametersTab::ParametersTab(PsSession* session, QWidget* parent)
     : QWidget(parent)
-    , m_link(new PsLink(this))
+    , m_session(session)
 {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(6, 6, 6, 6);
 
     auto* top = new QHBoxLayout;
-    top->addWidget(buildConnectionBox(), 3);
-    top->addWidget(buildModeBox(), 2);
+    top->addWidget(buildModeBox(), 1);
+    top->addWidget(buildAdcBox(), 1);
+    top->addWidget(buildBeamBox(), 1);
     root->addLayout(top);
 
-    auto* middle = new QHBoxLayout;
-    m_pages = new QTabWidget(this);
-    m_pages->addTab(buildCodesPage(), QStringLiteral("Коды решётки"));
-    m_pages->addTab(buildAdcPage(), QStringLiteral("АЦП"));
-    m_pages->addTab(buildBeamPage(), QStringLiteral("Луч"));
-    m_pages->addTab(buildRawPage(), QStringLiteral("RS-485 HEX"));
-    m_modulesPage = new PsModulesPage(m_link, this);
-    m_pages->addTab(m_modulesPage, QStringLiteral("Модули"));
-    m_packetPage = new PsPacketPage(m_link, this);
-    m_pages->addTab(m_packetPage, QStringLiteral("Пакет"));
-    m_checkPage = new PsServiceCheckPage(m_link, this);
-    m_pages->addTab(m_checkPage, QStringLiteral("Приёмка"));
-    middle->addWidget(m_pages, 3);
-    middle->addWidget(buildTelemetryBox(), 2);
-    root->addLayout(middle, 1);
+    auto* modulesBox = new QGroupBox(QStringLiteral("Модули"), this);
+    auto* modulesLayout = new QVBoxLayout(modulesBox);
+    m_modulesPage = new PsModulesPage(m_session->link(), modulesBox);
+    m_modulesPage->tabs()->addTab(buildCodesPage(), QStringLiteral("Коды решётки"));
+    modulesLayout->addWidget(m_modulesPage);
+    root->addWidget(modulesBox, 3);
+    root->addWidget(buildBottomTabs(), 2);
 
-    auto* logBox = new QGroupBox(QStringLiteral("Обмен с PS: что ушло и что пришло"), this);
-    auto* logLayout = new QVBoxLayout(logBox);
-    m_exchange = new QTableWidget(0, ExColCount, logBox);
-    m_exchange->setObjectName(QStringLiteral("psExchange"));
-    m_exchange->setHorizontalHeaderLabels({QStringLiteral("Время"), QStringLiteral("Канал"),
-                                           QStringLiteral("Направление"), QStringLiteral("msg_type"),
-                                           QStringLiteral("msg_count"), QStringLiteral("status"),
-                                           QStringLiteral("JSON")});
-    m_exchange->verticalHeader()->setVisible(false);
-    m_exchange->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_exchange->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_exchange->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-    m_exchange->horizontalHeader()->setSectionResizeMode(ExColJson, QHeaderView::Stretch);
-    m_exchange->setMinimumHeight(140);
-    m_log = new QPlainTextEdit(logBox);
+    connect(m_session->link(), &PsLink::responseReceived, this, &ParametersTab::onResponse);
+    connect(m_session, &PsSession::telemetryChanged, this, &ParametersTab::onTelemetry);
+    connect(m_session, &PsSession::modeChanged, this, &ParametersTab::refreshMode);
+    connect(m_session, &PsSession::controlsChanged, this, &ParametersTab::refreshEnabled);
+    connect(m_session, &PsSession::message, this, &ParametersTab::log);
+    refreshMode();
+}
+
+ParametersTab::~ParametersTab() = default;
+
+QWidget* ParametersTab::buildBottomTabs()
+{
+    auto* tabs = new QTabWidget(this);
+    tabs->setObjectName(QStringLiteral("parametersBottomTabs"));
+    auto* exchangePage = new QWidget(tabs);
+    auto* exchangeLayout = new QVBoxLayout(exchangePage);
+    m_exchange = new PsExchangeView(m_session, exchangePage);
+    m_exchange->table()->setObjectName(QStringLiteral("psExchange"));
+    m_log = new QPlainTextEdit(exchangePage);
     m_log->setObjectName(QStringLiteral("psLog"));
     m_log->setReadOnly(true);
     m_log->setMaximumBlockCount(kLogLines);
-    m_log->setMaximumHeight(70);
-    m_log->setPlaceholderText(QStringLiteral("ошибки связи и сообщения программы"));
-    auto* logRow = new QHBoxLayout;
-    m_logTelemetry = new QCheckBox(QStringLiteral("Показывать датаграммы телеметрии (UDP)"), logBox);
-    m_logTelemetry->setChecked(true);
-    auto* clear = new QPushButton(QStringLiteral("Очистить"), logBox);
-    logRow->addWidget(m_logTelemetry);
-    logRow->addStretch(1);
-    logRow->addWidget(clear);
-    logLayout->addWidget(m_exchange, 1);
-    logLayout->addWidget(m_log);
-    logLayout->addLayout(logRow);
-    root->addWidget(logBox, 1);
-    connect(clear, &QPushButton::clicked, this, [this] {
-        m_exchange->setRowCount(0);
-        m_log->clear();
-    });
+    m_log->setMaximumHeight(60);
+    m_log->setPlaceholderText(QStringLiteral("ошибки связи, отказы PS и сообщения программы"));
+    exchangeLayout->addWidget(m_exchange, 1);
+    exchangeLayout->addWidget(m_log);
+    tabs->addTab(exchangePage, QStringLiteral("Обмен с PS"));
 
-    connect(m_link, &PsLink::stateChanged, this, &PsTab::onLinkStateChanged);
-    connect(m_link, &PsLink::responseReceived, this, &PsTab::onResponse);
-    connect(m_link, &PsLink::telemetryReceived, this, &PsTab::onTelemetry);
-    connect(m_link, &PsLink::frameLogged, this, &PsTab::onFrame);
-    connect(m_link, &PsLink::errorOccurred, this,
-            [this](const QString& message) { log(QStringLiteral("Ошибка: %1").arg(message)); });
-    connect(m_link, &PsLink::commandTimedOut, this, [this](const QString& type, int count) {
-        log(QStringLiteral("Нет ответа на %1 #%2").arg(type).arg(count));
-    });
-
-    connect(m_checkPage, &PsServiceCheckPage::runningChanged, this, [this](bool) { refreshEnabled(); });
-
-    onLinkStateChanged(PsLink::State::Disconnected);
+    auto* tlmPage = new QWidget(tabs);
+    auto* tlmLayout = new QVBoxLayout(tlmPage);
+    m_tlmCounters = new QLabel(QStringLiteral("датаграмм нет"), tlmPage);
+    m_tlmCounters->setObjectName(QStringLiteral("psTlmCounters"));
+    m_tlmTable = new QTableWidget(0, 2, tlmPage);
+    m_tlmTable->setObjectName(QStringLiteral("psTlmTable"));
+    m_tlmTable->setHorizontalHeaderLabels({QStringLiteral("Параметр"), QStringLiteral("Значение")});
+    m_tlmTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_tlmTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    m_tlmTable->verticalHeader()->setVisible(false);
+    m_tlmTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    tlmLayout->addWidget(m_tlmCounters);
+    tlmLayout->addWidget(m_tlmTable, 1);
+    tabs->addTab(tlmPage, QStringLiteral("Телеметрия"));
+    return tabs;
 }
 
-PsTab::~PsTab() = default;
-
-QWidget* PsTab::buildConnectionBox()
+QTableWidget* ParametersTab::exchangeTable() const
 {
-    auto* box = new QGroupBox(QStringLiteral("Связь с PS"), this);
-    auto* grid = new QGridLayout(box);
-    m_host = new QLineEdit(box);
-    m_host->setObjectName(QStringLiteral("psHost"));
-    m_host->setPlaceholderText(QStringLiteral("адрес PS из профиля стенда"));
-    m_port = new QSpinBox(box);
-    m_port->setObjectName(QStringLiteral("psPort"));
-    m_port->setRange(1, 65535);
-    m_port->setValue(ps::kDefaultControlPort);
-    m_tlmPort = new QSpinBox(box);
-    m_tlmPort->setObjectName(QStringLiteral("psTlmPort"));
-    m_tlmPort->setRange(1, 65535);
-    m_tlmPort->setValue(ps::kDefaultTelemetryPort);
-    m_connect = new QPushButton(QStringLiteral("Подключить"), box);
-    m_connect->setObjectName(QStringLiteral("psConnect"));
-    m_linkState = new QLabel(box);
-    m_linkState->setObjectName(QStringLiteral("psLinkState"));
-    m_linkState->setWordWrap(true);
-
-    grid->addWidget(new QLabel(QStringLiteral("Адрес"), box), 0, 0);
-    grid->addWidget(m_host, 0, 1, 1, 3);
-    grid->addWidget(new QLabel(QStringLiteral("TCP"), box), 1, 0);
-    grid->addWidget(m_port, 1, 1);
-    grid->addWidget(new QLabel(QStringLiteral("UDP телеметрии"), box), 1, 2);
-    grid->addWidget(m_tlmPort, 1, 3);
-    grid->addWidget(m_connect, 2, 3);
-    grid->addWidget(m_linkState, 3, 0, 1, 4);
-
-    connect(m_connect, &QPushButton::clicked, this, &PsTab::onConnectClicked);
-    return box;
+    return m_exchange->table();
 }
 
-QWidget* PsTab::buildModeBox()
+QWidget* ParametersTab::buildModeBox()
 {
     auto* box = new QGroupBox(QStringLiteral("Режим изделия"), this);
     auto* layout = new QVBoxLayout(box);
@@ -193,25 +148,7 @@ QWidget* PsTab::buildModeBox()
     return box;
 }
 
-QWidget* PsTab::buildTelemetryBox()
-{
-    auto* box = new QGroupBox(QStringLiteral("Телеметрия"), this);
-    auto* layout = new QVBoxLayout(box);
-    m_tlmCounters = new QLabel(QStringLiteral("датаграмм нет"), box);
-    m_tlmCounters->setObjectName(QStringLiteral("psTlmCounters"));
-    m_tlmTable = new QTableWidget(0, 2, box);
-    m_tlmTable->setObjectName(QStringLiteral("psTlmTable"));
-    m_tlmTable->setHorizontalHeaderLabels({QStringLiteral("Параметр"), QStringLiteral("Значение")});
-    m_tlmTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    m_tlmTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_tlmTable->verticalHeader()->setVisible(false);
-    m_tlmTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    layout->addWidget(m_tlmCounters);
-    layout->addWidget(m_tlmTable, 1);
-    return box;
-}
-
-QWidget* PsTab::buildCodesPage()
+QWidget* ParametersTab::buildCodesPage()
 {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
@@ -289,15 +226,15 @@ QWidget* PsTab::buildCodesPage()
             static_cast<QSpinBox*>(m_codes->cellWidget(row, 2))->setValue(m_fillAtt->value());
         }
     });
-    connect(m_writeCodes, &QPushButton::clicked, this, &PsTab::writeCodes);
+    connect(m_writeCodes, &QPushButton::clicked, this, &ParametersTab::writeCodes);
     connect(m_readCodes, &QPushButton::clicked, this, [this] { send(ps::msg::GetPhaseAtten); });
     m_serviceControls.insert(m_serviceControls.end(), {m_writeCodes, m_readCodes});
     return page;
 }
 
-QWidget* PsTab::buildAdcPage()
+QWidget* ParametersTab::buildAdcBox()
 {
-    auto* page = new QWidget(this);
+    auto* page = new QGroupBox(QStringLiteral("АЦП"), this);
     auto* form = new QFormLayout(page);
     const auto mhz = [page](double value, double max) {
         auto* s = new QDoubleSpinBox(page);
@@ -336,15 +273,15 @@ QWidget* PsTab::buildAdcPage()
                                            "диапазона отклоняет PS."),
                             page));
 
-    connect(apply, &QPushButton::clicked, this, &PsTab::applyAdc);
+    connect(apply, &QPushButton::clicked, this, &ParametersTab::applyAdc);
     connect(read, &QPushButton::clicked, this, [this] { send(ps::msg::GetAdc); });
     m_serviceControls.insert(m_serviceControls.end(), {apply, read});
     return page;
 }
 
-QWidget* PsTab::buildBeamPage()
+QWidget* ParametersTab::buildBeamBox()
 {
-    auto* page = new QWidget(this);
+    auto* page = new QGroupBox(QStringLiteral("Луч"), this);
     auto* form = new QFormLayout(page);
     m_beamAz = new QDoubleSpinBox(page);
     m_beamAz->setRange(-ps::kAzimuthLimitDeg, ps::kAzimuthLimitDeg);
@@ -377,102 +314,12 @@ QWidget* PsTab::buildBeamPage()
     return page;
 }
 
-QWidget* PsTab::buildRawPage()
+void ParametersTab::send(std::string_view msgType, const json& payload)
 {
-    auto* page = new QWidget(this);
-    auto* layout = new QVBoxLayout(page);
-    m_rawHex = new QLineEdit(page);
-    m_rawHex->setObjectName(QStringLiteral("psRawHex"));
-    m_rawHex->setPlaceholderText(QStringLiteral("например 0101020F1E…"));
-    auto* sendBtn = new QPushButton(QStringLiteral("Передать в линию"), page);
-    auto* note = new QLabel(QStringLiteral("Байты уходят в линию RS-485 без изменений, включая CRC16. "
-                                           "Ответ устройства PS пока не возвращает."),
-                            page);
-    note->setWordWrap(true);
-    auto* row = new QHBoxLayout;
-    row->addWidget(m_rawHex, 1);
-    row->addWidget(sendBtn);
-    layout->addLayout(row);
-    layout->addWidget(note);
-    layout->addStretch(1);
-
-    connect(sendBtn, &QPushButton::clicked, this, [this] {
-        const QString hex = m_rawHex->text().remove(QLatin1Char(' ')).toUpper();
-        if (!ps::hexBytesValid(hex.toStdString())) {
-            log(QStringLiteral("HEX-строка должна быть чётной длины и только из 0–9, A–F"));
-            return;
-        }
-        send(ps::msg::Rs485Send, json{{"data", hex.toStdString()}});
-    });
-    m_serviceControls.push_back(sendBtn);
-    return page;
+    m_session->send(msgType, payload);
 }
 
-void PsTab::onConnectClicked()
-{
-    if (m_link->state() != PsLink::State::Disconnected) {
-        m_link->disconnectFromPs();
-        return;
-    }
-    const QString host = m_host->text().trimmed();
-    const auto port = static_cast<quint16>(m_port->value());
-    if (host.isEmpty()) {
-        log(QStringLiteral("Укажите адрес PS"));
-        return;
-    }
-    m_link->connectToPs(host, port, static_cast<quint16>(m_tlmPort->value()));
-}
-
-void PsTab::onLinkStateChanged(PsLink::State state)
-{
-    QString text;
-    bool ok = false;
-    switch (state) {
-    case PsLink::State::Disconnected:
-        text = m_link->lastError().isEmpty()
-                   ? QStringLiteral("нет связи")
-                   : QStringLiteral("нет связи: %1").arg(m_link->lastError());
-        m_modeKnown = false;
-        m_modeLabel->setText(QStringLiteral("режим: —"));
-        break;
-    case PsLink::State::Connecting:
-        text = QStringLiteral("подключение к %1:%2…").arg(m_link->host()).arg(m_link->port());
-        break;
-    case PsLink::State::Handshaking:
-        text = QStringLiteral("рукопожатие hello…");
-        break;
-    case PsLink::State::Ready:
-        ok = true;
-        text = QStringLiteral("на связи %1:%2, протокол %3, телеметрия UDP %4")
-                   .arg(m_link->host())
-                   .arg(m_link->port())
-                   .arg(m_link->peerVersion())
-                   .arg(m_link->telemetryPort());
-        send(ps::msg::GetState);
-        break;
-    }
-    m_linkState->setText(text);
-    m_connect->setText(state == PsLink::State::Disconnected ? QStringLiteral("Подключить")
-                                                            : QStringLiteral("Отключить"));
-    m_host->setEnabled(state == PsLink::State::Disconnected);
-    m_port->setEnabled(state == PsLink::State::Disconnected);
-    m_tlmPort->setEnabled(state == PsLink::State::Disconnected);
-    emit summaryChanged(ok ? QStringLiteral("PS: OK") : QStringLiteral("PS: нет связи"), ok);
-    refreshEnabled();
-}
-
-void PsTab::send(std::string_view msgType, const json& payload)
-{
-    if (m_seriesActive) {
-        log(QStringLiteral("Идёт серия: ручные команды PS заблокированы"));
-        return;
-    }
-    if (m_link->sendCommand(msgType, payload) < 0) {
-        log(QStringLiteral("Нет связи с PS: %1 не отправлена").arg(qs(msgType)));
-    }
-}
-
-void PsTab::writeCodes()
+void ParametersTab::writeCodes()
 {
     std::vector<ps::ChannelCodes> codes;
     for (int row = 0; row < ps::kChannels; ++row) {
@@ -488,7 +335,7 @@ void PsTab::writeCodes()
     send(ps::msg::SetPhaseAtten, payload);
 }
 
-bool PsTab::saveCodes(const QString& path, QString* error) const
+bool ParametersTab::saveCodes(const QString& path, QString* error) const
 {
     std::vector<ps::ChannelCodes> codes;
     for (int row = 0; row < ps::kChannels; ++row) {
@@ -514,7 +361,7 @@ bool PsTab::saveCodes(const QString& path, QString* error) const
     return true;
 }
 
-bool PsTab::loadCodes(const QString& path, QString* error)
+bool ParametersTab::loadCodes(const QString& path, QString* error)
 {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
@@ -542,7 +389,7 @@ bool PsTab::loadCodes(const QString& path, QString* error)
     return true;
 }
 
-void PsTab::applyAdc()
+void ParametersTab::applyAdc()
 {
     ps::AdcParams adc;
     adc.lo = std::llround(m_adcLoMhz->value() * 1e6);
@@ -557,7 +404,7 @@ void PsTab::applyAdc()
     send(ps::msg::SetAdc, adc.toJson());
 }
 
-void PsTab::showCodes(const std::vector<ps::ChannelCodes>& codes)
+void ParametersTab::showCodes(const std::vector<ps::ChannelCodes>& codes)
 {
     for (const auto& c : codes) {
         const int row = c.n - 1;
@@ -577,40 +424,14 @@ void PsTab::showCodes(const std::vector<ps::ChannelCodes>& codes)
     }
 }
 
-void PsTab::setMode(ps::Mode mode, const QString& state)
-{
-    m_mode = mode;
-    m_modeKnown = true;
-    QString text = QStringLiteral("режим: %1").arg(QString::fromStdString(ps::modeRu(mode)));
-    if (!state.isEmpty()) {
-        text += QStringLiteral(", состояние: %1").arg(QString::fromStdString(ps::stateRu(state.toStdString())));
-    }
-    m_modeLabel->setText(text);
-    refreshEnabled();
-}
-
-void PsTab::onResponse(const ps::Envelope& r, ps::Status status)
+void ParametersTab::onResponse(const ps::Envelope& r, ps::Status status)
 {
     const QString type = qs(r.msg_type);
     if (status != ps::Status::Ok) {
-        log(QStringLiteral("%1: %2 (%3)")
-                .arg(type, QString::fromStdString(ps::statusRu(status)), qs(ps::toString(status))));
-        return;
+        return;  // отказ PS уже в журнале сообщений сессии
     }
     std::string error;
-    if (r.msg_type == ps::msg::GetState) {
-        ps::StateInfo info;
-        if (ps::StateInfo::fromJson(r.payload, info, &error)) {
-            setMode(info.mode, QString::fromStdString(info.state));
-        }
-    } else if (r.msg_type == ps::msg::SetMode) {
-        ps::Mode mode{};
-        const auto it = r.payload.find("mode");
-        if (it != r.payload.end() && it->is_string() && ps::parseMode(it->get<std::string>(), mode)) {
-            setMode(mode, QString());
-        }
-        send(ps::msg::GetState);
-    } else if (r.msg_type == ps::msg::SetPhaseAtten || r.msg_type == ps::msg::GetPhaseAtten) {
+    if (r.msg_type == ps::msg::SetPhaseAtten || r.msg_type == ps::msg::GetPhaseAtten) {
         std::vector<ps::ChannelCodes> codes;
         if (ps::channelsFromJson(r.payload, codes, &error)) {
             showCodes(codes);
@@ -644,12 +465,18 @@ void PsTab::onResponse(const ps::Envelope& r, ps::Status status)
     }
 }
 
-void PsTab::onTelemetry(const ps::Telemetry& t)
+void ParametersTab::onTelemetry()
 {
+    const PsLink* link = m_session->link();
     m_tlmCounters->setText(QStringLiteral("принято %1, потеряно %2, отброшено %3")
-                               .arg(m_link->telemetryPackets())
-                               .arg(m_link->telemetryLost())
-                               .arg(m_link->telemetryRejected()));
+                               .arg(link->telemetryPackets())
+                               .arg(link->telemetryLost())
+                               .arg(link->telemetryRejected()));
+    const auto& tlm = m_session->telemetry();
+    if (!tlm) {
+        return;
+    }
+    const ps::Telemetry& t = *tlm;
     std::vector<std::pair<QString, QString>> rows;
     rows.emplace_back(QStringLiteral("Режим"), QString::fromStdString(ps::modeRu(t.mode)));
     if (!t.state.empty()) {
@@ -673,93 +500,38 @@ void PsTab::onTelemetry(const ps::Telemetry& t)
         m_tlmTable->setItem(i, 0, new QTableWidgetItem(rows[static_cast<std::size_t>(i)].first));
         m_tlmTable->setItem(i, 1, new QTableWidgetItem(rows[static_cast<std::size_t>(i)].second));
     }
-    if (!m_modeKnown || t.mode != m_mode) {
-        setMode(t.mode, QString::fromStdString(t.state));
-    }
 }
 
-void PsTab::onFrame(bool outgoing, const QString& channel, const QString& line)
+void ParametersTab::refreshMode()
 {
-    if (channel == QLatin1String("UDP") && !m_logTelemetry->isChecked()) {
-        return;
-    }
-    ps::Envelope env;
-    std::string error;
-    const bool parsed = ps::decodeLine(line.toStdString(), env, &error);
-    QString status;
-    if (parsed) {
-        const auto it = env.payload.find("status");
-        if (it != env.payload.end() && it->is_string()) {
-            status = QString::fromStdString(it->get<std::string>());
+    QString text = QStringLiteral("режим: —");
+    if (m_session->modeKnown()) {
+        text = QStringLiteral("режим: %1").arg(QString::fromStdString(ps::modeRu(m_session->mode())));
+        if (!m_session->state().isEmpty()) {
+            text += QStringLiteral(", состояние: %1")
+                        .arg(QString::fromStdString(ps::stateRu(m_session->state().toStdString())));
         }
     }
-    // Старые строки уходят, чтобы таблица не росла без предела.
-    while (m_exchange->rowCount() >= kExchangeRows) {
-        m_exchange->removeRow(0);
-    }
-    const int row = m_exchange->rowCount();
-    m_exchange->insertRow(row);
-    const QStringList cells{
-        QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz")),
-        channel,
-        outgoing ? QStringLiteral("→ ушло") : QStringLiteral("← пришло"),
-        parsed ? QString::fromStdString(env.msg_type) : QStringLiteral("не разобрано"),
-        parsed ? QString::number(env.msg_count) : QString(),
-        parsed ? status : QString::fromStdString(error),
-        line.trimmed(),
-    };
-    for (int col = 0; col < ExColCount; ++col) {
-        auto* item = new QTableWidgetItem(cells[col]);
-        if (col == ExColJson) {
-            item->setToolTip(line.trimmed());
-        }
-        m_exchange->setItem(row, col, item);
-    }
-    if (!parsed || (!status.isEmpty() && status != QLatin1String("OK"))) {
-        for (int col = 0; col < ExColCount; ++col) {
-            m_exchange->item(row, col)->setForeground(QBrush(Qt::red));
-        }
-    }
-    m_exchange->scrollToBottom();
-}
-
-void PsTab::setSeriesActive(bool active)
-{
-    if (active == m_seriesActive) {
-        return;
-    }
-    m_seriesActive = active;
-    if (active && m_link->state() != PsLink::State::Disconnected) {
-        // PS держит одно соединение: на время серии его занимает контроллер.
-        m_reconnectAfterSeries = true;
-        m_link->disconnectFromPs();
-        log(QStringLiteral("Серия: связь вкладки с PS закрыта, PS управляет оркестратор"));
-    } else if (!active && m_reconnectAfterSeries) {
-        m_reconnectAfterSeries = false;
-        onConnectClicked();
-    }
+    m_modeLabel->setText(text);
     refreshEnabled();
 }
 
-void PsTab::refreshEnabled()
+void ParametersTab::refreshEnabled()
 {
-    m_connect->setEnabled(!m_seriesActive);
-    // Во время приёмки команды шлёт только она: ручные мешали бы её шагам.
-    const bool checking = m_checkPage->isRunning();
-    const bool ready = m_link->isReady() && !m_seriesActive && !checking;
-    const bool service = ready && m_modeKnown && m_mode == ps::Mode::Service;
-    m_checkPage->setAllowed(m_link->isReady() && !m_seriesActive);
-    m_packetPage->setAllowed(ready);
+    const bool ready = m_session->manualAllowed();
+    const bool known = m_session->modeKnown();
+    const ps::Mode mode = m_session->mode();
+    const bool service = ready && known && mode == ps::Mode::Service;
     m_modulesPage->setAllowed(service);
-    m_toService->setEnabled(ready && (!m_modeKnown || m_mode == ps::Mode::Idle));
-    m_toIdle->setEnabled(ready && m_modeKnown && m_mode != ps::Mode::Idle);
+    m_toService->setEnabled(ready && (!known || mode == ps::Mode::Idle));
+    m_toIdle->setEnabled(ready && known && mode != ps::Mode::Idle);
     m_getState->setEnabled(ready);
     for (QWidget* w : m_serviceControls) {
         w->setEnabled(service);
     }
 }
 
-void PsTab::log(const QString& text)
+void ParametersTab::log(const QString& text)
 {
     m_log->appendPlainText(QStringLiteral("%1  %2").arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz")), text));
 }

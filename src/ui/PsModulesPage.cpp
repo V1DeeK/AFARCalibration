@@ -71,12 +71,19 @@ PsModulesPage::PsModulesPage(PsLink* link, QWidget* parent)
     , m_link(link)
 {
     auto* layout = new QVBoxLayout(this);
-    auto* tabs = new QTabWidget(this);
-    tabs->addTab(buildModule(Lo1, ps::loFields()), qs(ps::loNameRu(ps::kLoMixer)));
-    tabs->addTab(buildModule(Lo2, ps::loFields()), qs(ps::loNameRu(ps::kLoCalibration)));
-    tabs->addTab(buildMixer(), QStringLiteral("Смеситель"));
-    tabs->addTab(buildModule(Video, ps::videoFields()), QStringLiteral("Видеоприёмник"));
-    layout->addWidget(tabs, 1);
+    m_tabs = new QTabWidget(this);
+    m_tabs->setObjectName(QStringLiteral("psModulesTabs"));
+    m_tabs->addTab(buildModule(Lo1, ps::loFields()), qs(ps::loNameRu(ps::kLoMixer)));
+    m_tabs->addTab(buildModule(Lo2, ps::loFields()), qs(ps::loNameRu(ps::kLoCalibration)));
+    m_tabs->addTab(buildMixer(), QStringLiteral("Смеситель"));
+    m_tabs->addTab(buildModule(Video, ps::videoFields()), QStringLiteral("Видеоприёмник"));
+    // Два гетеродина — одинаковые по командам, но разные устройства на линии RS-485.
+    m_tabs->setTabToolTip(0, QStringLiteral("Адрес RS-485 0x01, set_lo/get_lo с addr = 1"));
+    m_tabs->setTabToolTip(1, QStringLiteral("Адрес RS-485 0x02, set_lo/get_lo с addr = 2; "
+                                            "команды те же, что у гетеродина смесителя"));
+    m_tabs->setTabToolTip(2, QStringLiteral("Адрес RS-485 0x03, set_mixer/get_mixer"));
+    m_tabs->setTabToolTip(3, QStringLiteral("Адрес RS-485 0x04, set_video/get_video"));
+    layout->addWidget(m_tabs, 1);
     m_result = new QLabel(QStringLiteral("В «Записать» уходят только поля с отметкой «Передать», "
                                          "остальные PS не меняет. Кадры RS-485 собирает PS."),
                           this);

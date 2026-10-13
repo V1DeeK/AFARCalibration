@@ -47,6 +47,11 @@ inline constexpr std::string_view SetMixer = "set_mixer";
 inline constexpr std::string_view GetMixer = "get_mixer";
 inline constexpr std::string_view SetVideo = "set_video";
 inline constexpr std::string_view GetVideo = "get_video";
+inline constexpr std::string_view SetSffParameters = "set_sff_parameters";
+inline constexpr std::string_view GetSffParameters = "get_sff_parameters";
+inline constexpr std::string_view SetSffStart = "set_sff_start";
+inline constexpr std::string_view SetSffStop = "set_sff_stop";
+inline constexpr std::string_view SendSffResult = "send_sff_result";
 inline constexpr std::string_view Telemetry = "telemetry";
 }  // namespace msg
 
@@ -249,6 +254,40 @@ struct Telemetry {
     std::vector<std::pair<std::string, double>> power;
 
     static bool fromJson(const nlohmann::json& o, Telemetry& out, std::string* error = nullptr);
+};
+
+// ------------------------------------------- полное сканирование (§4.6)
+
+inline constexpr int kSffPeriodMaxSec = 3600;
+
+/// set_sff_parameters / ответ get_sff_parameters.
+struct SffParams {
+    std::int64_t freq_min = 4'900'000'000LL;
+    std::int64_t freq_max = 6'000'000'000LL;
+    double az_min = -kAzimuthLimitDeg;
+    double az_max = kAzimuthLimitDeg;
+    int period = 0;  ///< с; 0 — однократный обзор
+
+    /// Частоты 0 < min < max ≤ 100 ГГц, сектор в ±30° и min < max, период 0…3600.
+    [[nodiscard]] bool validate(std::string* error = nullptr) const;
+    [[nodiscard]] nlohmann::json toJson() const;
+    static bool fromJson(const nlohmann::json& o, SffParams& out, std::string* error = nullptr);
+};
+
+struct SffPoint {
+    double az = 0.0;
+    std::vector<double> pwr;
+};
+
+/// Событие send_sff_result: одна частота, все азимуты цикла.
+struct SffResult {
+    std::int64_t freq = 0;
+    bool cal = false;  ///< "OK" — калибровка для частоты применена
+    std::vector<SffPoint> fft;
+
+    /// Максимум мощности по всем азимутам и подполосам; false — данных нет.
+    bool peak(double& power, double& azimuth) const;
+    static bool fromJson(const nlohmann::json& o, SffResult& out, std::string* error = nullptr);
 };
 
 /// Русская подпись идентификатора самопроверки ("power", "synth", …).

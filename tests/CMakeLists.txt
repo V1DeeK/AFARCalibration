@@ -241,8 +241,20 @@ add_test(NAME ps_link COMMAND test_ps_link)
 
 add_executable(test_ps_tab
     test_ps_tab.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/PsTab.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/PsTab.h
+    ${PROJECT_SOURCE_DIR}/src/ui/ParametersTab.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/ParametersTab.h
+    ${PROJECT_SOURCE_DIR}/src/ui/ConnectionTab.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/ConnectionTab.h
+    ${PROJECT_SOURCE_DIR}/src/ui/FullScanPanel.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/FullScanPanel.h
+    ${PROJECT_SOURCE_DIR}/src/ui/PsExchangeView.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsExchangeView.h
+    ${PROJECT_SOURCE_DIR}/src/ui/PsJournalDialog.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/PsJournalDialog.h
+    ${PROJECT_SOURCE_DIR}/src/ui/StressTestPanel.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/StressTestPanel.h
+    ${PROJECT_SOURCE_DIR}/src/ui/TestRunTab.cpp
+    ${PROJECT_SOURCE_DIR}/src/ui/TestRunTab.h
     ${PROJECT_SOURCE_DIR}/src/ui/PsModulesPage.cpp
     ${PROJECT_SOURCE_DIR}/src/ui/PsModulesPage.h
     ${PROJECT_SOURCE_DIR}/src/ui/PsPacketPage.cpp

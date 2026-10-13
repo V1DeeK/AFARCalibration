@@ -13,6 +13,7 @@ class QCheckBox;
 class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
+class QTabWidget;
 
 /// Страница «Модули»: команды внутренних модулей v3 §2.5.2 (контракт §4.5) —
 /// гетеродины, смеситель, видеоприёмник. Программа шлёт только JSON; кадры
@@ -32,6 +33,8 @@ public:
     bool write(Module m);
     /// get_*; false — нет связи.
     bool read(Module m);
+    /// Вкладки модулей: сюда же «Установка параметров» кладёт коды решётки.
+    [[nodiscard]] QTabWidget* tabs() const { return m_tabs; }
 
 private:
     /// Одно поле модуля: «Передать», значение, прочитанное из PS.
@@ -64,6 +67,7 @@ private:
     void sendCommand(Module m, std::string_view type, const nlohmann::json& payload);
 
     PsLink* m_link;
+    QTabWidget* m_tabs = nullptr;
     std::array<ModuleUi, ModuleCount> m_ui{};
     std::array<MixerRow, afar::ps::kMixerChannels> m_mixer{};
     QLabel* m_result = nullptr;

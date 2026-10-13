@@ -6,7 +6,11 @@
 #include "DataFormatsTab.h"
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
-#include "PsTab.h"
+#include "ConnectionTab.h"
+#include "ParametersTab.h"
+#include "PsServiceCheckPage.h"
+#include "PsSession.h"
+#include "TestRunTab.h"
 #include "RunConfig.h"
 #include "RunStateMachine.h"
 #include "StartWizard.h"
@@ -85,38 +89,28 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
            qMin(800, qMax(1, workArea.height() - 32)));
     move(workArea.center() - rect().center());
 
-    auto* shell = new QWidget(this);
-    auto* shellLayout = new QVBoxLayout(shell);
-    shellLayout->setContentsMargins(4, 4, 4, 4);
-    shellLayout->setSpacing(4);
+    m_psSession = new PsSession(this);
 
-    auto* navigation = new QFrame(shell);
-    navigation->setFrameShape(QFrame::StyledPanel);
-    auto* navigationLayout = new QHBoxLayout(navigation);
-    navigationLayout->setContentsMargins(4, 2, 4, 2);
-    m_parametersWorkspaceButton = new QPushButton(QStringLiteral("Получить параметры"), navigation);
-    m_parametersWorkspaceButton->setObjectName(QStringLiteral("btnParametersWorkspace"));
-    m_afarWorkspaceButton = new QPushButton(QStringLiteral("Калибровка AFAR"), navigation);
-    m_afarWorkspaceButton->setObjectName(QStringLiteral("btnAfarWorkspace"));
-    m_spectrumWorkspaceButton = new QPushButton(QStringLiteral("Анализатор спектра"), navigation);
-    m_spectrumWorkspaceButton->setObjectName(QStringLiteral("btnSpectrumWorkspace"));
-    m_parametersWorkspaceButton->setCheckable(true);
-    m_afarWorkspaceButton->setCheckable(true);
-    m_spectrumWorkspaceButton->setCheckable(true);
-    auto* workspaceButtons = new QButtonGroup(navigation);
-    workspaceButtons->setExclusive(true);
-    workspaceButtons->addButton(m_parametersWorkspaceButton, 0);
-    workspaceButtons->addButton(m_afarWorkspaceButton, 1);
-    workspaceButtons->addButton(m_spectrumWorkspaceButton, 2);
-    navigationLayout->addWidget(m_parametersWorkspaceButton);
-    navigationLayout->addWidget(m_afarWorkspaceButton);
-    navigationLayout->addWidget(m_spectrumWorkspaceButton);
-    navigationLayout->addStretch(1);
+    m_tabs = new QTabWidget(this);
+    m_tabs->setObjectName(QStringLiteral("mainTabs"));
+    m_tabs->setDocumentMode(true);
 
-    m_workspaces = new QStackedWidget(shell);
-    m_workspaces->setObjectName(QStringLiteral("mainWorkspaces"));
+    m_themeButton = new QPushButton(m_tabs);
+    m_themeButton->setObjectName(QStringLiteral("btnThemeToggle"));
+    m_themeButton->setToolTip(QStringLiteral("Светлая или тёмная тема всей программы, включая спектр"));
+    m_tabs->setCornerWidget(m_themeButton, Qt::TopRightCorner);
+    connect(m_themeButton, &QPushButton::clicked, this, &MainWindow::onToggleTheme);
 
-    auto* viewport = new QScrollArea(m_workspaces);
+    // --- Подключение ---
+    m_connectionTab = new ConnectionTab(m_psSession, m_tabs);
+    m_connectionTab->addTechPage(buildBoardParametersPage(), QStringLiteral("Параметры платы"));
+
+    // --- Установка параметров ---
+    m_parametersTab = new ParametersTab(m_psSession, m_tabs);
+
+    // --- Измерение S-параметров: всё, что было в «Калибровке AFAR» ---
+    auto* viewport = new QScrollArea(m_tabs);
+    viewport->setObjectName(QStringLiteral("sParametersWorkspace"));
     viewport->setWidgetResizable(true);
     viewport->setFrameShape(QFrame::NoFrame);
 
@@ -135,13 +129,9 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_measure = new MeasureTab(tabs);
     m_matrix = new CodeMatrixTab(tabs);
     m_formats = new DataFormatsTab(tabs);
-    m_acceptance = new AcceptanceAtTab(tabs);
     tabs->addTab(m_measure, QStringLiteral("Измерение"));
     tabs->addTab(m_matrix, QStringLiteral("Матрица кодов"));
     tabs->addTab(m_formats, QStringLiteral("Форматы данных"));
-    tabs->addTab(m_acceptance, QStringLiteral("Приёмка AT"));
-    m_ps = new PsTab(tabs);
-    tabs->addTab(m_ps, QStringLiteral("Параметры PS"));
 
     auto* cycle = new QFrame(root);
     cycle->setFrameShape(QFrame::StyledPanel);
@@ -170,160 +160,39 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     rootLayout->addWidget(cycle);
     viewport->setWidget(root);
 
-    auto* spectrumWorkspace = new SpectrumOpenGLWidget(spectrumEngine.state(), m_workspaces);
-    spectrumWorkspace->setObjectName(QStringLiteral("spectrumWorkspace"));
-    auto* parametersWorkspace = new QWidget(m_workspaces);
-    parametersWorkspace->setObjectName(QStringLiteral("parametersWorkspace"));
-    auto* parametersLayout = new QVBoxLayout(parametersWorkspace);
-    parametersLayout->setContentsMargins(18, 16, 18, 16);
-    parametersLayout->setSpacing(12);
-    auto* parametersTitle = new QLabel(QStringLiteral("Получить параметры платы"), parametersWorkspace);
-    parametersTitle->setStyleSheet(QStringLiteral("font-size: 22px; font-weight: 700;"));
-    auto* readOnlyHint = new QLabel(
-        QStringLiteral("Автоматический поиск по MAC и безопасное чтение параметров libiio. "
-                       "Настройки платы не изменяются."),
-        parametersWorkspace);
-    readOnlyHint->setWordWrap(true);
-    readOnlyHint->setObjectName(QStringLiteral("hintLabel"));
+    // --- Спектр ---
+    m_spectrum = new SpectrumOpenGLWidget(spectrumEngine.state(), m_tabs);
+    m_spectrum->setObjectName(QStringLiteral("spectrumWorkspace"));
 
-    auto* searchGroup = new QGroupBox(QStringLiteral("Поиск устройства"), parametersWorkspace);
-    auto* searchLayout = new QVBoxLayout(searchGroup);
-    searchLayout->setSpacing(9);
-    auto* macRow = new QHBoxLayout();
-    macRow->addWidget(new QLabel(QStringLiteral("MAC-адрес"), searchGroup));
-    auto* boardMac = new QLineEdit(searchGroup);
-    boardMac->setObjectName(QStringLiteral("boardMacAddress"));
-    boardMac->setMaximumWidth(320);
-    boardMac->setText(QSettings().value(QStringLiteral("board/mac"),
-                                        QStringLiteral("42:7e:d7:4e:0f:77")).toString());
-    auto* readParameters = new QPushButton(QStringLiteral("Получить параметры"), searchGroup);
-    readParameters->setObjectName(QStringLiteral("readBoardParameters"));
-    macRow->addWidget(boardMac, 1);
-    macRow->addStretch(1);
-    macRow->addWidget(readParameters);
+    // --- Тестовый прогон ---
+    m_testRun = new TestRunTab(m_psSession, m_tabs);
 
-    auto* stateRow = new QHBoxLayout();
-    auto* boardIp = new QLabel(QStringLiteral("IP-адрес: —"), searchGroup);
-    boardIp->setObjectName(QStringLiteral("boardIpAddress"));
-    auto* boardStatus = new QLabel(QStringLiteral("Готово к чтению"), searchGroup);
-    boardStatus->setObjectName(QStringLiteral("boardParametersStatus"));
-    boardStatus->setWordWrap(true);
-    stateRow->addWidget(boardIp);
-    stateRow->addWidget(boardStatus, 1);
-    searchLayout->addLayout(macRow);
-    searchLayout->addLayout(stateRow);
+    // --- Приёмка ---
+    auto* acceptance = new QTabWidget(m_tabs);
+    acceptance->setObjectName(QStringLiteral("acceptanceTabs"));
+    m_psCheck = new PsServiceCheckPage(m_psSession->link(), acceptance);
+    m_acceptance = new AcceptanceAtTab(acceptance);
+    acceptance->addTab(m_psCheck, QStringLiteral("Приёмочная проверка PS"));
+    acceptance->addTab(m_acceptance, QStringLiteral("Приёмка AT"));
+    connect(m_psCheck, &PsServiceCheckPage::runningChanged, m_psSession, &PsSession::setCheckRunning);
+    const auto refreshCheck = [this] {
+        m_psCheck->setAllowed(m_psSession->link()->isReady() && !m_psSession->seriesActive());
+    };
+    connect(m_psSession, &PsSession::controlsChanged, this, refreshCheck);
+    refreshCheck();
 
-    auto* resultTabs = new QTabWidget(parametersWorkspace);
-    resultTabs->setObjectName(QStringLiteral("boardParametersTabs"));
-    auto* boardOutput = new QPlainTextEdit(resultTabs);
-    boardOutput->setObjectName(QStringLiteral("boardParametersOutput"));
-    boardOutput->setReadOnly(true);
-    boardOutput->setLineWrapMode(QPlainTextEdit::NoWrap);
-    boardOutput->setPlaceholderText(
-        QStringLiteral("После нажатия здесь появятся основные параметры платы."));
-    auto* boardDetails = new QPlainTextEdit(resultTabs);
-    boardDetails->setObjectName(QStringLiteral("boardParametersDetails"));
-    boardDetails->setReadOnly(true);
-    boardDetails->setLineWrapMode(QPlainTextEdit::NoWrap);
-    boardDetails->setPlaceholderText(
-        QStringLiteral("Здесь появится полный перечень технических IIO-атрибутов."));
-    resultTabs->addTab(boardOutput, QStringLiteral("Основное"));
-    resultTabs->addTab(boardDetails, QStringLiteral("Подробно"));
-    parametersLayout->addWidget(parametersTitle);
-    parametersLayout->addWidget(readOnlyHint);
-    parametersLayout->addWidget(searchGroup);
-    parametersLayout->addWidget(resultTabs, 1);
+    m_tabs->addTab(m_connectionTab, QStringLiteral("Подключение"));
+    m_tabs->addTab(m_parametersTab, QStringLiteral("Установка параметров"));
+    m_tabs->addTab(viewport, QStringLiteral("Измерение S-параметров"));
+    m_tabs->addTab(m_spectrum, QStringLiteral("Спектр"));
+    m_tabs->addTab(m_testRun, QStringLiteral("Тестовый прогон"));
+    m_tabs->addTab(acceptance, QStringLiteral("Приёмка"));
+    setCentralWidget(m_tabs);
 
-    connect(readParameters, &QPushButton::clicked, parametersWorkspace,
-            [this, parametersWorkspace, boardMac, boardIp, boardStatus, boardOutput,
-             boardDetails, resultTabs, readParameters] {
-        const QString mac = boardMac->text().trimmed();
-        QSettings().setValue(QStringLiteral("board/mac"), mac);
-        auto& state = m_spectrumEngine->state();
-        {
-            std::lock_guard<std::mutex> lock(state.board_mutex);
-            state.board_mac = mac.toStdString();
-            state.board_found_ip.clear();
-            state.board_parameters.clear();
-            state.board_status = "ожидание запуска поиска...";
-        }
-        state.board_read_parameters_requested.store(true);
-        state.board_find_requested.store(true);
-        parametersWorkspace->setProperty("operationActive", true);
-        setOperationProgress(QStringLiteral("Поиск платы по MAC"), 0, 2);
-        readParameters->setEnabled(false);
-        boardIp->setText(QStringLiteral("IP-адрес: поиск…"));
-        boardStatus->setText(QStringLiteral("Поиск платы по MAC…"));
-        boardOutput->clear();
-        boardDetails->clear();
-        resultTabs->setCurrentIndex(0);
-    });
-
-    auto* parametersTimer = new QTimer(parametersWorkspace);
-    connect(parametersTimer, &QTimer::timeout, parametersWorkspace,
-            [this, parametersWorkspace, boardIp, boardStatus, boardOutput, boardDetails,
-             readParameters, lastParameters = QString()]() mutable {
-        auto& state = m_spectrumEngine->state();
-        std::string ip;
-        std::string status;
-        std::string parameters;
-        {
-            std::lock_guard<std::mutex> lock(state.board_mutex);
-            ip = state.board_found_ip;
-            status = state.board_status;
-            parameters = state.board_parameters;
-        }
-        const bool busy = state.board_find_requested.load() || state.board_is_finding.load();
-        readParameters->setEnabled(!busy);
-        boardIp->setText(ip.empty()
-                             ? QStringLiteral("IP-адрес: —")
-                             : QStringLiteral("IP-адрес: %1").arg(QString::fromStdString(ip)));
-        if (!status.empty()) boardStatus->setText(QString::fromStdString(status));
-        const QString snapshot = QString::fromStdString(parameters);
-        if (snapshot != lastParameters) {
-            lastParameters = snapshot;
-            const QString detailsMarker =
-                QStringLiteral("\nВСЕ СТАНДАРТНЫЕ ДОСТУПНЫЕ IIO-АТРИБУТЫ\n");
-            const qsizetype detailsAt = snapshot.indexOf(detailsMarker);
-            boardOutput->setPlainText(
-                detailsAt < 0 ? snapshot.trimmed() : snapshot.left(detailsAt).trimmed());
-            boardDetails->setPlainText(
-                detailsAt < 0 ? QString() : snapshot.mid(detailsAt + detailsMarker.size()).trimmed());
-        }
-        if (parametersWorkspace->property("operationActive").toBool()) {
-            if (busy) {
-                setOperationProgress(ip.empty() ? QStringLiteral("Поиск платы по MAC")
-                                                : QStringLiteral("Чтение параметров платы"),
-                                     ip.empty() ? 0 : 1, 2);
-            } else if (!status.empty()) {
-                setOperationProgress(parameters.empty()
-                                         ? QStringLiteral("Параметры платы не получены")
-                                         : QStringLiteral("Параметры платы получены"),
-                                     2, 2);
-                parametersWorkspace->setProperty("operationActive", false);
-            }
-        }
-    });
-    parametersTimer->start(100);
-    m_workspaces->addWidget(parametersWorkspace);
-    m_workspaces->addWidget(viewport);
-    m_workspaces->addWidget(spectrumWorkspace);
-    shellLayout->addWidget(navigation);
-    shellLayout->addWidget(m_workspaces, 1);
-    setCentralWidget(shell);
-
-    QSettings settings;
-    const QString workspaceKey = QStringLiteral("ui/active_workspace_v2");
-    const int savedWorkspace = settings.contains(workspaceKey)
-        ? qBound(0, settings.value(workspaceKey, 1).toInt(), 2)
-        : qBound(0, settings.value(QStringLiteral("ui/active_workspace"), 0).toInt(), 1) + 1;
-    settings.setValue(workspaceKey, savedWorkspace);
-    m_workspaces->setCurrentIndex(savedWorkspace);
-    workspaceButtons->button(savedWorkspace)->setChecked(true);
-    connect(workspaceButtons, &QButtonGroup::idClicked, this, [this](int index) {
-        m_workspaces->setCurrentIndex(index);
-        QSettings().setValue(QStringLiteral("ui/active_workspace_v2"), index);
-    });
+    const QString tabKey = QStringLiteral("ui/active_tab_v3");
+    m_tabs->setCurrentIndex(qBound(0, QSettings().value(tabKey, 0).toInt(), m_tabs->count() - 1));
+    connect(m_tabs, &QTabWidget::currentChanged, this,
+            [tabKey](int index) { QSettings().setValue(tabKey, index); });
 
     m_operationText = new QLabel(QStringLiteral("Готово"), this);
     m_operationText->setObjectName(QStringLiteral("operationStatusText"));
@@ -337,7 +206,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_operationProgress->setVisible(false);
     m_moduleStatus = new QLabel(this);
     m_moduleStatus->setObjectName(QStringLiteral("moduleStatusText"));
-    m_moduleStatus->setMaximumWidth(280);
+    m_moduleStatus->setMaximumWidth(460);
     statusBar()->addWidget(m_moduleStatus);
     statusBar()->addPermanentWidget(m_operationText, 1);
     statusBar()->addPermanentWidget(m_operationProgress);
@@ -458,6 +327,9 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_thread->start();
     loadExampleDefaults();
     refreshThemeButton();
+    m_spectrum->setLightTheme(currentAppTheme() == AppTheme::Light);
+    // Автоподключение: оператор подключался и не нажимал «Отключиться».
+    m_psSession->connectFromSettings();
     scanUnfinishedSeries();
     onApplyVnaSettings();
     onApplyControllerSettings();
@@ -484,6 +356,123 @@ MainWindow::~MainWindow()
             m_thread->wait();
         }
     }
+}
+
+QWidget* MainWindow::buildBoardParametersPage()
+{
+    // Чтение параметров платы через libiio — то, что раньше было отдельным
+    // экраном «Получить параметры». Плата ищется по MAC из окна «Подключение».
+    auto* page = new QWidget(this);
+    page->setObjectName(QStringLiteral("parametersWorkspace"));
+    auto* layout = new QVBoxLayout(page);
+    auto* readOnlyHint = new QLabel(
+        QStringLiteral("Поиск по MAC и безопасное чтение параметров libiio. Настройки платы не изменяются."),
+        page);
+    readOnlyHint->setWordWrap(true);
+    readOnlyHint->setObjectName(QStringLiteral("hintLabel"));
+
+    auto* row = new QHBoxLayout;
+    auto* boardIp = new QLabel(QStringLiteral("IP-адрес: —"), page);
+    boardIp->setObjectName(QStringLiteral("boardIpAddress"));
+    auto* readParameters = new QPushButton(QStringLiteral("Получить параметры"), page);
+    readParameters->setObjectName(QStringLiteral("readBoardParameters"));
+    row->addWidget(boardIp, 1);
+    row->addWidget(readParameters);
+    auto* boardStatus = new QLabel(QStringLiteral("Готово к чтению"), page);
+    boardStatus->setObjectName(QStringLiteral("boardParametersStatus"));
+    boardStatus->setWordWrap(true);
+
+    auto* resultTabs = new QTabWidget(page);
+    resultTabs->setObjectName(QStringLiteral("boardParametersTabs"));
+    auto* boardOutput = new QPlainTextEdit(resultTabs);
+    boardOutput->setObjectName(QStringLiteral("boardParametersOutput"));
+    boardOutput->setReadOnly(true);
+    boardOutput->setLineWrapMode(QPlainTextEdit::NoWrap);
+    boardOutput->setPlaceholderText(
+        QStringLiteral("После нажатия здесь появятся основные параметры платы."));
+    auto* boardDetails = new QPlainTextEdit(resultTabs);
+    boardDetails->setObjectName(QStringLiteral("boardParametersDetails"));
+    boardDetails->setReadOnly(true);
+    boardDetails->setLineWrapMode(QPlainTextEdit::NoWrap);
+    boardDetails->setPlaceholderText(
+        QStringLiteral("Здесь появится полный перечень технических IIO-атрибутов."));
+    resultTabs->addTab(boardOutput, QStringLiteral("Основное"));
+    resultTabs->addTab(boardDetails, QStringLiteral("Подробно"));
+    layout->addWidget(readOnlyHint);
+    layout->addLayout(row);
+    layout->addWidget(boardStatus);
+    layout->addWidget(resultTabs, 1);
+
+    connect(readParameters, &QPushButton::clicked, page,
+            [this, page, boardIp, boardStatus, boardOutput, boardDetails, resultTabs, readParameters] {
+        const QString mac = m_connectionTab->macText();
+        auto& state = m_spectrumEngine->state();
+        {
+            std::lock_guard<std::mutex> lock(state.board_mutex);
+            state.board_mac = mac.toStdString();
+            state.board_found_ip.clear();
+            state.board_parameters.clear();
+            state.board_status = "ожидание запуска поиска...";
+        }
+        state.board_read_parameters_requested.store(true);
+        state.board_find_requested.store(true);
+        page->setProperty("operationActive", true);
+        setOperationProgress(QStringLiteral("Поиск платы по MAC"), 0, 2);
+        readParameters->setEnabled(false);
+        boardIp->setText(QStringLiteral("IP-адрес: поиск…"));
+        boardStatus->setText(QStringLiteral("Поиск платы по MAC %1…").arg(mac));
+        boardOutput->clear();
+        boardDetails->clear();
+        resultTabs->setCurrentIndex(0);
+    });
+
+    auto* parametersTimer = new QTimer(page);
+    connect(parametersTimer, &QTimer::timeout, page,
+            [this, page, boardIp, boardStatus, boardOutput, boardDetails,
+             readParameters, lastParameters = QString()]() mutable {
+        auto& state = m_spectrumEngine->state();
+        std::string ip;
+        std::string status;
+        std::string parameters;
+        {
+            std::lock_guard<std::mutex> lock(state.board_mutex);
+            ip = state.board_found_ip;
+            status = state.board_status;
+            parameters = state.board_parameters;
+        }
+        const bool busy = state.board_find_requested.load() || state.board_is_finding.load();
+        readParameters->setEnabled(!busy);
+        boardIp->setText(ip.empty()
+                             ? QStringLiteral("IP-адрес: —")
+                             : QStringLiteral("IP-адрес: %1").arg(QString::fromStdString(ip)));
+        if (!status.empty()) boardStatus->setText(QString::fromStdString(status));
+        const QString snapshot = QString::fromStdString(parameters);
+        if (snapshot != lastParameters) {
+            lastParameters = snapshot;
+            const QString detailsMarker =
+                QStringLiteral("\nВСЕ СТАНДАРТНЫЕ ДОСТУПНЫЕ IIO-АТРИБУТЫ\n");
+            const qsizetype detailsAt = snapshot.indexOf(detailsMarker);
+            boardOutput->setPlainText(
+                detailsAt < 0 ? snapshot.trimmed() : snapshot.left(detailsAt).trimmed());
+            boardDetails->setPlainText(
+                detailsAt < 0 ? QString() : snapshot.mid(detailsAt + detailsMarker.size()).trimmed());
+        }
+        if (page->property("operationActive").toBool()) {
+            if (busy) {
+                setOperationProgress(ip.empty() ? QStringLiteral("Поиск платы по MAC")
+                                                : QStringLiteral("Чтение параметров платы"),
+                                     ip.empty() ? 0 : 1, 2);
+            } else if (!status.empty()) {
+                setOperationProgress(parameters.empty()
+                                         ? QStringLiteral("Параметры платы не получены")
+                                         : QStringLiteral("Параметры платы получены"),
+                                     2, 2);
+                page->setProperty("operationActive", false);
+            }
+        }
+    });
+    parametersTimer->start(100);
+    return page;
 }
 
 void MainWindow::loadExampleDefaults()
@@ -661,7 +650,7 @@ void MainWindow::updateCycleButtons(int state)
     const bool idle = st == RunState::Idle || st == RunState::Complete
         || st == RunState::Aborted || st == RunState::Error;
     const bool seriesUsesPs = m_connections->controllerBackend() == MeasureWorker::CtrlPs;
-    m_ps->setSeriesActive(!idle && seriesUsesPs);
+    m_psSession->setSeriesActive(!idle && seriesUsesPs);
 }
 
 void MainWindow::onMeasureNow()
@@ -773,7 +762,10 @@ void MainWindow::updateModuleStatus()
         ? QStringLiteral("воспроизведение")
         : spectrum.is_connected.load() ? QStringLiteral("подключён")
                                        : QStringLiteral("не подключён");
-    m_moduleStatus->setText(QStringLiteral("VNA: %1 · SDR: %2").arg(vnaState, shortSpectrum));
+    const QString psState = m_psSession->link()->isReady() ? QStringLiteral("на связи")
+                                                           : QStringLiteral("нет связи");
+    m_moduleStatus->setText(
+        QStringLiteral("PS: %1 · VNA: %2 · SDR: %3").arg(psState, vnaState, shortSpectrum));
     m_moduleStatus->setToolTip(
         QStringLiteral("AFAR: %1%2\nАнализатор спектра: %3")
             .arg(m_vnaConnected ? QStringLiteral("VNA подключён") : QStringLiteral("VNA не подключён"),
@@ -933,13 +925,15 @@ void MainWindow::onToggleTheme()
     applyAppTheme(*qApp, next);
     refreshThemeButton();
     m_matrix->refreshTheme();
+    m_spectrum->setLightTheme(next == AppTheme::Light);
 }
 
 void MainWindow::refreshThemeButton()
 {
-    m_connections->setThemeButtonText(currentAppTheme() == AppTheme::Dark
-                                          ? QStringLiteral("Тема: тёмная")
-                                          : QStringLiteral("Тема: светлая"));
+    const bool dark = currentAppTheme() == AppTheme::Dark;
+    m_connections->setThemeButtonText(dark ? QStringLiteral("Тема: тёмная")
+                                           : QStringLiteral("Тема: светлая"));
+    m_themeButton->setText(dark ? QStringLiteral("Светлая тема") : QStringLiteral("Тёмная тема"));
 }
 
 QString MainWindow::defaultDataRoot() const

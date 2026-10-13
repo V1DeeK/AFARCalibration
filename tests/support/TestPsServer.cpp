@@ -159,6 +159,52 @@ void TestPsServer::reply(const ps::Envelope& cmd, ps::Status status, json payloa
     m_client->write(line.data(), static_cast<qint64>(line.size()));
 }
 
+void TestPsServer::handleSff(const ps::Envelope& cmd)
+{
+    const std::string& t = cmd.msg_type;
+    if (m_mode != ps::Mode::FullScanFreq) {
+        reply(cmd, ps::Status::NotSupported);
+        return;
+    }
+    if (t == ps::msg::SetSffParameters) {
+        json merged = m_sff.toJson();
+        merged.update(cmd.payload);
+        ps::SffParams p;
+        if (!ps::SffParams::fromJson(merged, p)) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        m_sff = p;
+        reply(cmd, ps::Status::Ok, m_sff.toJson());
+        return;
+    }
+    if (t == ps::msg::GetSffParameters) {
+        reply(cmd, ps::Status::Ok, m_sff.toJson());
+        return;
+    }
+    reply(cmd, ps::Status::Ok);
+    if (t == ps::msg::SetSffStart) {
+        // Один обзор: три частоты, на каждой — три азимута сектора.
+        for (int i = 0; i < 3; ++i) {
+            const std::int64_t freq = m_sff.freq_min + (m_sff.freq_max - m_sff.freq_min) * i / 2;
+            json fft = json::array();
+            for (int a = 0; a < 3; ++a) {
+                const double az = m_sff.az_min + (m_sff.az_max - m_sff.az_min) * a / 2.0;
+                fft.push_back(json{{"az", az}, {"pwr", json::array({50.0 + i, 60.0 + a, 55.0})}});
+            }
+            ps::Envelope ev;
+            ev.msg_type = std::string(ps::msg::SendSffResult);
+            ev.msg_class = ps::MsgClass::Event;
+            ev.msg_count = m_eventCount++;
+            ev.payload = json{{"freq", freq}, {"cal", i == 0 ? "NO" : "OK"}, {"fft", fft}};
+            const std::string line = ps::encodeLine(ev);
+            if (m_client) {
+                m_client->write(line.data(), static_cast<qint64>(line.size()));
+            }
+        }
+    }
+}
+
 json TestPsServer::channelsJson() const
 {
     json payload;
@@ -230,6 +276,12 @@ void TestPsServer::handle(const ps::Envelope& cmd)
         m_mode = target;
         reply(cmd, ps::Status::Ok, json{{"mode", std::string(ps::toString(m_mode))}});
         sendTelemetry();
+        return;
+    }
+
+    if (t == ps::msg::SetSffParameters || t == ps::msg::GetSffParameters || t == ps::msg::SetSffStart ||
+        t == ps::msg::SetSffStop) {
+        handleSff(cmd);
         return;
     }
 

@@ -24,6 +24,8 @@ public:
     Page page() const noexcept { return active_page_; }
     void setLanguage(Language language) noexcept { language_ = language; }
     Language language() const noexcept { return language_; }
+    void setLightTheme(bool light) noexcept { light_theme_ = light; theme_dirty_ = true; }
+    bool lightTheme() const noexcept { return light_theme_; }
     void syncTextFieldsFromState();
 
 private:
@@ -124,6 +126,8 @@ private:
     AppState& state_;
     Page active_page_{ Page::Spectrum };
     Language language_{ Language::Russian };
+    bool light_theme_{ false };
+    bool theme_dirty_{ true };
 
     // local copies so psd_mutex isn't held during rendering
     // ch2 copies are only meaningful when chan_mode == Both

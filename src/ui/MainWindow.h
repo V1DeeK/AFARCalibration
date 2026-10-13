@@ -10,11 +10,16 @@ class ConnectionBar;
 class DataFormatsTab;
 class MeasureTab;
 class MeasureWorker;
-class PsTab;
+class ConnectionTab;
+class ParametersTab;
+class PsServiceCheckPage;
+class PsSession;
+class SpectrumOpenGLWidget;
+class TestRunTab;
+class QTabWidget;
 class QLabel;
 class QProgressBar;
 class QPushButton;
-class QStackedWidget;
 class QThread;
 class SpectrumEngine;
 
@@ -115,6 +120,7 @@ private slots:
     void onCalibrateStep(int kind, int step, int port);
 
 private:
+    QWidget* buildBoardParametersPage();
     void loadExampleDefaults();
     void refreshThemeButton();
     void scanUnfinishedSeries();
@@ -131,7 +137,14 @@ private:
     CodeMatrixTab* m_matrix = nullptr;
     DataFormatsTab* m_formats = nullptr;
     AcceptanceAtTab* m_acceptance = nullptr;
-    PsTab* m_ps = nullptr;
+    PsSession* m_psSession = nullptr;
+    QTabWidget* m_tabs = nullptr;
+    QPushButton* m_themeButton = nullptr;
+    ConnectionTab* m_connectionTab = nullptr;
+    ParametersTab* m_parametersTab = nullptr;
+    SpectrumOpenGLWidget* m_spectrum = nullptr;
+    TestRunTab* m_testRun = nullptr;
+    PsServiceCheckPage* m_psCheck = nullptr;
     QPushButton* m_wizardBtn = nullptr;
     QPushButton* m_start = nullptr;
     QPushButton* m_pause = nullptr;
@@ -139,10 +152,6 @@ private:
     QLabel* m_operationText = nullptr;
     QProgressBar* m_operationProgress = nullptr;
     QLabel* m_moduleStatus = nullptr;
-    QStackedWidget* m_workspaces = nullptr;
-    QPushButton* m_parametersWorkspaceButton = nullptr;
-    QPushButton* m_afarWorkspaceButton = nullptr;
-    QPushButton* m_spectrumWorkspaceButton = nullptr;
 
     QThread* m_thread = nullptr;
     MeasureWorker* m_worker = nullptr;

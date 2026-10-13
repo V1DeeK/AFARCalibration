@@ -187,6 +187,10 @@ find_package(Qt6 REQUIRED COMPONENTS Network)
 add_library(afar_ps STATIC
     ps/PsLink.cpp
     ps/PsLink.h
+    ps/MacResolver.cpp
+    ps/MacResolver.h
+    ps/PsSession.cpp
+    ps/PsSession.h
     ps/PsServiceCheckRunner.cpp
     ps/PsServiceCheckRunner.h
 )
@@ -250,8 +254,20 @@ add_executable(AfarRxCalibrationStudio WIN32 MACOSX_BUNDLE
     ui/StartWizard.h
     ui/MeasureWorker.cpp
     ui/MeasureWorker.h
-    ui/PsTab.cpp
-    ui/PsTab.h
+    ui/ParametersTab.cpp
+    ui/ParametersTab.h
+    ui/ConnectionTab.cpp
+    ui/ConnectionTab.h
+    ui/FullScanPanel.cpp
+    ui/FullScanPanel.h
+    ui/PsExchangeView.cpp
+    ui/PsExchangeView.h
+    ui/PsJournalDialog.cpp
+    ui/PsJournalDialog.h
+    ui/StressTestPanel.cpp
+    ui/StressTestPanel.h
+    ui/TestRunTab.cpp
+    ui/TestRunTab.h
     ui/PsModulesPage.cpp
     ui/PsModulesPage.h
     ui/PsPacketPage.cpp

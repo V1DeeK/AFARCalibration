@@ -17,6 +17,8 @@ public:
     ~SpectrumOpenGLWidget() override;
     bool isRendererInitialized() const noexcept { return rendererInitialized_; }
     void setPage(SpectrumRenderer::Page page) { renderer_.setPage(page); update(); }
+    /// Светлая или тёмная тема графиков; применяется на следующем кадре.
+    void setLightTheme(bool light) { renderer_.setLightTheme(light); update(); }
 
 protected:
     void initializeGL() override;
