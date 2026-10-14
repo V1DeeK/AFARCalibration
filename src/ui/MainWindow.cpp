@@ -14,7 +14,6 @@
 #include "UiStyle.h"
 #include "RunConfig.h"
 #include "RunStateMachine.h"
-#include "StartWizard.h"
 #include "afar/C2220Limits.h"
 #include "Theme.h"
 #include "spectrum_engine.hpp"
@@ -150,62 +149,22 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_connections->setControllerInfo(QStringLiteral("DutSimulator"), false);
     m_connections->setRunStatus(QStringLiteral("простой"), QStringLiteral("#333333"));
 
-    auto* tabs = new QTabWidget(root);
-    m_measure = new MeasureTab(tabs);
-    m_matrix = new CodeMatrixTab(tabs);
-    tabs->addTab(m_measure, QStringLiteral("Измерение"));
-    tabs->addTab(m_matrix, QStringLiteral("Матрица кодов"));
+    m_measure = new MeasureTab(root);
+    // Код-матрица работает только в серии 64×64 (контроллера нет): вкладки нет, объект нужен связям серии.
+    m_matrix = new CodeMatrixTab(root);
+    m_matrix->hide();
 
-    // Верхний ряд: «Режим работы» и запуск серии (Старт/Пауза/Стоп) — отдельными карточками.
-    auto* modeBox = new QGroupBox(QStringLiteral("Режим работы"), root);
-    modeBox->setObjectName(QStringLiteral("workModeBox"));
-    auto* modeLayout = new QVBoxLayout(modeBox);
-    QComboBox* modeCombo = m_measure->workModeCombo();
-    modeCombo->setParent(modeBox);
-    modeCombo->show();
-    modeLayout->addWidget(modeCombo);
-    modeLayout->addStretch(1);
+    // Карточка посередине верхнего ряда: калибровка ВАЦ и подготовка серии вкладками.
+    auto* calBox = new QGroupBox(QStringLiteral("Калибровка ВАЦ"), root);
+    calBox->setObjectName(QStringLiteral("calibrationBox"));
+    auto* calLayout = new QVBoxLayout(calBox);
+    calLayout->addWidget(m_measure->calibrationPanel());
+    m_connections->setMiddleWidget(calBox);
+    // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Подключение».
+    m_connectionTab->addTechSection(m_connections->scpiPanel());
 
-    auto* cycle = new QGroupBox(QStringLiteral("Запуск серии"), root);
-    cycle->setObjectName(QStringLiteral("runBox"));
-    auto* cycleLayout = new QGridLayout(cycle);
-    cycleLayout->setHorizontalSpacing(ui::kInnerGap);
-    cycleLayout->setVerticalSpacing(ui::kInnerGap);
-    m_wizardBtn = new QPushButton(QStringLiteral("Мастер запуска"), cycle);
-    m_wizardBtn->setObjectName(QStringLiteral("btnWizard"));
-    m_wizardBtn->setToolTip(QStringLiteral("Пошаговая проверка стенда перед серией"));
-    m_start = new QPushButton(QStringLiteral("Старт"), cycle);
-    m_start->setObjectName(QStringLiteral("btnStart"));
-    m_pause = new QPushButton(QStringLiteral("Пауза"), cycle);
-    m_pause->setObjectName(QStringLiteral("btnPause"));
-    m_stop = new QPushButton(QStringLiteral("Стоп"), cycle);
-    m_stop->setObjectName(QStringLiteral("btnStop"));
-    ui::setButtonRole(m_wizardBtn, ui::ButtonRole::Secondary);
-    ui::setButtonRole(m_start, ui::ButtonRole::Primary);
-    ui::setButtonRole(m_pause, ui::ButtonRole::Secondary);
-    ui::setButtonRole(m_stop, ui::ButtonRole::Danger);
-    m_start->setEnabled(false);
-    m_pause->setEnabled(false);
-    m_stop->setEnabled(false);
-    auto* wizardHint = ui::hintLabel(
-        QStringLiteral("Сначала «Мастер запуска»: он проверяет подключения и связь с прибором. "
-                       "Когда мастер завершён, станет доступна кнопка «Старт»."),
-        cycle);
-    cycleLayout->addWidget(m_wizardBtn, 0, 0);
-    cycleLayout->addWidget(m_start, 0, 1);
-    cycleLayout->addWidget(m_pause, 0, 2);
-    cycleLayout->addWidget(m_stop, 0, 3);
-    cycleLayout->addWidget(wizardHint, 1, 0, 1, 4);
-    cycleLayout->setColumnStretch(0, 1);
-
-    auto* topRow = new QHBoxLayout;
-    topRow->setSpacing(ui::kGap);
-    topRow->addWidget(modeBox, 2);
-    topRow->addWidget(cycle, 3);
-
-    rootLayout->addLayout(topRow);
     rootLayout->addWidget(m_connections);
-    rootLayout->addWidget(tabs, 1);
+    rootLayout->addWidget(m_measure, 1);
     viewport->setWidget(root);
 
     // --- Спектр ---
@@ -269,24 +228,12 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     statusBar()->addPermanentWidget(m_operationText, 1);
     statusBar()->addPermanentWidget(m_operationProgress);
 
-    const auto applyWorkMode = [tabs, cycle](bool channelMode) {
-        cycle->setVisible(channelMode);
-        for (int tab = 1; tab < tabs->count(); ++tab) {
-            tabs->setTabVisible(tab, channelMode);
-        }
-    };
-    connect(m_measure, &MeasureTab::workModeChanged, this, applyWorkMode);
-    applyWorkMode(false);
 
     m_thread = new QThread(this);
     m_worker = new MeasureWorker();
     m_worker->moveToThread(m_thread);
     connect(m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
 
-    connect(m_wizardBtn, &QPushButton::clicked, this, &MainWindow::onOpenWizard);
-    connect(m_start, &QPushButton::clicked, this, &MainWindow::onStart);
-    connect(m_pause, &QPushButton::clicked, this, &MainWindow::onPause);
-    connect(m_stop, &QPushButton::clicked, this, &MainWindow::onStop);
 
     connect(m_worker, &MeasureWorker::prepareFinished, this, &MainWindow::onPrepareFinished);
     connect(m_worker, &MeasureWorker::stateChanged, this, &MainWindow::onStateChanged);
@@ -337,12 +284,8 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
             &MainWindow::onSeriesArtifactsPreview);
     connect(m_worker, &MeasureWorker::directLutCurvePreview, this,
             &MainWindow::onDirectLutCurvePreview);
-    connect(m_measure, &MeasureTab::openWizardRequested, this, &MainWindow::onOpenWizard);
-    connect(m_measure, &MeasureTab::resumeSeriesRequested, this, &MainWindow::onResumeSeries);
     connect(m_measure, &MeasureTab::measureNowRequested, this, &MainWindow::onMeasureNow);
     connect(m_measure, &MeasureTab::exportTwoPortRequested, this, &MainWindow::onExportTwoPort);
-    connect(m_measure, &MeasureTab::connectAndMeasureRequested, this,
-            &MainWindow::onConnectAndMeasureVna);
     connect(m_measure, &MeasureTab::calibrateStepRequested, this, &MainWindow::onCalibrateStep);
     connect(m_measure, &MeasureTab::selectCalibrationKitRequested, this,
             [this](int index) {
@@ -390,7 +333,6 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     }
     // Автоподключение: оператор подключался и не нажимал «Отключиться».
     m_psSession->connectFromSettings();
-    scanUnfinishedSeries();
     onApplyVnaSettings();
     onApplyControllerSettings();
 
@@ -466,83 +408,6 @@ void MainWindow::loadExampleDefaults()
     }
 }
 
-void MainWindow::onOpenWizard()
-{
-    StartWizard wizard(this);
-    wizard.setSweepPreset(m_measure->fStartHz(), m_measure->fStopHz(), m_measure->points(),
-                          m_measure->ifbwHz(), m_measure->powerDbm(), m_measure->averages());
-    wizard.setVnaEndpoint(m_connections->vnaHost(), m_connections->vnaPort());
-    connect(&wizard, &StartWizard::probeCodesRequested, this,
-            [this](double fStartHz, double fStopHz, int points, int ifbwHz, double powerDbm,
-                   int averages) {
-                onApplyVnaSettings();
-                QMetaObject::invokeMethod(m_worker, "runProbeCodes", Qt::QueuedConnection,
-                                          Q_ARG(double, fStartHz), Q_ARG(double, fStopHz),
-                                          Q_ARG(int, points), Q_ARG(int, ifbwHz),
-                                          Q_ARG(double, powerDbm), Q_ARG(int, averages));
-            });
-    connect(m_worker, &MeasureWorker::probeCodesFinished, &wizard,
-            &StartWizard::onProbeCodesFinished, Qt::QueuedConnection);
-    if (wizard.exec() != QDialog::Accepted) {
-        return;
-    }
-    QString diag;
-    if (!wizard.materializeSimFixtures(diag)) {
-        QMessageBox::critical(this, QStringLiteral("Фикстуры"), diag);
-        return;
-    }
-    if (wizard.directAccessRequested()) {
-        m_connections->setDiagnostic(QStringLiteral(
-            "Запрошен direct access — только подтверждение инженера, SCPI не уходит."));
-        // На имитаторе выставляем флаг без SCPI.
-        // VnaSimulator живёт в worker; флаг отражается диагностикой.
-    }
-    m_start->setEnabled(false);
-    m_pause->setEnabled(false);
-    m_stop->setEnabled(false);
-    m_measure->setStandCheck(wizard.connectionsConfirmed(), wizard.idnConfirmed(),
-                            wizard.calConfirmed(), wizard.thruSummary(),
-                            wizard.noOverloadConfirmed(), wizard.probeConfirmed(),
-                            wizard.powerDbm(), wizard.engineerProfile());
-    m_measure->setVnaCalibrationIdHint(wizard.vnaCalibrationId());
-    statusBar()->showMessage(
-        QStringLiteral("ВАЦ (S2VNA): %1 · THRU: %2 · Сырые данные: append-only · SHA-256")
-            .arg(wizard.calConfirmed() ? QStringLiteral("подтверждена оператором")
-                                       : QStringLiteral("не подтверждена"),
-                 wizard.thruSummary()),
-        10000);
-    QMetaObject::invokeMethod(m_worker, "prepare", Qt::QueuedConnection,
-                              Q_ARG(QString, wizard.dataRoot()),
-                              Q_ARG(QString, wizard.runConfigPath()),
-                              Q_ARG(QString, wizard.attenuatorCsvPath()),
-                              Q_ARG(bool, wizard.forceSafeState()),
-                              Q_ARG(QString, wizard.vnaCalibrationId()));
-}
-
-void MainWindow::onStart()
-{
-    QMetaObject::invokeMethod(m_worker, "start", Qt::QueuedConnection);
-}
-
-void MainWindow::onPause()
-{
-    QMetaObject::invokeMethod(m_worker, "pause", Qt::QueuedConnection);
-}
-
-void MainWindow::onStop()
-{
-    const auto answer = QMessageBox::question(
-        this, QStringLiteral("Остановить серию"),
-        QStringLiteral("Завершить текущую транзакцию, перевести стенд в безопасное "
-                       "состояние и закрыть серию как ABORTED? Данные останутся "
-                       "пригодными для анализа (FR-11)."),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (answer != QMessageBox::Yes) {
-        return;
-    }
-    QMetaObject::invokeMethod(m_worker, "stop", Qt::QueuedConnection);
-}
-
 void MainWindow::onPrepareFinished(bool ok, const QString& diagnostics)
 {
     if (!ok) {
@@ -583,13 +448,6 @@ void MainWindow::updateCycleButtons(int state)
 {
     using afar::RunState;
     const auto st = static_cast<RunState>(state);
-    const bool ready = st == RunState::Ready;
-    const bool running = st == RunState::Running || st == RunState::Pausing;
-    const bool paused = st == RunState::Paused;
-    m_start->setEnabled(ready || paused);
-    m_start->setText(paused ? QStringLiteral("Продолжить") : QStringLiteral("Старт"));
-    m_pause->setEnabled(running);
-    m_stop->setEnabled(running || paused);
     // UI-MEAS-001: Idle/Ready — да; Running и смежные — нет.
     const bool measureOk = st == RunState::Idle || st == RunState::Ready;
     m_measure->setMeasureNowEnabled(measureOk);
@@ -895,29 +753,6 @@ QString MainWindow::defaultDataRoot() const
     return QDir(base).filePath(QStringLiteral("data"));
 }
 
-void MainWindow::scanUnfinishedSeries()
-{
-    m_unfinishedSeries.clear();
-    QDir root(defaultDataRoot());
-    if (!root.exists()) {
-        m_measure->setUnfinishedSeriesHint(QString());
-        return;
-    }
-    const auto dirs = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const auto& name : dirs) {
-        if (name.startsWith(QLatin1Char('_'))) {
-            continue;
-        }
-        QDir series(root.filePath(name));
-        if (series.exists(QStringLiteral("raw-s21.h5"))
-            && !series.exists(QStringLiteral("report.pdf"))) {
-            m_unfinishedSeries = series.absolutePath();
-            break;
-        }
-    }
-    m_measure->setUnfinishedSeriesHint(m_unfinishedSeries);
-}
-
 void MainWindow::onApplyVnaSettings()
 {
     QMetaObject::invokeMethod(
@@ -943,11 +778,6 @@ void MainWindow::onApplyControllerSettings()
 void MainWindow::onProbeVna()
 {
     beginVnaProbe(false);
-}
-
-void MainWindow::onConnectAndMeasureVna()
-{
-    beginVnaProbe(true);
 }
 
 void MainWindow::beginVnaProbe(bool measureAfterSuccess)
@@ -1027,18 +857,3 @@ void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
     }
 }
 
-void MainWindow::onResumeSeries()
-{
-    scanUnfinishedSeries();
-    if (m_unfinishedSeries.isEmpty()) {
-        QMessageBox::information(
-            this, QStringLiteral("Восстановление"),
-            QStringLiteral("Незакрытая серия не найдена в каталоге данных."));
-        return;
-    }
-    m_start->setEnabled(false);
-    m_pause->setEnabled(false);
-    m_stop->setEnabled(false);
-    QMetaObject::invokeMethod(m_worker, "prepareRecovery", Qt::QueuedConnection,
-                              Q_ARG(QString, m_unfinishedSeries));
-}

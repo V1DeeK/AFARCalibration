@@ -29,6 +29,8 @@ public:
 
     /// Содержимое окошка «Тех. состояние» (параметры платы).
     void setTechPage(QWidget* page);
+    /// Дополнительный раздел под параметрами платы (очередь ошибок SCPI).
+    void addTechSection(QWidget* section);
     [[nodiscard]] PsPacketPage* packetPage() const { return m_packetPage; }
     [[nodiscard]] FullScanPanel* fullScan() const { return m_fullScan; }
     /// Открыть модальное окно «Журнал».

@@ -28,6 +28,8 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QTabBar>
+#include <QTabWidget>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QVBoxLayout>
@@ -78,82 +80,24 @@ qsizetype nearestFrequencyIndex(const QVector<double>& frequency, double value)
 MeasureTab::MeasureTab(QWidget* parent)
     : QWidget(parent)
 {
-    auto* root = new QHBoxLayout(this);
+    auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
 
-    auto* navigation = new QWidget(this);
-    navigation->setMinimumWidth(190);
-    navigation->setMaximumWidth(230);
-    auto* navigationLayout = new QVBoxLayout(navigation);
-    navigationLayout->setContentsMargins(0, 0, 8, 0);
-    auto* modeLabel = new QLabel(QStringLiteral("Режим работы"), navigation);
-    modeLabel->setStyleSheet(QStringLiteral("font-weight: 700;"));
-    m_workMode = new QComboBox(navigation);
-    m_workMode->setObjectName(QStringLiteral("measurementWorkMode"));
-    // Узкая колонка: длинные названия режимов видны в раскрывающемся списке, а сам выбор не растягивает колонку.
-    m_workMode->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    m_workMode->setMinimumContentsLength(16);
-    m_workMode->addItem(QStringLiteral("Двухпортовое устройство"));
-    m_workMode->addItem(QStringLiteral("Демо: калибровка канала 64×64"));
-    m_workMode->addItem(
-        QStringLiteral("Реальная калибровка 64×64 — нет контроллера"));
-    if (auto* model = qobject_cast<QStandardItemModel*>(m_workMode->model())) {
-        if (auto* realMode = model->item(2)) {
-            realMode->setFlags(realMode->flags() & ~Qt::ItemIsEnabled);
-            realMode->setToolTip(QStringLiteral(
-                "Контроллер изделия отсутствует. Используйте деморежим."));
-        }
-    }
-    m_workMode->view()->setMinimumWidth(360);
-    // «Режим работы» живёт в отдельном окошке сверху вкладки (MainWindow берёт его через workModeCombo()).
-    modeLabel->hide();
-    m_workMode->setParent(this);
+    // Калибровка и подготовка серии — вкладки карточки сверху (её ставит MainWindow через calibrationPanel()).
+    m_calTabs = new QTabWidget(this);
+    m_calTabs->setObjectName(QStringLiteral("calibrationTabs"));
+    // Все шесть вкладок всегда видны: тесной рамке уступает ширина карточки (страница прокручивается), а не кнопки вкладок.
+    m_calTabs->setUsesScrollButtons(false);
+    m_calTabs->tabBar()->setElideMode(Qt::ElideNone);
+    m_calTabs->addTab(makeCalPage(), QStringLiteral("Калибровка"));
+    m_calTabs->addTab(makeLinearityPage(), QStringLiteral("Линейность"));
+    m_calTabs->addTab(makeSweepPage(), QStringLiteral("Перебор кодов"));
+    m_calTabs->addTab(makeDirectPage(), QStringLiteral("Прямая LUT"));
+    m_calTabs->addTab(makeInversePage(), QStringLiteral("Обратная LUT"));
+    m_calTabs->addTab(makeValidationPage(), QStringLiteral("Валидация"));
 
-    m_stages = new QListWidget(this);
-    const QStringList stages = {
-        QStringLiteral("1 Подключения"),
-        QStringLiteral("2 Калибровка ВАЦ (OSL/SOLT)"),
-        QStringLiteral("3 Линейность"),
-        QStringLiteral("4 Перебор кодов"),
-        QStringLiteral("5 Прямая LUT"),
-        QStringLiteral("6 Обратная LUT"),
-        QStringLiteral("7 Валидация"),
-        QStringLiteral("8 Графики"),
-    };
-    m_stages->addItems(stages);
-    m_stages->setCurrentRow(0);
-    m_stages->setObjectName(QStringLiteral("measurementStages"));
-    connect(m_stages, &QListWidget::currentRowChanged, this, &MeasureTab::onStageClicked);
-    navigationLayout->addWidget(m_stages, 1);
-
-    m_stack = new QStackedWidget(this);
-    m_stack->setObjectName(QStringLiteral("measurementStageStack"));
-    m_stack->addWidget(makeConnectionsPage());
-    m_stack->addWidget(makeCalPage());
-    m_stack->addWidget(makeLinearityPage());
-    m_stack->addWidget(makeSweepPage());
-    m_stack->addWidget(makeDirectPage());
-    m_stack->addWidget(makeInversePage());
-    m_stack->addWidget(makeValidationPage());
-    m_stack->addWidget(makeGraphsPage());
-
-    // График — стартовая рабочая страница вкладки «Измерение».
-    m_stages->setCurrentRow(7);
-    m_stack->setCurrentIndex(7);
-
-    auto applyWorkMode = [this](int mode) {
-        const bool channelMode = mode == 1;
-        if (!channelMode) {
-            m_stages->setCurrentRow(7);
-        }
-        emit workModeChanged(channelMode);
-    };
-    connect(m_workMode, qOverload<int>(&QComboBox::currentIndexChanged), this,
-            applyWorkMode);
-    applyWorkMode(0);
-
-    root->addWidget(navigation);
-    root->addWidget(m_stack, 1);
+    // Внизу остаётся только окно с графиками.
+    root->addWidget(makeGraphsPage(), 1);
 
     // UI-303 / пресет @1296: 1246…1346 МГц, 101 точка, IFBW 1 кГц.
     applyRunConfigDefaults(1.246e9, 1.346e9, 101, 1000, -30.0, 8);
@@ -162,47 +106,6 @@ MeasureTab::MeasureTab(QWidget* parent)
                        QStringLiteral("inverse-lut.parquet"), QStringLiteral("report.pdf"),
                        QStringLiteral("manifest.sha256"));
     setRunStateGuide(static_cast<int>(afar::RunState::Idle));
-}
-
-QWidget* MeasureTab::makeConnectionsPage()
-{
-    auto* page = new QWidget(this);
-    auto* layout = new QVBoxLayout(page);
-
-    auto* title = new QLabel(QStringLiteral("Этап 1. Подключения и мастер запуска"), page);
-    title->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700;"));
-
-    m_connectHow = new QLabel(
-        QStringLiteral(
-            "Как запустить серию:\n"
-            "1. «Мастер запуска» — чеклист подключений и калибровки ВАЦ в S2VNA.\n"
-            "2. На каждом шаге — «Подтверждаю», затем «Далее» / «Готово».\n"
-            "3. Зелёная «Старт» — перебор кодов. Смотрите бейдж «Источник: …» "
-            "(имитатор ≠ метрология стенда).\n"
-            "Частоты и точки свипа — на этапе «4 Перебор кодов»."),
-        page);
-    m_connectHow->setWordWrap(true);
-    m_connectHow->setObjectName(QStringLiteral("hintLabel"));
-
-    auto* openWizard = new QPushButton(QStringLiteral("Открыть мастер запуска"), page);
-    openWizard->setObjectName(QStringLiteral("btnPrimary"));
-    connect(openWizard, &QPushButton::clicked, this, &MeasureTab::openWizardRequested);
-
-    auto* resume = new QPushButton(QStringLiteral("Продолжить незакрытую серию"), page);
-    resume->setObjectName(QStringLiteral("btnResume"));
-    connect(resume, &QPushButton::clicked, this, &MeasureTab::resumeSeriesRequested);
-
-    m_unfinished = new QLabel(QStringLiteral("Незакрытая серия не найдена."), page);
-    m_unfinished->setWordWrap(true);
-    m_unfinished->setObjectName(QStringLiteral("hintLabel"));
-
-    layout->addWidget(title);
-    layout->addWidget(m_connectHow);
-    layout->addWidget(openWizard);
-    layout->addWidget(resume);
-    layout->addWidget(m_unfinished);
-    layout->addStretch(1);
-    return page;
 }
 
 QWidget* MeasureTab::makeCalPage()
@@ -244,8 +147,10 @@ QWidget* MeasureTab::makeCalPage()
     auto* kindRow = new QHBoxLayout();
     auto* kindLabel = new QLabel(QStringLiteral("Тип калибровки:"), page);
     m_calKind = new QComboBox(page);
-    m_calKind->addItem(QStringLiteral("1-портовая (OSL)"), 0);
-    m_calKind->addItem(QStringLiteral("2-портовая (SOLT)"), 1);
+    m_calKind->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_calKind->setMinimumContentsLength(18);
+    m_calKind->addItem(QStringLiteral("1-портовая калибровка (OSL)"), 0);
+    m_calKind->addItem(QStringLiteral("2-портовая калибровка (SOLT)"), 1);
     m_calKind->setCurrentIndex(1); // прежнее поведение по умолчанию
     connect(m_calKind, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &MeasureTab::onCalKindChanged);
@@ -267,6 +172,10 @@ QWidget* MeasureTab::makeCalPage()
     portRow->addWidget(m_calPortLabel);
     portRow->addWidget(m_calPort, 1);
 
+    m_calSteps = new QLabel(page);
+    m_calSteps->setObjectName(QStringLiteral("calibrationSteps"));
+    m_calSteps->setTextFormat(Qt::PlainText);
+    m_calSteps->setWordWrap(true);
     m_soltStepLabel = new QLabel(page);
     m_soltStepLabel->setStyleSheet(QStringLiteral("font-weight: 600;"));
     m_soltHint = new QLabel(page);
@@ -294,17 +203,20 @@ QWidget* MeasureTab::makeCalPage()
     m_calText->setWordWrap(true);
     m_calText->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
-    layout->addWidget(title);
-    layout->addWidget(transportNote);
+    // Заголовок и пояснение — подсказкой: карточка «Калибровка ВАЦ» уже подписана.
+    title->hide();
+    transportNote->hide();
+    page->setToolTip(transportNote->text());
     layout->addLayout(kitRow);
     layout->addLayout(kindRow);
     layout->addWidget(m_calKindHint);
     layout->addLayout(portRow);
+    layout->addWidget(m_calSteps);
     layout->addWidget(m_soltStepLabel);
     layout->addWidget(m_soltHint);
     layout->addLayout(btnRow);
     layout->addWidget(m_calExtraGroup);
-    layout->addWidget(m_calText);
+    m_calText->hide();  // сводка мастера запуска больше не нужна: мастера нет
     layout->addStretch(1);
     onCalKindChanged(m_calKind->currentIndex());
     return page;
@@ -572,12 +484,6 @@ QWidget* MeasureTab::makeGraphsPage()
     sideLayout->setContentsMargins(8, 0, 0, 0);
     sideLayout->setSpacing(10);
 
-    auto* readLive = new QPushButton(QStringLiteral("Подключить C2220 и измерить всё"), side);
-    readLive->setObjectName(QStringLiteral("btnPrimary"));
-    readLive->setToolTip(QStringLiteral(
-        "Проверить связь и измерить S11/S21/S12/S22 по настройкам нашей программы"));
-    connect(readLive, &QPushButton::clicked, this, &MeasureTab::connectAndMeasureRequested);
-
     auto* measureAll = new QPushButton(QStringLiteral("Применить настройки и измерить всё"), side);
     measureAll->setToolTip(QStringLiteral(
         "Считать S11, S21, S12 и S22; КСВН-1 вычисляется из S11, КСВН-2 — из S22"));
@@ -710,7 +616,6 @@ QWidget* MeasureTab::makeGraphsPage()
     actionBox->setObjectName(QStringLiteral("graphActionBox"));
     auto* actionLayout = new QVBoxLayout(actionBox);
     actionLayout->setSpacing(8);
-    actionLayout->addWidget(readLive);
     actionLayout->addWidget(measureAll);
     actionLayout->addWidget(m_exportTwoPort);
     actionLayout->addWidget(openSweepSettings);
@@ -1055,12 +960,6 @@ void MeasureTab::calculateGraphExpression()
     refreshMarkerTerminal();
 }
 
-void MeasureTab::onStageClicked(int row)
-{
-    if (row >= 0 && row < m_stack->count()) {
-        m_stack->setCurrentIndex(row);
-    }
-}
 
 void MeasureTab::applyRunConfigDefaults(double fStartHz,
                                         double fStopHz,
@@ -1100,12 +999,10 @@ void MeasureTab::applyRunConfigDefaults(double fStartHz,
 
 void MeasureTab::setStageHighlight(int stageIndex0)
 {
-    if (stageIndex0 >= 0 && stageIndex0 < m_stages->count()) {
-        if (stageIndex0 != 0 && stageIndex0 != 1 && stageIndex0 != 3 && stageIndex0 != 7
-            && m_workMode != nullptr) {
-            m_workMode->setCurrentIndex(1);
-        }
-        m_stages->setCurrentRow(stageIndex0);
+    // Этапы 2…7 — вкладки калибровочной панели; 1 (подключения) и 8 (графики) своих вкладок не имеют.
+    const int tab = stageIndex0 - 1;
+    if (tab >= 0 && tab < m_calTabs->count()) {
+        m_calTabs->setCurrentIndex(tab);
     }
 }
 
@@ -1335,6 +1232,16 @@ void MeasureTab::refreshSoltUi()
     }
     const bool one = isOnePortCal();
     const QString kindName = one ? QStringLiteral("OSL") : QStringLiteral("SOLT");
+    // Все шаги выбранной калибровки: ✓ выполнен, ▶ текущий, ○ впереди.
+    QStringList lines;
+    for (int step = 0; step <= apply; ++step) {
+        const QString mark = step < m_soltStep ? QStringLiteral("✓")
+                             : step == m_soltStep ? QStringLiteral("▶") : QStringLiteral("○");
+        lines << QStringLiteral("%1  %2").arg(mark, calStepTitle(step));
+    }
+    if (m_calSteps) {
+        m_calSteps->setText(lines.join(QLatin1Char('\n')));
+    }
     if (m_calPort) {
         m_calPort->setEnabled(one && !m_soltBusy && m_soltStep == 0);
     }
@@ -1661,18 +1568,6 @@ void MeasureTab::setRunStateGuide(int runState)
         break;
     }
     m_nextHint->setText(next);
-}
-
-void MeasureTab::setUnfinishedSeriesHint(const QString& path)
-{
-    if (path.isEmpty()) {
-        m_unfinished->setText(QStringLiteral("Незакрытая серия не найдена."));
-    } else {
-        m_unfinished->setText(
-            QStringLiteral("Найдена незакрытая серия (нет report.pdf):\n%1\n"
-                           "Нажмите «Продолжить незакрытую серию» (FR-12).")
-                .arg(path));
-    }
 }
 
 double MeasureTab::fStartHz() const

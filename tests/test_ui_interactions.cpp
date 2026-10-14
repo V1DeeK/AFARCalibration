@@ -4,6 +4,7 @@
 #include "AcceptanceAtTab.h"
 #include "ConnectionBar.h"
 #include "MeasureTab.h"
+#include <QTabWidget>
 #include "S21PlotWidget.h"
 #include "StartWizard.h"
 
@@ -109,24 +110,9 @@ TEST_CASE("filter readiness is separate from the series controller", "[ui]")
     REQUIRE_FALSE(controller->text().contains(QStringLiteral("нет связи")));
 }
 
-TEST_CASE("work modes distinguish passive demo and unavailable real calibration", "[ui][modes]")
+TEST_CASE("controller backends: PS of the product is available", "[ui][modes]")
 {
-    MeasureTab tab;
-    auto* modes = tab.findChild<QComboBox*>(QStringLiteral("measurementWorkMode"));
-    REQUIRE(modes != nullptr);
-    REQUIRE(modes->count() == 3);
-    CHECK(modes->itemText(0).contains(QStringLiteral("Двухпортовое")));
-    CHECK(modes->itemText(1).contains(QStringLiteral("Демо")));
-    CHECK(modes->itemText(2).contains(QStringLiteral("нет контроллера")));
-
-    auto* model = qobject_cast<QStandardItemModel*>(modes->model());
-    REQUIRE(model != nullptr);
-    REQUIRE(model->item(0) != nullptr);
-    CHECK(model->item(0)->isEnabled());
-    REQUIRE(model->item(2) != nullptr);
-    CHECK_FALSE(model->item(2)->isEnabled());
-    CHECK(model->item(2)->toolTip().contains(QStringLiteral("Контроллер изделия отсутствует")));
-
+    (void)application();
     ConnectionBar bar;
     auto* controllers = bar.findChild<QComboBox*>(QStringLiteral("controllerBackend"));
     REQUIRE(controllers != nullptr);
@@ -140,21 +126,14 @@ TEST_CASE("work modes distinguish passive demo and unavailable real calibration"
     CHECK(controllerModel->item(psRow)->isEnabled());
 }
 
-TEST_CASE("VNA timeouts are collapsed until the engineer expands them", "[ui]")
+TEST_CASE("VNA timeouts have no UI and keep their defaults", "[ui]")
 {
     (void)application();
     ConnectionBar bar;
-    auto* box = bar.findChild<QGroupBox*>(QStringLiteral("vnaTimeoutsBox"));
-    auto* body = bar.findChild<QWidget*>(QStringLiteral("vnaTimeoutsBody"));
-    REQUIRE(box != nullptr);
-    REQUIRE(body != nullptr);
-    REQUIRE_FALSE(box->isChecked());
-    REQUIRE(body->isHidden());
-
-    box->setChecked(true);
-    REQUIRE_FALSE(body->isHidden());
-    box->setChecked(false);
-    REQUIRE(body->isHidden());
+    bar.show();
+    REQUIRE(bar.findChild<QGroupBox*>(QStringLiteral("vnaTimeoutsBox")) == nullptr);
+    REQUIRE(bar.vnaConnectTimeoutMs() == 3000);
+    REQUIRE(bar.vnaSweepTimeoutMs() == 30000);
 }
 
 TEST_CASE("connection cards are always visible", "[ui]")
@@ -359,20 +338,21 @@ TEST_CASE("two-port mode, center-span entry and report action are explicit", "[u
     (void)application();
     MeasureTab tab;
 
-    auto* workMode = tab.findChild<QComboBox*>(QStringLiteral("measurementWorkMode"));
-    auto* stages = tab.findChild<QListWidget*>(QStringLiteral("measurementStages"));
-    auto* stack = tab.findChild<QStackedWidget*>(QStringLiteral("measurementStageStack"));
-    REQUIRE(workMode != nullptr);
-    REQUIRE(stages != nullptr);
-    REQUIRE(stack != nullptr);
-    REQUIRE(workMode->currentIndex() == 0);
-    for (const int stage : {2, 4, 5, 6}) {
-        REQUIRE(stages->item(stage)->flags().testFlag(Qt::ItemIsEnabled));
-        stages->setCurrentRow(stage);
-        REQUIRE(stack->currentIndex() == stage);
+    // Слева нет списка этапов, режима работы и мастера; этапы — вкладки калибровочной панели.
+    REQUIRE(tab.findChild<QComboBox*>(QStringLiteral("measurementWorkMode")) == nullptr);
+    REQUIRE(tab.findChild<QListWidget*>(QStringLiteral("measurementStages")) == nullptr);
+    auto* calTabs = tab.calibrationPanel();
+    REQUIRE(calTabs != nullptr);
+    REQUIRE(calTabs->count() == 6);
+    QStringList titles;
+    for (int i = 0; i < calTabs->count(); ++i) {
+        titles << calTabs->tabText(i);
     }
-    workMode->setCurrentIndex(1);
-    REQUIRE(stages->item(4)->flags().testFlag(Qt::ItemIsEnabled));
+    REQUIRE(titles == QStringList{QStringLiteral("Калибровка"), QStringLiteral("Линейность"),
+                                  QStringLiteral("Перебор кодов"), QStringLiteral("Прямая LUT"),
+                                  QStringLiteral("Обратная LUT"), QStringLiteral("Валидация")});
+    tab.setStageHighlight(4);  // этап 5 «Прямая LUT»
+    REQUIRE(calTabs->currentIndex() == 3);
 
     tab.applyRunConfigDefaults(1.26e9, 1.35e9, 201, 1000, -20.0, 8);
     auto* entryMode = tab.findChild<QComboBox*>(QStringLiteral("frequencyEntryMode"));

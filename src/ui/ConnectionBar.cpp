@@ -58,6 +58,11 @@ QString formatScpiErrorLine(const QString& raw)
 
 }  // namespace
 
+void ConnectionBar::setMiddleWidget(QWidget* widget)
+{
+    m_cards->insertWidget(1, widget, 8);
+}
+
 ConnectionBar::ConnectionBar(QWidget* parent)
     : QFrame(parent)
 {
@@ -161,11 +166,11 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     vnaLayout->addWidget(m_probe);
     vnaLayout->addStretch(1);
 
-    // --- Контроллер изделия (PS изделия или демо) ---
-    auto* ctrlBox = new QGroupBox(QStringLiteral("Контроллер изделия"), this);
-    ctrlBox->setObjectName(QStringLiteral("controllerBox"));
-    auto* ctrlLayout = new QVBoxLayout(ctrlBox);
-    ctrlLayout->setSpacing(ui::kInnerGap);
+    // --- Контроллер изделия и состояние: одна карточка справа ---
+    auto* stateBox = new QGroupBox(QStringLiteral("Контроллер и состояние"), this);
+    stateBox->setObjectName(QStringLiteral("stateBox"));
+    auto* stateLayout = new QVBoxLayout(stateBox);
+    stateLayout->setSpacing(ui::kInnerGap);
     m_ctrlBackend = new QComboBox(this);
     m_ctrlBackend->setObjectName(QStringLiteral("controllerBackend"));
     m_ctrlBackend->addItem(QStringLiteral("Демо-контроллер (DutSimulator)"), 0);
@@ -187,38 +192,31 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     dutFields->addWidget(m_dutHost, 1, 0);
     dutFields->addWidget(m_dutPort, 1, 1);
     dutFields->setColumnStretch(0, 1);
-    ctrlLayout->addWidget(caption(QStringLiteral("Контроллер")));
-    ctrlLayout->addWidget(m_ctrlBackend);
-    ctrlLayout->addLayout(dutFields);
-    ctrlLayout->addWidget(caption(QStringLiteral("COM-порт")));
-    ctrlLayout->addWidget(m_dutCom);
-    ctrlLayout->addWidget(m_controller);
-    ctrlLayout->addStretch(1);
-
-    // --- Состояние ---
-    auto* stateBox = new QGroupBox(QStringLiteral("Состояние"), this);
-    stateBox->setObjectName(QStringLiteral("stateBox"));
-    auto* stateLayout = new QVBoxLayout(stateBox);
-    stateLayout->setSpacing(ui::kInnerGap);
+    stateLayout->addWidget(caption(QStringLiteral("Контроллер")));
+    stateLayout->addWidget(m_ctrlBackend);
+    stateLayout->addLayout(dutFields);
+    stateLayout->addWidget(caption(QStringLiteral("COM-порт")));
+    stateLayout->addWidget(m_dutCom);
+    stateLayout->addWidget(m_controller);
     stateLayout->addWidget(m_source);
     stateLayout->addWidget(m_temperature);
     stateLayout->addWidget(m_status);
     stateLayout->addStretch(1);
 
-    auto* cards = new QHBoxLayout;
-    cards->setSpacing(ui::kGap);
-    cards->addWidget(vnaBox, 3);
-    cards->addWidget(ctrlBox, 3);
-    cards->addWidget(stateBox, 2);
-    root->addLayout(cards);
+    // Посередине MainWindow ставит карточку «Калибровка ВАЦ» (setMiddleWidget).
+    m_cards = new QHBoxLayout;
+    m_cards->setSpacing(ui::kGap);
+    m_cards->addWidget(vnaBox, 2);
+    m_cards->addWidget(stateBox, 2);
+    root->addLayout(m_cards);
     disableCombatControllerItem();
 
-    m_diagnostic = new QLabel(this);
+    m_diagnostic = new QLabel(vnaBox);
     m_diagnostic->setWordWrap(true);
     m_diagnostic->setVisible(false);
     m_diagnostic->setProperty("role", QStringLiteral("status"));
     ui::setTone(m_diagnostic, ui::Tone::Warn);
-    root->addWidget(m_diagnostic);
+    vnaLayout->insertWidget(vnaLayout->count() - 1, m_diagnostic);
 
     // UI-ERR-001: немодальная очередь SCPI (не QMessageBox).
     m_scpiPanel = new QWidget(this);
@@ -243,38 +241,19 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_scpiPanel->setVisible(false);
     root->addWidget(m_scpiPanel);
 
-    // UI-TO-001: инженерные тайм-ауты → QSettings → C2220Vna::Profile.
-    m_timeoutsBox = new QGroupBox(QStringLiteral("Инженер: тайм-ауты VNA"), this);
-    m_timeoutsBox->setObjectName(QStringLiteral("vnaTimeoutsBox"));
-    m_timeoutsBox->setCheckable(true);
-    m_timeoutsBox->setChecked(false);
-    m_timeoutsBox->setFlat(true);
-    auto* timeoutLayout = new QVBoxLayout(m_timeoutsBox);
-    timeoutLayout->setContentsMargins(8, 4, 8, 4);
-    auto* timeoutBody = new QWidget(m_timeoutsBox);
-    timeoutBody->setObjectName(QStringLiteral("vnaTimeoutsBody"));
-    auto* toForm = new QFormLayout(timeoutBody);
-    toForm->setContentsMargins(8, 8, 8, 4);
-    toForm->setHorizontalSpacing(10);
-    m_connectMs = new QSpinBox(m_timeoutsBox);
+    // UI-TO-001: тайм-ауты VNA не показываются; значения берутся из QSettings (vna/*) и уходят в C2220Vna::Profile.
+    m_connectMs = new QSpinBox(this);
     m_connectMs->setRange(100, 120000);
-    m_connectMs->setSingleStep(100);
-    m_connectMs->setSuffix(QStringLiteral(" мс"));
     m_connectMs->setValue(3000);
-    m_sweepMs = new QSpinBox(m_timeoutsBox);
+    m_sweepMs = new QSpinBox(this);
     m_sweepMs->setRange(1000, 600000);
-    m_sweepMs->setSingleStep(1000);
-    m_sweepMs->setSuffix(QStringLiteral(" мс"));
     m_sweepMs->setValue(30000);
-    m_retries = new QSpinBox(m_timeoutsBox);
+    m_retries = new QSpinBox(this);
     m_retries->setRange(0, 10);
     m_retries->setValue(2);
-    toForm->addRow(QStringLiteral("connect_ms"), m_connectMs);
-    toForm->addRow(QStringLiteral("sweep_ms"), m_sweepMs);
-    toForm->addRow(QStringLiteral("retries"), m_retries);
-    timeoutLayout->addWidget(timeoutBody);
-    timeoutBody->setVisible(false);
-    root->addWidget(m_timeoutsBox);
+    for (QSpinBox* spin : {m_connectMs, m_sweepMs, m_retries}) {
+        spin->hide();
+    }
 
     connect(m_backend, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConnectionBar::onBackendChanged);
@@ -298,7 +277,6 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     connect(m_scpiClear, &QPushButton::clicked, this, &ConnectionBar::clearScpiErrorQueue);
     connect(m_scpiSimulate, &QPushButton::clicked, this,
             &ConnectionBar::simulateScpiErrorRequested);
-    connect(m_timeoutsBox, &QGroupBox::toggled, timeoutBody, &QWidget::setVisible);
     connect(m_connectMs, &QSpinBox::editingFinished, this, &ConnectionBar::emitTimeoutsChanged);
     connect(m_sweepMs, &QSpinBox::editingFinished, this, &ConnectionBar::emitTimeoutsChanged);
     connect(m_retries, &QSpinBox::editingFinished, this, &ConnectionBar::emitTimeoutsChanged);

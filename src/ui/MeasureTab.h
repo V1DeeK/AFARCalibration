@@ -18,6 +18,7 @@ class QProgressBar;
 class QPushButton;
 class QSpinBox;
 class QStackedWidget;
+class QTabWidget;
 class S21PlotWidget;
 
 /// Вкладка «Измерение» (UI-02 / UI-004): этапы слева переключают центр.
@@ -91,7 +92,6 @@ public:
                                     int attCode,
                                     int phaseCode);
     void setRunStateGuide(int runState);
-    void setUnfinishedSeriesHint(const QString& path);
     void setVnaCalibrationIdHint(const QString& id);
     void setMeasureNowEnabled(bool enabled);
     void setTwoPortExportEnabled(bool enabled);
@@ -104,8 +104,9 @@ public:
     [[nodiscard]] int ifbwHz() const;
     [[nodiscard]] double powerDbm() const;
     [[nodiscard]] int averages() const;
-    /// Выбор режима работы: выносится в отдельное окошко над вкладками.
-    [[nodiscard]] QComboBox* workModeCombo() const { return m_workMode; }
+    /// Вкладки «Калибровка ВАЦ», «Линейность», «Перебор кодов», LUT и «Валидация»:
+    /// MainWindow ставит их в карточку над графиками.
+    [[nodiscard]] QTabWidget* calibrationPanel() const { return m_calTabs; }
     [[nodiscard]] QString reportDeviceName() const;
     [[nodiscard]] QString reportDeviceSerial() const;
     [[nodiscard]] QString reportOperatorName() const;
@@ -117,19 +118,14 @@ public:
     }
 
 signals:
-    void openWizardRequested();
-    void resumeSeriesRequested();
     /// UI-MEAS-001: разовый съём без серии.
     void measureNowRequested();
-    void connectAndMeasureRequested();
     void exportTwoPortRequested();
-    void workModeChanged(bool channelCalibrationMode);
     /// CAL-UI: 0 = one-port OSL, 1 = two-port SOLT; step — enum как int; port 1|2 (для two-port игнор).
     void calibrateStepRequested(int kind, int step, int port);
     void selectCalibrationKitRequested(int index);
 
 private slots:
-    void onStageClicked(int row);
     void onFreqSpinChanged();
     void onFreqUnitChanged();
     void onCenterSpanSpinChanged();
@@ -142,7 +138,6 @@ private slots:
     void onCalKindChanged(int index);
 
 private:
-    QWidget* makeConnectionsPage();
     QWidget* makeCalPage();
     QWidget* makeLinearityPage();
     QWidget* makeSweepPage();
@@ -168,9 +163,6 @@ private:
     [[nodiscard]] int calStepCount() const;
     [[nodiscard]] bool isOnePortCal() const;
 
-    QListWidget* m_stages = nullptr;
-    QStackedWidget* m_stack = nullptr;
-    QComboBox* m_workMode = nullptr;
 
     QComboBox* m_frequencyEntryMode = nullptr;
     QWidget* m_fStartRow = nullptr;
@@ -203,14 +195,13 @@ private:
     QLabel* m_eta = nullptr;
     QLabel* m_counter = nullptr;
 
-    QLabel* m_connectHow = nullptr;
-    QLabel* m_unfinished = nullptr;
     QLabel* m_calText = nullptr;
     QLabel* m_calKindHint = nullptr;
     QComboBox* m_calKind = nullptr;
     QComboBox* m_calPort = nullptr;
     QSpinBox* m_calKit = nullptr;
     QLabel* m_calPortLabel = nullptr;
+    QLabel* m_calSteps = nullptr;
     QLabel* m_soltStepLabel = nullptr;
     QLabel* m_soltHint = nullptr;
     QPushButton* m_soltConfirm = nullptr;
@@ -238,6 +229,8 @@ private:
     QLabel* m_validFragment = nullptr;
     S21PlotWidget* m_lutPlot = nullptr;
     QLabel* m_lutPlotCaption = nullptr;
+
+    QTabWidget* m_calTabs = nullptr;
 
     std::array<QVector<double>, 6> m_graphFreqGhz;
     std::array<QVector<double>, 6> m_graphMag;

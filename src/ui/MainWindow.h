@@ -35,10 +35,6 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private slots:
-    void onOpenWizard();
-    void onStart();
-    void onPause();
-    void onStop();
     void onPrepareFinished(bool ok, const QString& diagnostics);
     void onStateChanged(int state, const QString& russianText, const QString& colorName);
     void onConnectionChanged(const QString& vnaModel,
@@ -74,11 +70,9 @@ private slots:
                             const QVector<double>& magDb,
                             const QVector<double>& phaseUnwrapDeg);
     void onToggleTheme();
-    void onResumeSeries();
     void onApplyVnaSettings();
     void onApplyControllerSettings();
     void onProbeVna();
-    void onConnectAndMeasureVna();
     void onProbeFinished(bool ok, const QString& idnOrError);
     void refreshDataSourceBadge(bool probeOk = false, const QString& idnOrError = {});
     void onEtaChanged(const QString& text);
@@ -126,13 +120,11 @@ private slots:
 private:
     void loadExampleDefaults();
     void refreshThemeButton();
-    void scanUnfinishedSeries();
     void beginVnaProbe(bool measureAfterSuccess);
     void setOperationProgress(const QString& text, qint64 completed, qint64 total);
     void updateModuleStatus();
     [[nodiscard]] QString defaultDataRoot() const;
 
-    QString m_unfinishedSeries;
     SpectrumEngine* m_spectrumEngine = nullptr;
 
     ConnectionBar* m_connections = nullptr;
@@ -148,10 +140,6 @@ private:
     SpectrumOpenGLWidget* m_spectrum = nullptr;
     TestRunTab* m_testRun = nullptr;
     PsServiceCheckPage* m_psCheck = nullptr;
-    QPushButton* m_wizardBtn = nullptr;
-    QPushButton* m_start = nullptr;
-    QPushButton* m_pause = nullptr;
-    QPushButton* m_stop = nullptr;
     QLabel* m_operationText = nullptr;
     QProgressBar* m_operationProgress = nullptr;
     QLabel* m_moduleStatus = nullptr;

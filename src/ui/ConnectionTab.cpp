@@ -303,6 +303,12 @@ void ConnectionTab::setTechPage(QWidget* page)
     m_techBody->layout()->addWidget(page);
 }
 
+void ConnectionTab::addTechSection(QWidget* section)
+{
+    section->setParent(m_techBody);
+    m_techBody->layout()->addWidget(section);
+}
+
 void ConnectionTab::openJournal()
 {
     m_journal->open();
