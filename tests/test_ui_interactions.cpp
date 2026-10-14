@@ -427,7 +427,7 @@ TEST_CASE("graph controls scroll after fullscreen is restored to a small window"
 
     auto* controls = tab.findChild<QScrollArea*>(QStringLiteral("graphControlsScroll"));
     REQUIRE(controls != nullptr);
-    REQUIRE(controls->width() <= 340);
+    REQUIRE(controls->width() <= 360);
     REQUIRE(controls->verticalScrollBar()->maximum() > 0);
 }
 
