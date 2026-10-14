@@ -140,7 +140,10 @@ void SpectrumRenderer::renderFrame(float width, float height, float devicePixelR
             ImPlot::StyleColorsDark();
         }
         ImGui::GetStyle().WindowRounding = 0.0f;
-        ImGui::GetStyle().FrameRounding  = 3.0f;
+        ImGui::GetStyle().FrameRounding  = 5.0f;
+        ImGui::GetStyle().ChildRounding  = 8.0f;
+        ImGui::GetStyle().ChildBorderSize = 1.0f;
+        ImGui::GetStyle().ItemSpacing    = ImVec2(8.0f, 6.0f);
     }
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(width, height);
@@ -195,34 +198,33 @@ void SpectrumRenderer::render_page_navigation() {
         text("Пеленгация", "Direction finding"),
         text("История фазы Rx1/Rx2", "Rx1/Rx2 phase history")
     };
-    if (!ImGui::BeginTable("##spectrum_pages", 4, ImGuiTableFlags_SizingStretchSame))
-        return;
-
-    ImGui::TableSetupColumn("##page_spectrum", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    ImGui::TableSetupColumn("##page_peleng", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    ImGui::TableSetupColumn("##page_phase", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    ImGui::TableSetupColumn("##language", ImGuiTableColumnFlags_WidthFixed, 130.0f);
-    ImGui::TableNextRow();
-
+    // Вкладки-кнопки: активная залита акцентным цветом, остальные — спокойные, со скруглением.
+    const ImVec4 accent = light_theme_ ? ImVec4(0.04f, 0.45f, 0.95f, 1.0f) : ImVec4(0.20f, 0.52f, 0.92f, 1.0f);
+    const ImVec4 idle = light_theme_ ? ImVec4(0.88f, 0.89f, 0.91f, 1.0f) : ImVec4(0.18f, 0.19f, 0.21f, 1.0f);
+    const ImVec4 idleHover = light_theme_ ? ImVec4(0.80f, 0.83f, 0.88f, 1.0f) : ImVec4(0.25f, 0.27f, 0.30f, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(18.0f, 7.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
     for (int index = 0; index < 3; ++index) {
-        ImGui::TableNextColumn();
-        const auto page = static_cast<Page>(index);
-        const float button_width = ImGui::GetContentRegionAvail().x;
-        if (ImGui::Selectable(labels[index], active_page_ == page, 0,
-                              ImVec2(button_width, ImGui::GetFrameHeight())))
-            active_page_ = page;
+        const bool active = active_page_ == static_cast<Page>(index);
+        ImGui::PushStyleColor(ImGuiCol_Button, active ? accent : idle);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active ? accent : idleHover);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, accent);
+        ImGui::PushStyleColor(ImGuiCol_Text, active ? ImVec4(1, 1, 1, 1)
+                                                    : (light_theme_ ? ImVec4(0.1f, 0.1f, 0.12f, 1.0f)
+                                                                    : ImVec4(0.9f, 0.9f, 0.92f, 1.0f)));
+        if (index > 0)
+            ImGui::SameLine();
+        if (ImGui::Button(labels[index]))
+            active_page_ = static_cast<Page>(index);
+        ImGui::PopStyleColor(4);
     }
-    ImGui::TableNextColumn();
-    int language = language_ == Language::Russian ? 0 : 1;
-    ImGui::SetNextItemWidth(125.0f);
-    const char* languages[] = { "Русский", "English" };
-    if (ImGui::Combo("##spectrum_language", &language, languages, 2))
-        language_ = language == 0 ? Language::Russian : Language::English;
-    ImGui::EndTable();
+    ImGui::PopStyleVar(3);
 }
 
 const char* SpectrumRenderer::text(const char* russian, const char* english) const noexcept {
-    return language_ == Language::Russian ? russian : english;
+    (void)english;  // интерфейс только на русском
+    return russian;
 }
 
 void SpectrumRenderer::render_spectrum_contents() {
@@ -469,7 +471,7 @@ void SpectrumRenderer::render_waterfall() {
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
 
-    // Высота водопада — остаток по вертикали за вычетом панели звука, которая
+    // Высота спектрограммы — остаток по вертикали за вычетом панели звука, которая
     // идёт ниже и показывается только при включённой демодуляции.
     // Фиксированные 400 px переполняли окно, и нижние панели не помещались.
     float reserved = 0.0f;
@@ -482,19 +484,19 @@ void SpectrumRenderer::render_waterfall() {
     bool dual = (state_.chan_mode.load() == PlutoChannelMode::Both) && !local_waterfall2_.empty();
     if (dual) {
         float pane_w = avail.x * 0.5f - 4.0f;
-        render_waterfall_pane(text("Водопад Rx1###waterfall_rx1", "Waterfall Rx1###waterfall_rx1"), local_waterfall_, pane_w, h, freq_start, freq_stop);
+        render_waterfall_pane(text("Спектрограмма Rx1###waterfall_rx1", "Waterfall Rx1###waterfall_rx1"), local_waterfall_, pane_w, h, freq_start, freq_stop);
         ImGui::SameLine();
-        render_waterfall_pane(text("Водопад Rx2###waterfall_rx2", "Waterfall Rx2###waterfall_rx2"), local_waterfall2_, pane_w, h, freq_start, freq_stop);
+        render_waterfall_pane(text("Спектрограмма Rx2###waterfall_rx2", "Waterfall Rx2###waterfall_rx2"), local_waterfall2_, pane_w, h, freq_start, freq_stop);
     } else {
-        render_waterfall_pane(text("Водопад###waterfall", "Waterfall###waterfall"), local_waterfall_, avail.x, h, freq_start, freq_stop);
+        render_waterfall_pane(text("Спектрограмма###waterfall", "Waterfall###waterfall"), local_waterfall_, avail.x, h, freq_start, freq_stop);
     }
 }
 
-// Полоса уровня АЦП и моментов перегрузки под водопадом.
+// Полоса уровня АЦП и моментов перегрузки под спектрограммой.
 //
 // Отвечает на вопрос «когда именно зажимало»: спектр этого не показывает —
 // перегрузка размазывается по всей полосе гребёнкой гармоник и выглядит как
-// богатый сигнал, а водопад её показывает как общее посветление, которое так
+// богатый сигнал, а спектрограмма её показывает как общее посветление, которое так
 // же выглядит и при честном сильном сигнале.
 void SpectrumRenderer::render_clip_pane() {
     PlutoChannelMode mode = state_.chan_mode.load();
@@ -566,7 +568,7 @@ void SpectrumRenderer::render_clip_pane() {
 
     // Ось времени — «сколько секунд назад», отсчитывается от последнего окна:
     // абсолютное время от начала потока читателю ничего не говорит, а «две
-    // секунды назад» соотносится с тем, что он только что видел на водопаде.
+    // секунды назад» соотносится с тем, что он только что видел на спектрограмме.
     float t_end = local_clip_t_[n - 1];
     clip_x_.resize(n);
     for (int i = 0; i < n; ++i)
@@ -1487,25 +1489,33 @@ void SpectrumRenderer::render_record_section() {
 }
 
 void SpectrumRenderer::render_controls() {
-    render_status_bar();
-    ImGui::Separator();
+    // Каждая группа настроек — отдельная карточка с рамкой; карточки стоят в три колонки под графиками.
+    const ImVec4 cardBg = light_theme_ ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f) : ImVec4(0.13f, 0.14f, 0.16f, 1.0f);
+    const auto card = [&](const char* id, auto&& body) {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, cardBg);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+        if (ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY,
+                              ImGuiWindowFlags_None))
+            body();
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    };
 
-    // Две колонки: окно широкое (1400+), а секции узкие, и в один столбец они
-    // занимали почти пол-экрана по высоте, отбирая её у графиков. Слева то,
-    // что относится к приёму, справа — что делать с принятым.
-    if (ImGui::BeginTable("##controls_columns", 2,
-                          ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV)) {
+    card("##card_status", [&] { render_status_bar(); });
+
+    if (ImGui::BeginTable("##controls_columns", 3, ImGuiTableFlags_SizingStretchSame)) {
         ImGui::TableNextRow();
-
         ImGui::TableNextColumn();
-        render_device_section();
-        render_tuning_section();
-        render_display_section();
-
+        card("##card_device", [&] { render_device_section(); });
         ImGui::TableNextColumn();
-        render_demod_section();
-        render_record_section();
-
+        card("##card_tuning", [&] { render_tuning_section(); });
+        card("##card_display", [&] { render_display_section(); });
+        ImGui::TableNextColumn();
+        card("##card_demod", [&] { render_demod_section(); });
+        card("##card_record", [&] { render_record_section(); });
         ImGui::EndTable();
     }
 }

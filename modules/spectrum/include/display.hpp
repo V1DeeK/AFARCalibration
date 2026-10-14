@@ -22,7 +22,7 @@ public:
     ImGuiContext* imguiContext() const noexcept { return main_imgui_ctx_; }
     void setPage(Page page) noexcept { active_page_ = page; }
     Page page() const noexcept { return active_page_; }
-    void setLanguage(Language language) noexcept { language_ = language; }
+    void setLanguage(Language) noexcept {}  // интерфейс только на русском
     Language language() const noexcept { return language_; }
     void setLightTheme(bool light) noexcept { light_theme_ = light; theme_dirty_ = true; }
     bool lightTheme() const noexcept { return light_theme_; }

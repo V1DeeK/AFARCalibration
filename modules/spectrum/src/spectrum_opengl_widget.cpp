@@ -185,10 +185,6 @@ void SpectrumOpenGLWidget::loadSettings() {
     }
     renderer_.setPage(static_cast<SpectrumRenderer::Page>(qBound(
         0, settings.value(QStringLiteral("active_page"), 0).toInt(), 2)));
-    renderer_.setLanguage(settings.value(QStringLiteral("language"), QStringLiteral("ru")).toString()
-                                  == QStringLiteral("en")
-                              ? SpectrumRenderer::Language::English
-                              : SpectrumRenderer::Language::Russian);
     settings.endGroup();
 }
 
@@ -222,9 +218,6 @@ void SpectrumOpenGLWidget::saveSettings() const {
     settings.setValue(QStringLiteral("peleng_use_network"), state_.peleng_use_network.load());
     settings.setValue(QStringLiteral("peleng_port"), state_.peleng_net_port.load());
     settings.setValue(QStringLiteral("active_page"), static_cast<int>(renderer_.page()));
-    settings.setValue(QStringLiteral("language"),
-                      renderer_.language() == SpectrumRenderer::Language::English
-                          ? QStringLiteral("en") : QStringLiteral("ru"));
     {
         std::lock_guard<std::mutex> lock(state_.rx_cal_mutex);
         settings.setValue(QStringLiteral("calibration_path"), QString::fromStdString(state_.rx_cal_path));
