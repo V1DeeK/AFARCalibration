@@ -124,7 +124,11 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     // --- Подключение ---
     m_connectionTab = new ConnectionTab(m_psSession, m_tabs);
     m_boardPage = new BoardParametersPage(spectrumEngine,
-                                          [this] { return m_connectionTab->macText(); });
+                                          [this] { return m_connectionTab->macText(); },
+                                          [this] {
+                                              PsLink* link = m_psSession->link();
+                                              return link->isReady() ? link->host() : QString();
+                                          });
     m_connectionTab->setTechPage(m_boardPage);
     connect(m_boardPage, &BoardParametersPage::operationProgress, this,
             [this](const QString& text, int done, int total) { setOperationProgress(text, done, total); });

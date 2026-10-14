@@ -4,7 +4,10 @@
 #include <QCheckBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QFontDatabase>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSplitter>
 #include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -21,7 +24,7 @@ constexpr int kFlushMs = 100;
 
 }  // namespace
 
-PsExchangeView::PsExchangeView(PsSession* session, QWidget* parent)
+PsExchangeView::PsExchangeView(PsSession* session, QWidget* parent, bool compact)
     : QWidget(parent)
     , m_session(session)
 {
@@ -38,6 +41,12 @@ PsExchangeView::PsExchangeView(PsSession* session, QWidget* parent)
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(ColJson, QHeaderView::Stretch);
     m_table->setMinimumHeight(110);
+    if (compact) {
+        for (int col : {ColMsgCount, ColStatus, ColJson}) {
+            m_table->setColumnHidden(col, true);
+        }
+        m_table->horizontalHeader()->setSectionResizeMode(ColType, QHeaderView::Stretch);
+    }
     m_table->setAlternatingRowColors(true);
     m_table->setShowGrid(false);
 
@@ -49,8 +58,30 @@ PsExchangeView::PsExchangeView(PsSession* session, QWidget* parent)
     row->addWidget(m_showUdp);
     row->addStretch(1);
     row->addWidget(clear);
-    layout->addWidget(m_table, 1);
+    // Под таблицей — выбранное сообщение целиком: в строке таблицы JSON виден только до края окна.
+    m_detail = new QPlainTextEdit(this);
+    m_detail->setObjectName(QStringLiteral("psExchangeDetail"));
+    m_detail->setReadOnly(true);
+    m_detail->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    m_detail->setPlaceholderText(QStringLiteral("Выберите строку, чтобы увидеть сообщение целиком"));
+    m_detail->setMinimumHeight(70);
+    auto* split = new QSplitter(Qt::Vertical, this);
+    split->setChildrenCollapsible(false);
+    split->addWidget(m_table);
+    split->addWidget(m_detail);
+    split->setStretchFactor(0, 3);
+    split->setStretchFactor(1, 2);
+    layout->addWidget(split, 1);
     layout->addLayout(row);
+    connect(m_table, &QTableWidget::currentCellChanged, this, [this](int r) {
+        if (r < 0 || r >= m_table->rowCount() || m_table->item(r, ColJson) == nullptr) {
+            m_detail->clear();
+            return;
+        }
+        const QString line = m_table->item(r, ColJson)->text();
+        const nlohmann::json j = nlohmann::json::parse(line.toStdString(), nullptr, false);
+        m_detail->setPlainText(j.is_discarded() ? line : QString::fromStdString(j.dump(2)));
+    });
 
     connect(m_showUdp, &QCheckBox::toggled, this, &PsExchangeView::rebuild);
     connect(clear, &QPushButton::clicked, m_session, &PsSession::clearLog);

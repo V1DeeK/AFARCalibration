@@ -427,15 +427,25 @@ void BoardFinderThread::run() {
         }
 
         std::string mac;
+        std::string knownIp;
         const bool readParameters = state_.board_read_parameters_requested.exchange(false);
         {
             std::lock_guard<std::mutex> lock(state_.board_mutex);
             mac = state_.board_mac;
+            knownIp = state_.board_known_ip;
             state_.board_status = "ищу...";
             state_.board_found_ip.clear();
             if (readParameters) state_.board_parameters.clear();
         }
-        BoardFindResult res = find_board_by_mac(mac);
+        BoardFindResult res;
+        if (!knownIp.empty()) {
+            // Плата уже на связи по PS: её адрес известен, искать по MAC не нужно.
+            res.found = true;
+            res.ip = knownIp;
+            res.status = "плата на связи по PS, адрес " + knownIp;
+        } else {
+            res = find_board_by_mac(mac);
+        }
 
         BoardParametersResult parameters;
         if (res.found && readParameters) {

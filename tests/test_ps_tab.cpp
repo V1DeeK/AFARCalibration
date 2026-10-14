@@ -486,7 +486,7 @@ TEST_CASE("Подключение: «Тех. состояние» без тел�
     int openJournalButtons = 0;
     for (QPushButton* b : ui.connection->findChildren<QPushButton*>()) {
         // Кнопки самого модального окна журнала — не в счёт, они внутри него.
-        if (b->window() == ui.connection.get() && b->text().contains(QStringLiteral("журнал"), Qt::CaseInsensitive)) {
+        if (b->window() == ui.connection.get() && b->text().contains(QStringLiteral("Открыть журнал"))) {
             ++openJournalButtons;
         }
     }
@@ -776,6 +776,31 @@ TEST_CASE("Стресс-тест: N команд за заданное врем�
     CHECK(skipNote);
     // Связь жива: обычная команда проходит.
     CHECK(ui.session->link()->isReady());
+}
+
+TEST_CASE("Журнал обмена: выбранное сообщение видно целиком", "[ps][ui][journal]")
+{
+    app();
+    TestPsServer server;
+    Ui ui;
+    ui.show();
+    connectUi(ui, server);
+    auto* table = child<QTableWidget>(*ui.connection, "psJournalRecent");
+    auto* detail = ui.connection->findChild<QPlainTextEdit*>(QStringLiteral("psExchangeDetail"));
+    REQUIRE(detail != nullptr);
+    waitFor([&] { return false; }, 250);
+    REQUIRE(table->rowCount() > 0);
+    CHECK(detail->toPlainText().isEmpty());
+    int helloRow = -1;
+    for (int r = 0; r < table->rowCount(); ++r) {
+        if (table->item(r, 3)->text() == QStringLiteral("hello")) {
+            helloRow = r;
+            break;
+        }
+    }
+    REQUIRE(helloRow >= 0);
+    table->setCurrentCell(helloRow, 0);
+    CHECK(detail->toPlainText().contains(QStringLiteral("\"msg_type\": \"hello\"")));
 }
 
 TEST_CASE("Модули — гетеродины, смеситель, видеоприёмник по JSON", "[ps][ui][modules]")

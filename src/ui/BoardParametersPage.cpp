@@ -15,10 +15,12 @@
 #include <mutex>
 #include <string>
 
-BoardParametersPage::BoardParametersPage(SpectrumEngine& engine, MacProvider macProvider, QWidget* parent)
+BoardParametersPage::BoardParametersPage(SpectrumEngine& engine, MacProvider macProvider,
+                                         IpProvider ipProvider, QWidget* parent)
     : QWidget(parent)
     , m_engine(engine)
     , m_macProvider(std::move(macProvider))
+    , m_ipProvider(std::move(ipProvider))
 {
     setObjectName(QStringLiteral("parametersWorkspace"));
     auto* layout = new QVBoxLayout(this);
@@ -27,17 +29,14 @@ BoardParametersPage::BoardParametersPage(SpectrumEngine& engine, MacProvider mac
 
     auto* row = new QHBoxLayout;
     row->setSpacing(ui::kInnerGap);
-    m_ip = new QLabel(QStringLiteral("IP-адрес: —"), this);
-    m_ip->setObjectName(QStringLiteral("boardIpAddress"));
     m_read = new QPushButton(QStringLiteral("Получить параметры"), this);
     m_read->setObjectName(QStringLiteral("readBoardParameters"));
     ui::setButtonRole(m_read, ui::ButtonRole::Primary);
-    row->addWidget(m_ip, 1);
-    row->addWidget(m_read);
-
     m_status = new QLabel(QStringLiteral("Готово к чтению"), this);
     m_status->setObjectName(QStringLiteral("boardParametersStatus"));
     m_status->setWordWrap(true);
+    row->addWidget(m_status, 1);
+    row->addWidget(m_read);
 
     m_results = new QTabWidget(this);
     m_results->setObjectName(QStringLiteral("boardParametersTabs"));
@@ -58,7 +57,6 @@ BoardParametersPage::BoardParametersPage(SpectrumEngine& engine, MacProvider mac
     m_results->addTab(m_details, QStringLiteral("Подробно"));
 
     layout->addLayout(row);
-    layout->addWidget(m_status);
     layout->addWidget(m_results, 1);
 
     connect(m_read, &QPushButton::clicked, this, &BoardParametersPage::requestRead);
@@ -70,10 +68,12 @@ BoardParametersPage::BoardParametersPage(SpectrumEngine& engine, MacProvider mac
 void BoardParametersPage::requestRead()
 {
     const QString mac = m_macProvider ? m_macProvider() : QString();
+    const QString knownIp = m_ipProvider ? m_ipProvider() : QString();
     auto& state = m_engine.state();
     {
         std::lock_guard<std::mutex> lock(state.board_mutex);
         state.board_mac = mac.toStdString();
+        state.board_known_ip = knownIp.toStdString();
         state.board_found_ip.clear();
         state.board_parameters.clear();
         state.board_status = "ожидание запуска поиска...";
@@ -81,10 +81,12 @@ void BoardParametersPage::requestRead()
     state.board_read_parameters_requested.store(true);
     state.board_find_requested.store(true);
     m_busy = true;
-    emit operationProgress(QStringLiteral("Поиск платы по MAC"), 0, 2);
+    emit operationProgress(knownIp.isEmpty() ? QStringLiteral("Поиск платы по MAC")
+                                             : QStringLiteral("Чтение параметров платы"),
+                           0, 2);
     m_read->setEnabled(false);
-    m_ip->setText(QStringLiteral("IP-адрес: поиск…"));
-    m_status->setText(QStringLiteral("Поиск платы по MAC %1…").arg(mac));
+    m_status->setText(knownIp.isEmpty() ? QStringLiteral("Поиск платы по MAC %1…").arg(mac)
+                                        : QStringLiteral("Читаю параметры платы %1…").arg(knownIp));
     m_main->clear();
     m_details->clear();
     m_results->setCurrentIndex(0);
@@ -104,8 +106,6 @@ void BoardParametersPage::poll()
     }
     const bool searching = state.board_find_requested.load() || state.board_is_finding.load();
     m_read->setEnabled(!searching);
-    m_ip->setText(ip.empty() ? QStringLiteral("IP-адрес: —")
-                             : QStringLiteral("IP-адрес: %1").arg(QString::fromStdString(ip)));
     if (!status.empty()) {
         m_status->setText(QString::fromStdString(status));
     }

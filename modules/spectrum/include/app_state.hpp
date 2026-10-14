@@ -68,6 +68,7 @@ struct AppState {
     // поэтому искать по нему надёжнее, чем помнить последний увиденный IP.
     std::mutex            board_mutex;
     std::string           board_mac       { "42:7e:d7:4e:0f:77" };
+    std::string           board_known_ip;  // адрес уже известен (подключение по PS): поиск по MAC не нужен
     std::string           board_found_ip;  // пусто, пока не найдена
     std::string           board_status;    // пояснение для UI
     std::string           board_parameters; // снимок read-only атрибутов libiio

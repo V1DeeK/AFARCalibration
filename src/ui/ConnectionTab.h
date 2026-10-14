@@ -4,6 +4,7 @@
 
 class FullScanPanel;
 class PsJournalDialog;
+class PsExchangeView;
 class PsPacketPage;
 class PsSession;
 class QLabel;
@@ -67,7 +68,7 @@ private:
     StatTile* m_udpIn = nullptr;
     StatTile* m_udpLost = nullptr;
     StatTile* m_errors = nullptr;
-    QPlainTextEdit* m_recent = nullptr;
+    PsExchangeView* m_exchange = nullptr;
     int m_tcpOutCount = 0;
     int m_tcpInCount = 0;
     int m_errorCount = 0;

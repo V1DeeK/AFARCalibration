@@ -2,6 +2,7 @@
 
 #include "FullScanPanel.h"
 #include "MacResolver.h"
+#include "PsExchangeView.h"
 #include "PsJournalDialog.h"
 #include "PsPacketPage.h"
 #include "PsSession.h"
@@ -15,6 +16,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QTableWidget>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -22,7 +24,6 @@ namespace ps = afar::ps;
 
 namespace {
 
-constexpr int kRecentLines = 300;
 
 }  // namespace
 
@@ -84,18 +85,9 @@ ConnectionTab::ConnectionTab(PsSession* session, QWidget* parent)
                 status = QStringLiteral(" %1").arg(QString::fromStdString(it->get<std::string>()));
             }
         }
-        m_recent->appendPlainText(QStringLiteral("%1 %2 %3 %4%5")
-                                      .arg(l.time.toString(QStringLiteral("HH:mm:ss")), l.channel,
-                                           l.outgoing ? QStringLiteral("→") : QStringLiteral("←"),
-                                           parsed ? QStringLiteral("%1 №%2")
-                                                        .arg(QString::fromStdString(env.msg_type))
-                                                        .arg(env.msg_count)
-                                                  : QStringLiteral("не разобрано"),
-                                           status));
         refreshCounters();
     });
     connect(m_session, &PsSession::logCleared, this, [this] {
-        m_recent->clear();
         m_tcpOutCount = 0;
         m_tcpInCount = 0;
         m_errorCount = 0;
@@ -229,14 +221,9 @@ QWidget* ConnectionTab::buildJournalBox()
         tiles->addWidget(tile, 1);
     }
 
-    m_recent = new QPlainTextEdit(box);
-    m_recent->setObjectName(QStringLiteral("psJournalRecent"));
-    m_recent->setReadOnly(true);
-    m_recent->setMaximumBlockCount(kRecentLines);
-    m_recent->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_recent->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    m_recent->setPlaceholderText(QStringLiteral("Здесь появятся последние пакеты TCP и UDP"));
-    m_recent->setMinimumHeight(110);
+    // Последние пакеты — таблицей; выбранный пакет виден целиком под ней.
+    m_exchange = new PsExchangeView(m_session, box, true);
+    m_exchange->table()->setObjectName(QStringLiteral("psJournalRecent"));
     auto* open = new QPushButton(QStringLiteral("Открыть журнал…"), box);
     open->setObjectName(QStringLiteral("psOpenJournal"));
     ui::setButtonRole(open, ui::ButtonRole::Secondary);
@@ -245,7 +232,7 @@ QWidget* ConnectionTab::buildJournalBox()
     row->addWidget(open);
 
     layout->addLayout(tiles);
-    layout->addWidget(m_recent, 1);
+    layout->addWidget(m_exchange, 1);
     layout->addLayout(row);
     connect(open, &QPushButton::clicked, this, &ConnectionTab::openJournal);
     return box;

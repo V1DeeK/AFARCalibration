@@ -138,7 +138,10 @@ PsPacketPage::PsPacketPage(PsSession* session, QWidget* parent)
     m_history->setAlternatingRowColors(true);
     m_history->setShowGrid(false);
     m_history->setMinimumHeight(120);
-    m_history->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    // Время и № — по содержимому, «Команда» и «Результат» делят остальную ширину поровну.
+    m_history->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_history->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    m_history->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     m_history->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
     auto* packets = new QWidget(split);
     auto* pl = new QVBoxLayout(packets);
@@ -160,6 +163,8 @@ PsPacketPage::PsPacketPage(PsSession* session, QWidget* parent)
     pl->addWidget(m_response, 1);
     split->addWidget(m_history);
     split->addWidget(packets);
+    split->setStretchFactor(0, 1);
+    split->setStretchFactor(1, 1);
 
     layout->addLayout(head);
     layout->addWidget(m_payload);

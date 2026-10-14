@@ -12,16 +12,20 @@ class QTabWidget;
 class QTimer;
 class SpectrumEngine;
 
-/// «Параметры платы» в окошке «Тех. состояние»: поиск платы по MAC и безопасное
-/// чтение параметров через libiio (модуль «Анализатор спектра»). Настройки платы
+/// «Параметры платы» в окошке «Тех. состояние»: безопасное чтение параметров
+/// через libiio по адресу платы, на связи с которой программа уже работает (если связи
+/// нет — плата сначала ищется по MAC) (модуль «Анализатор спектра»). Настройки платы
 /// не меняются. MAC берётся из окошка «Подключение» — плата одна и та же.
 class BoardParametersPage final : public QWidget {
     Q_OBJECT
 
 public:
     using MacProvider = std::function<QString()>;
+    /// Адрес платы, если она уже на связи по PS (иначе пустая строка — тогда плата ищется по MAC).
+    using IpProvider = std::function<QString()>;
 
-    BoardParametersPage(SpectrumEngine& engine, MacProvider macProvider, QWidget* parent = nullptr);
+    BoardParametersPage(SpectrumEngine& engine, MacProvider macProvider, IpProvider ipProvider,
+                        QWidget* parent = nullptr);
 
     /// Запустить поиск и чтение, как по кнопке «Получить параметры».
     void requestRead();
@@ -36,7 +40,7 @@ private:
 
     SpectrumEngine& m_engine;
     MacProvider m_macProvider;
-    QLabel* m_ip = nullptr;
+    IpProvider m_ipProvider;
     QLabel* m_status = nullptr;
     QPushButton* m_read = nullptr;
     QTabWidget* m_results = nullptr;

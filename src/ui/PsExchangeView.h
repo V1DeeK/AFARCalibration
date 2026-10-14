@@ -5,6 +5,7 @@
 #include <QWidget>
 
 class QCheckBox;
+class QPlainTextEdit;
 class QTableWidget;
 class QTimer;
 
@@ -19,9 +20,13 @@ class PsExchangeView final : public QWidget {
 public:
     enum Column { ColTime, ColChannel, ColDir, ColType, ColMsgCount, ColStatus, ColJson, ColCount };
 
-    explicit PsExchangeView(PsSession* session, QWidget* parent = nullptr);
+    /// compact — узкая версия для окошка «Журнал обмена»: время, канал, направление и тип;
+    /// номер, статус и JSON — в панели под таблицей.
+    explicit PsExchangeView(PsSession* session, QWidget* parent = nullptr, bool compact = false);
 
     [[nodiscard]] QTableWidget* table() const { return m_table; }
+    /// Сообщение выбранной строки целиком, JSON с отступами.
+    [[nodiscard]] QPlainTextEdit* detail() const { return m_detail; }
 
 private:
     void rebuild();
@@ -31,6 +36,7 @@ private:
     PsSession* m_session;
     QTableWidget* m_table = nullptr;
     QCheckBox* m_showUdp = nullptr;
+    QPlainTextEdit* m_detail = nullptr;
     QTimer* m_flush = nullptr;
     QVector<PsSession::LogLine> m_queue;
 };
