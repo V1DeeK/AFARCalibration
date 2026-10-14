@@ -187,8 +187,17 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     viewport->setWidget(root);
 
     // --- Спектр ---
-    m_spectrum = new SpectrumOpenGLWidget(spectrumEngine.state(), m_tabs);
-    m_spectrum->setObjectName(QStringLiteral("spectrumWorkspace"));
+    // Без OpenGL (платформа offscreen в автотестах) вкладка показывает пояснение вместо спектра.
+    QWidget* spectrumPage = nullptr;
+    if (QGuiApplication::platformName() == QLatin1String("offscreen")) {
+        auto* note = new QLabel(QStringLiteral("OpenGL на этой платформе недоступен — спектр не показывается."), m_tabs);
+        note->setAlignment(Qt::AlignCenter);
+        spectrumPage = note;
+    } else {
+        m_spectrum = new SpectrumOpenGLWidget(spectrumEngine.state(), m_tabs);
+        m_spectrum->setObjectName(QStringLiteral("spectrumWorkspace"));
+        spectrumPage = m_spectrum;
+    }
 
     // --- Тестовый прогон ---
     m_testRun = new TestRunTab(m_psSession, m_tabs);
@@ -211,7 +220,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_tabs->addTab(ui::scrollPage(m_connectionTab), QStringLiteral("Подключение"));
     m_tabs->addTab(ui::scrollPage(m_parametersTab), QStringLiteral("Установка параметров"));
     m_tabs->addTab(viewport, QStringLiteral("Измерение S-параметров"));
-    m_tabs->addTab(m_spectrum, QStringLiteral("Спектр"));
+    m_tabs->addTab(spectrumPage, QStringLiteral("Спектр"));
     m_tabs->addTab(ui::scrollPage(m_testRun), QStringLiteral("Тестовый прогон"));
     m_tabs->addTab(ui::scrollPage(acceptance), QStringLiteral("Приёмка"));
     setCentralWidget(m_tabs);
@@ -354,7 +363,9 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_thread->start();
     loadExampleDefaults();
     refreshThemeButton();
-    m_spectrum->setLightTheme(currentAppTheme() == AppTheme::Light);
+    if (m_spectrum) {
+        m_spectrum->setLightTheme(currentAppTheme() == AppTheme::Light);
+    }
     // Автоподключение: оператор подключался и не нажимал «Отключиться».
     m_psSession->connectFromSettings();
     scanUnfinishedSeries();
@@ -841,7 +852,9 @@ void MainWindow::onToggleTheme()
     applyAppTheme(*qApp, next);
     refreshThemeButton();
     m_matrix->refreshTheme();
-    m_spectrum->setLightTheme(next == AppTheme::Light);
+    if (m_spectrum) {
+        m_spectrum->setLightTheme(next == AppTheme::Light);
+    }
 }
 
 void MainWindow::refreshThemeButton()
