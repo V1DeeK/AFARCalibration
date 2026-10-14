@@ -3,8 +3,10 @@
 #include "PsExchangeView.h"
 #include "PsSession.h"
 #include "StressTestPanel.h"
+#include "UdpFloodGenerator.h"
 #include "UiStyle.h"
 
+#include <QCheckBox>
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -57,21 +59,81 @@ TestRunTab::TestRunTab(PsSession* session, QWidget* parent)
 
 QWidget* TestRunTab::buildStressPage()
 {
-    // Безопасный по умолчанию набор: запросы, которые не меняют настроек платы.
+    // Все команды протокола. Запросы отмечены по умолчанию, команды-установки — нет (меняют настройки платы).
+    const auto get = [](std::string_view type, json payload = json::object()) {
+        return StressTestPanel::Command{std::string(type), std::move(payload), false};
+    };
+    const auto set = [](std::string_view type) {
+        return StressTestPanel::Command{std::string(type), json::object(), true};
+    };
     const QVector<StressTestPanel::Command> commands{
-        {std::string(ps::msg::GetState), json::object()},
-        {std::string(ps::msg::GetSffParameters), json::object()},
-        {std::string(ps::msg::GetPhaseAtten), json::object()},
-        {std::string(ps::msg::GetAdc), json::object()},
-        {std::string(ps::msg::GetBeam), json::object()},
-        {std::string(ps::msg::GetLo), ps::loGetPayload(ps::kLoMixer)},
-        {std::string(ps::msg::GetLo), ps::loGetPayload(ps::kLoCalibration)},
-        {std::string(ps::msg::GetMixer), json::object()},
-        {std::string(ps::msg::GetVideo), json::object()},
+        get(ps::msg::GetState),
+        get(ps::msg::GetSffParameters),
+        get(ps::msg::GetPhaseAtten),
+        get(ps::msg::GetAdc),
+        get(ps::msg::GetBeam),
+        get(ps::msg::GetLo, ps::loGetPayload(ps::kLoMixer)),
+        get(ps::msg::GetLo, ps::loGetPayload(ps::kLoCalibration)),
+        get(ps::msg::GetMixer),
+        get(ps::msg::GetVideo),
+        set(ps::msg::SetMode),
+        set(ps::msg::Rs485Send),
+        set(ps::msg::SetPhaseAtten),
+        set(ps::msg::SetAdc),
+        set(ps::msg::SetBeamAzimuth),
+        set(ps::msg::SetBeam),
+        set(ps::msg::SetLo),
+        set(ps::msg::SetMixer),
+        set(ps::msg::SetVideo),
+        set(ps::msg::SetSffParameters),
+        set(ps::msg::SetSffStart),
+        set(ps::msg::SetSffStop),
     };
     auto* split = new QSplitter(Qt::Vertical, this);
     split->setChildrenCollapsible(false);
     m_stress = new StressTestPanel(m_session, commands, split);
+
+    // Нагрузка UDP: пока идёт стресс-тест TCP, приложение само заливает свой порт телеметрии датаграммами.
+    m_flood = new UdpFloodGenerator(this);
+    auto* floodRow = new QWidget(split);
+    auto* floodLayout = new QHBoxLayout(floodRow);
+    floodLayout->setContentsMargins(0, 0, 0, 0);
+    floodLayout->setSpacing(ui::kInnerGap);
+    m_floodOn = new QCheckBox(QStringLiteral("Одновременно слать UDP-поток на порт телеметрии этого ПК"), floodRow);
+    m_floodOn->setObjectName(QStringLiteral("stressUdpOn"));
+    m_floodRate = new QSpinBox(floodRow);
+    m_floodRate->setObjectName(QStringLiteral("stressUdpRate"));
+    m_floodRate->setRange(10, 20000);
+    m_floodRate->setValue(1000);
+    m_floodRate->setSuffix(QStringLiteral(" дгр/с"));
+    m_floodRate->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    m_floodState = ui::hintLabel(
+        QStringLiteral("Поток идёт с этого компьютера на самого себя: плату он не нагружает, зато проверяет, "
+                       "что программа не виснет и не падает под лавиной датаграмм."),
+        floodRow);
+    m_floodState->setObjectName(QStringLiteral("stressUdpState"));
+    floodLayout->addWidget(m_floodOn);
+    floodLayout->addWidget(m_floodRate);
+    floodLayout->addWidget(m_floodState, 1);
+    connect(m_flood, &UdpFloodGenerator::finished, this, [this](quint64 sent) {
+        m_floodState->setText(QStringLiteral("UDP-поток завершён: отправлено %1 датаграмм, принято %2.")
+                                  .arg(sent)
+                                  .arg(m_session->link()->telemetryPackets()));
+    });
+    connect(m_stress, &StressTestPanel::runningChanged, this, [this](bool running) {
+        if (!running) {
+            m_flood->stop();
+            return;
+        }
+        if (m_floodOn->isChecked()) {
+            const quint16 port = m_session->link()->telemetryPort();
+            if (!m_flood->start(port, m_floodRate->value())) {
+                m_floodState->setText(QStringLiteral("UDP-порт телеметрии не открыт — поток не запущен."));
+            } else {
+                m_floodState->setText(QStringLiteral("UDP-поток идёт на 127.0.0.1:%1.").arg(port));
+            }
+        }
+    });
 
     auto* packets = new QWidget(split);
     auto* layout = new QVBoxLayout(packets);
@@ -90,7 +152,14 @@ QWidget* TestRunTab::buildStressPage()
     response->setPlaceholderText(QStringLiteral("получено"));
     layout->addWidget(title);
     layout->addLayout(pair, 1);
-    split->addWidget(m_stress);
+    auto* top = new QWidget(split);
+    auto* topLayout = new QVBoxLayout(top);
+    topLayout->setContentsMargins(0, 0, 0, 0);
+    topLayout->setSpacing(ui::kInnerGap);
+    m_stress->setParent(top);
+    topLayout->addWidget(floodRow);
+    topLayout->addWidget(m_stress, 1);
+    split->addWidget(top);
     split->addWidget(packets);
     split->setStretchFactor(0, 3);
     split->setStretchFactor(1, 1);

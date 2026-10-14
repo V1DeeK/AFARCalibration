@@ -8,14 +8,15 @@
 #include <QWidget>
 
 class PsSession;
+class QComboBox;
 class QLabel;
 class QPushButton;
 class QSpinBox;
 class QTableWidget;
 class QTimer;
 
-/// Стресс-тест обмена с PS (перенесён из «Теста обмена» РМО): по кругу шлёт
-/// отмеченные команды с заданным темпом и ведёт по каждой счётчики —
+/// Стресс-тест обмена с PS (перенесён из «Теста обмена» РМО): за заданное время
+/// («N команд за T мс/с/мин») по кругу шлёт отмеченные команды и ведёт по каждой счётчики —
 /// отправлено, OK, отказ PS, нет ответа, не ушло, время ответа. Каждый пакет
 /// на экран не выводится: сводка обновляется 4 раза в секунду, по клику на
 /// строку — последний проблемный обмен этой команды.
@@ -26,6 +27,8 @@ public:
     struct Command {
         std::string msgType;
         nlohmann::json payload = nlohmann::json::object();
+        /// Меняет настройки платы: по умолчанию не отмечена, при отметке — предупреждение.
+        bool setter = false;
     };
 
     StressTestPanel(PsSession* session, const QVector<Command>& commands, QWidget* parent = nullptr);
@@ -66,6 +69,9 @@ private:
 
     void resetCounters();
     void sendNext();
+    void updateWarning();
+    [[nodiscard]] qint64 durationMs() const;
+    bool sendOne();
     void onResponse(const afar::ps::Envelope& response, afar::ps::Status status);
     void onTimeout(const QString& msgType, int msgCount);
     void onLinkState();
@@ -77,8 +83,10 @@ private:
     static QString key(const QString& msgType, int msgCount);
 
     PsSession* m_session;
-    QSpinBox* m_rate = nullptr;
-    QSpinBox* m_total = nullptr;
+    QSpinBox* m_count = nullptr;
+    QSpinBox* m_duration = nullptr;
+    QComboBox* m_unit = nullptr;
+    QLabel* m_warning = nullptr;
     QPushButton* m_start = nullptr;
     QPushButton* m_stop = nullptr;
     QLabel* m_summary = nullptr;
@@ -91,6 +99,8 @@ private:
     int m_cursor = 0;
     bool m_running = false;
     bool m_finishing = false;
+    int m_plannedCount = 0;
+    qint64 m_plannedMs = 0;
     QString m_stopReason;
     QElapsedTimer m_runClock;
 };

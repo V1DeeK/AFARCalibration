@@ -268,6 +268,8 @@ add_library(afar_app_ui STATIC
     ui/PsJournalDialog.h
     ui/StressTestPanel.cpp
     ui/StressTestPanel.h
+    ui/UdpFloodGenerator.cpp
+    ui/UdpFloodGenerator.h
     ui/TestRunTab.cpp
     ui/TestRunTab.h
     ui/PsModulesPage.cpp

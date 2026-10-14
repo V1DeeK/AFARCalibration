@@ -4,6 +4,7 @@
 #include "PsProtocol.h"
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QString>
 #include <QVector>
@@ -32,6 +33,8 @@ public:
     /// MAC платы по умолчанию — тот же, что у РМО и у чтения параметров libiio.
     static constexpr const char* kDefaultMac = "42:7E:D7:4E:0F:77";
     static constexpr int kLogLimit = 5000;
+    static constexpr int kTcpLogPerSec = 400;
+    static constexpr int kUdpLogPerSec = 25;
 
     explicit PsSession(QObject* parent = nullptr);
     ~PsSession() override;
@@ -123,6 +126,7 @@ private:
     void onEvent(const afar::ps::Envelope& event);
     void onTelemetry(const afar::ps::Telemetry& telemetry);
     void onFrame(bool outgoing, const QString& channel, const QString& line);
+    void appendLog(const LogLine& line);
     void setMode(afar::ps::Mode mode, const QString& state);
     void refuse(const QString& text);
 
@@ -139,6 +143,11 @@ private:
     QString m_state;
     std::optional<afar::ps::Telemetry> m_telemetry;
     QVector<LogLine> m_log;
+    QElapsedTimer m_logClock;
+    qint64 m_logWindowStartMs = 0;
+    int m_logTcpInWindow = 0;
+    int m_logUdpInWindow = 0;
+    int m_logSkipped = 0;
     std::map<std::int64_t, afar::ps::SffResult> m_sffResults;
     std::optional<afar::ps::SffParams> m_sffParams;
 };

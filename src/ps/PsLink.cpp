@@ -288,16 +288,24 @@ void PsLink::onDisconnected()
 
 void PsLink::onUdpReadyRead()
 {
+    // Защита от потока датаграмм: за один проход разбираем не больше kUdpPerPass штук, остальное —
+    // следующим проходом цикла событий, чтобы окно успевало перерисовываться и отвечать на ввод.
+    int processed = 0;
     while (m_udp.hasPendingDatagrams()) {
+        if (processed >= kUdpPerPass) {
+            QTimer::singleShot(0, this, &PsLink::onUdpReadyRead);
+            return;
+        }
+        ++processed;
         const QNetworkDatagram dg = m_udp.receiveDatagram(static_cast<qint64>(ps::kMaxDatagramBytes) + 1);
         const QByteArray data = dg.data();
-        emit frameLogged(false, QStringLiteral("UDP"), QString::fromUtf8(data));
         ps::Envelope env;
         ps::Telemetry tlm;
         if (data.size() > static_cast<qsizetype>(ps::kMaxDatagramBytes) ||
             !ps::decodeLine(std::string_view(data.constData(), static_cast<std::size_t>(data.size())), env) ||
             env.msg_type != ps::msg::Telemetry || !ps::Telemetry::fromJson(env.payload, tlm)) {
             ++m_tlmRejected;
+            emit frameLogged(false, QStringLiteral("UDP"), QString::fromUtf8(data.left(512)));
             continue;
         }
         if (m_lastTlmCount >= 0) {
@@ -310,7 +318,13 @@ void PsLink::onUdpReadyRead()
         }
         m_lastTlmCount = env.msg_count;
         ++m_tlmReceived;
-        emit telemetryReceived(tlm);
+        emit frameLogged(false, QStringLiteral("UDP"), QString::fromUtf8(data));
+        // Подписчикам (экран, спектр) телеметрию отдаём не чаще kTlmEmitMinMs: счётчики при этом точные.
+        const qint64 now = m_clock.elapsed();
+        if (now - m_lastTlmEmitMs >= kTlmEmitMinMs) {
+            m_lastTlmEmitMs = now;
+            emit telemetryReceived(tlm);
+        }
     }
 }
 

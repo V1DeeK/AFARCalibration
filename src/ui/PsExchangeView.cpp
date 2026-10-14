@@ -6,6 +6,7 @@
 #include <QHeaderView>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -15,6 +16,8 @@ namespace ps = afar::ps;
 namespace {
 
 constexpr int kRows = 2000;
+constexpr int kBatchMax = 300;
+constexpr int kFlushMs = 100;
 
 }  // namespace
 
@@ -51,13 +54,44 @@ PsExchangeView::PsExchangeView(PsSession* session, QWidget* parent)
 
     connect(m_showUdp, &QCheckBox::toggled, this, &PsExchangeView::rebuild);
     connect(clear, &QPushButton::clicked, m_session, &PsSession::clearLog);
-    connect(m_session, &PsSession::frameAppended, this, &PsExchangeView::append);
+    m_flush = new QTimer(this);
+    m_flush->setSingleShot(true);
+    m_flush->setInterval(kFlushMs);
+    connect(m_flush, &QTimer::timeout, this, &PsExchangeView::flushQueue);
+    connect(m_session, &PsSession::frameAppended, this, [this](const PsSession::LogLine& line) {
+        m_queue.push_back(line);
+        if (m_queue.size() > kBatchMax * 4) {
+            m_queue.remove(0, m_queue.size() - kBatchMax);  // лавина: старое всё равно не успеть показать
+        }
+        if (!m_flush->isActive()) {
+            m_flush->start();
+        }
+    });
     connect(m_session, &PsSession::logCleared, this, &PsExchangeView::rebuild);
     rebuild();
 }
 
+void PsExchangeView::flushQueue()
+{
+    if (m_queue.isEmpty()) {
+        return;
+    }
+    QVector<PsSession::LogLine> batch;
+    batch.swap(m_queue);
+    if (batch.size() > kBatchMax) {
+        batch.remove(0, batch.size() - kBatchMax);
+    }
+    m_table->setUpdatesEnabled(false);
+    for (const PsSession::LogLine& line : batch) {
+        append(line);
+    }
+    m_table->setUpdatesEnabled(true);
+    m_table->scrollToBottom();
+}
+
 void PsExchangeView::rebuild()
 {
+    m_queue.clear();
     m_table->setRowCount(0);
     const auto& log = m_session->log();
     const qsizetype from = std::max<qsizetype>(0, log.size() - kRows);
@@ -69,6 +103,18 @@ void PsExchangeView::rebuild()
 void PsExchangeView::append(const PsSession::LogLine& line)
 {
     if (line.channel == QLatin1String("UDP") && !m_showUdp->isChecked()) {
+        return;
+    }
+    if (line.channel == QLatin1String("СИС")) {
+        const int r = m_table->rowCount();
+        m_table->insertRow(r);
+        const QStringList cells{line.time.toString(QStringLiteral("HH:mm:ss.zzz")), line.channel, QString(),
+                                QStringLiteral("защита от перегрузки"), QString(), QString(), line.line};
+        for (int col = 0; col < ColCount; ++col) {
+            auto* item = new QTableWidgetItem(cells[col]);
+            item->setForeground(QBrush(ui::warnColor()));
+            m_table->setItem(r, col, item);
+        }
         return;
     }
     ps::Envelope env;
@@ -107,5 +153,4 @@ void PsExchangeView::append(const PsSession::LogLine& line)
         }
         m_table->setItem(row, col, item);
     }
-    m_table->scrollToBottom();
 }

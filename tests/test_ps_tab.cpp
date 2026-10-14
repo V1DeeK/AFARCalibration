@@ -14,6 +14,7 @@
 #include "StressTestPanel.h"
 #include "TestPsServer.h"
 #include "TestRunTab.h"
+#include "UdpFloodGenerator.h"
 #include "UiStyle.h"
 
 #include <QApplication>
@@ -204,6 +205,7 @@ TEST_CASE("Установка параметров: подключение, се
 
     // В таблице обмена видно и отправленное, и пришедшее — по TCP и по UDP.
     auto* ex = ui.parameters->exchangeTable();
+    waitFor([&] { return false; }, 250);  // таблица обновляется пачкой раз в 100 мс
     CHECK(countRows(ex, QStringLiteral("TCP"), QStringLiteral("ушло"), QStringLiteral("set_phase_atten")) == 1);
     CHECK(countRows(ex, QStringLiteral("TCP"), QStringLiteral("пришло"), QStringLiteral("set_phase_atten")) == 1);
     CHECK(countRows(ex, QStringLiteral("TCP"), QStringLiteral("ушло"), QStringLiteral("hello")) == 1);
@@ -650,6 +652,7 @@ TEST_CASE("Журнал: кнопка «Открыть журнал…» отк�
     CHECK(journal->isModal());
     auto* table = journal->findChild<QTableWidget*>(QStringLiteral("psJournalTable"));
     REQUIRE(table != nullptr);
+    waitFor([&] { return false; }, 250);
     CHECK(countRows(table, QStringLiteral("TCP"), QStringLiteral("ушло"), QStringLiteral("hello")) == 1);
     journal->reject();
 }
@@ -701,8 +704,9 @@ TEST_CASE("Тестовый прогон: стресс-тест TCP и пров�
     ui.show();
     connectUi(ui, server);
     QWidget& t = *ui.testRun;
-    child<QSpinBox>(t, "stressRate")->setValue(50);
-    child<QSpinBox>(t, "stressTotal")->setValue(30);
+    child<QSpinBox>(t, "stressCount")->setValue(30);
+    child<QSpinBox>(t, "stressDuration")->setValue(600);
+    child<QComboBox>(t, "stressUnit")->setCurrentIndex(0);  // мс
     child<QPushButton>(t, "stressStart")->click();
     REQUIRE(ui.testRun->stress()->running());
     REQUIRE(waitFor([&] { return !ui.testRun->stress()->running(); }, 15000));
@@ -716,6 +720,62 @@ TEST_CASE("Тестовый прогон: стресс-тест TCP и пров�
     REQUIRE(waitFor([&] { return !ui.testRun->udpCheckRunning(); }, 5000));
     CHECK(child<QLabel>(t, "udpVerdict")->text().startsWith(QStringLiteral("Норма")));
     CHECK(child<QTableWidget>(t, "udpDevices")->rowCount() > 0);
+}
+
+TEST_CASE("Стресс-тест: N команд за заданное время, лавина UDP не вешает программу", "[ps][ui][stress][flood]")
+{
+    app();
+    TestPsServer server;
+    Ui ui;
+    ui.show();
+    connectUi(ui, server);
+    QWidget& t = *ui.testRun;
+
+    // Все команды протокола в таблице; установки по умолчанию не отмечены.
+    auto* table = child<QTableWidget>(t, "stressTable");
+    REQUIRE(table->rowCount() >= 20);
+    int checked = 0;
+    for (int r = 0; r < table->rowCount(); ++r) {
+        const QString name = table->item(r, 0)->text();
+        const bool on = table->item(r, 0)->checkState() == Qt::Checked;
+        checked += on ? 1 : 0;
+        if (name.startsWith(QStringLiteral("set_")) || name.startsWith(QStringLiteral("rs485"))) {
+            CHECK_FALSE(on);
+        }
+    }
+    CHECK(checked >= 8);
+
+    // 300 команд за 1,5 с и параллельно 4000 датаграмм/с на порт телеметрии.
+    child<QSpinBox>(t, "stressCount")->setValue(300);
+    child<QSpinBox>(t, "stressDuration")->setValue(1500);
+    child<QComboBox>(t, "stressUnit")->setCurrentIndex(0);
+    child<QCheckBox>(t, "stressUdpOn")->setChecked(true);
+    child<QSpinBox>(t, "stressUdpRate")->setValue(4000);
+    QElapsedTimer clock;
+    clock.start();
+    child<QPushButton>(t, "stressStart")->click();
+    REQUIRE(ui.testRun->stress()->running());
+    REQUIRE(waitFor([&] { return !ui.testRun->stress()->running(); }, 20000));
+    const qint64 ms = clock.elapsed();
+    INFO(ui.testRun->stress()->summary().toStdString());
+    CHECK(ms >= 1300);
+    CHECK(ui.testRun->stress()->summary().contains(QStringLiteral("отправлено 300 из 300")));
+    CHECK(ui.testRun->stress()->summary().contains(QStringLiteral("нет ответа 0")));
+
+    // Поток дошёл, журнал не раздулся: строк UDP в секунду не больше лимита, есть пометка о пропуске.
+    waitFor([&] { return !ui.testRun->flood()->running(); }, 3000);
+    CHECK(ui.testRun->flood()->sent() > 3000);
+    CHECK(ui.session->link()->telemetryPackets() > 2000);
+    int udpRows = 0;
+    bool skipNote = false;
+    for (const auto& l : ui.session->log()) {
+        udpRows += l.channel == QLatin1String("UDP") ? 1 : 0;
+        skipNote = skipNote || l.channel == QStringLiteral("СИС");
+    }
+    CHECK(udpRows < 400);
+    CHECK(skipNote);
+    // Связь жива: обычная команда проходит.
+    CHECK(ui.session->link()->isReady());
 }
 
 TEST_CASE("Модули — гетеродины, смеситель, видеоприёмник по JSON", "[ps][ui][modules]")
@@ -754,6 +814,7 @@ TEST_CASE("Модули — гетеродины, смеситель, видео
     CHECK(server.moduleState(2)["freq"] == 0);      // второй гетеродин не тронут
 
     auto* ex = ui.parameters->exchangeTable();
+    waitFor([&] { return false; }, 250);
     bool sentPartial = false;
     for (int row = 0; row < ex->rowCount(); ++row) {
         if (ex->item(row, 3)->text() == QStringLiteral("set_lo") &&

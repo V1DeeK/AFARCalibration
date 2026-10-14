@@ -79,6 +79,12 @@ signals:
     void frameLogged(bool outgoing, const QString& channel, const QString& line);
     void errorOccurred(const QString& message);
 
+public:
+    /// Сколько датаграмм UDP разбирается за один проход цикла событий.
+    static constexpr int kUdpPerPass = 200;
+    /// Минимальный интервал между сигналами telemetryReceived.
+    static constexpr qint64 kTlmEmitMinMs = 20;
+
 private:
     struct Pending {
         QString msgType;
@@ -108,6 +114,7 @@ private:
     QTimer m_tick;
     QTimer m_reconnect;
     QElapsedTimer m_clock;
+    qint64 m_lastTlmEmitMs = -1000;
     Timeouts m_timeouts;
     State m_state = State::Disconnected;
     QString m_host;

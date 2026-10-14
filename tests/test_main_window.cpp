@@ -422,8 +422,8 @@ TEST_CASE("Снимки вкладок в обеих темах для пров�
     child<QPushButton>(*w.window, "sffStart")->click();
     REQUIRE(waitFor([&] { return child<QTableWidget>(*w.window, "sffResults")->rowCount() == 3; }));
     w.openTab(4);
-    child<QSpinBox>(*w.window, "stressRate")->setValue(40);
-    child<QSpinBox>(*w.window, "stressTotal")->setValue(60);
+    child<QSpinBox>(*w.window, "stressDuration")->setValue(2);
+    child<QSpinBox>(*w.window, "stressCount")->setValue(60);
     child<QPushButton>(*w.window, "stressStart")->click();
     waitFor([&] { return false; }, 2500);
     child<QPushButton>(*w.window, "udpCheckStart")->click();

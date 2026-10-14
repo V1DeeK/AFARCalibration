@@ -3,6 +3,7 @@
 #include "PsSession.h"
 #include "UiStyle.h"
 
+#include <QComboBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -48,16 +49,22 @@ StressTestPanel::StressTestPanel(PsSession* session, const QVector<Command>& com
     root->setSpacing(ui::kInnerGap);
     auto* controls = new QHBoxLayout;
     controls->setSpacing(ui::kInnerGap);
-    m_rate = new QSpinBox(this);
-    m_rate->setObjectName(QStringLiteral("stressRate"));
-    m_rate->setRange(1, 50);
-    m_rate->setValue(10);
-    m_rate->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    m_total = new QSpinBox(this);
-    m_total->setObjectName(QStringLiteral("stressTotal"));
-    m_total->setRange(0, 1'000'000);
-    m_total->setValue(1000);
-    m_total->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    m_count = new QSpinBox(this);
+    m_count->setObjectName(QStringLiteral("stressCount"));
+    m_count->setRange(1, 1'000'000);
+    m_count->setValue(1000);
+    m_count->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    m_duration = new QSpinBox(this);
+    m_duration->setObjectName(QStringLiteral("stressDuration"));
+    m_duration->setRange(1, 1'000'000);
+    m_duration->setValue(10);
+    m_duration->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    m_unit = new QComboBox(this);
+    m_unit->setObjectName(QStringLiteral("stressUnit"));
+    m_unit->addItem(QStringLiteral("мс"), 1);
+    m_unit->addItem(QStringLiteral("секунд"), 1000);
+    m_unit->addItem(QStringLiteral("минут"), 60000);
+    m_unit->setCurrentIndex(1);
     m_start = new QPushButton(QStringLiteral("Запустить"), this);
     m_start->setObjectName(QStringLiteral("stressStart"));
     m_stop = new QPushButton(QStringLiteral("Остановить"), this);
@@ -67,22 +74,31 @@ StressTestPanel::StressTestPanel(PsSession* session, const QVector<Command>& com
     ui::setButtonRole(m_start, ui::ButtonRole::Primary);
     ui::setButtonRole(m_stop, ui::ButtonRole::Danger);
     ui::setButtonRole(reset, ui::ButtonRole::Secondary);
-    controls->addWidget(new QLabel(QStringLiteral("Темп, команд/с"), this));
-    controls->addWidget(m_rate);
-    controls->addSpacing(8);
-    controls->addWidget(new QLabel(QStringLiteral("Всего команд (0 — пока не остановлю)"), this));
-    controls->addWidget(m_total);
+    controls->addWidget(new QLabel(QStringLiteral("Отправить команд"), this));
+    controls->addWidget(m_count);
+    controls->addWidget(new QLabel(QStringLiteral("за"), this));
+    controls->addWidget(m_duration);
+    controls->addWidget(m_unit);
     controls->addStretch(1);
     controls->addWidget(m_start);
     controls->addWidget(m_stop);
     controls->addWidget(reset);
     root->addLayout(controls);
 
-    root->addWidget(ui::hintLabel(QStringLiteral("Команды идут по кругу; одна и та же команда не уходит повторно, "
-                                                 "пока PS не ответил на предыдущую. Сервисные команды PS "
-                                                 "выполняет только в сервисном режиме, иначе — отказ. Клик по "
-                                                 "строке покажет последний проблемный обмен этой команды."),
+    root->addWidget(ui::hintLabel(QStringLiteral("Выбранное число команд равномерно распределяется на заданное "
+                                                 "время и идёт по кругу по отмеченным строкам, не дожидаясь "
+                                                 "ответов. Сервисные команды PS выполняет только в сервисном "
+                                                 "режиме, иначе — отказ. Клик по строке покажет последний "
+                                                 "проблемный обмен этой команды."),
                                   this));
+
+    m_warning = new QLabel(this);
+    m_warning->setObjectName(QStringLiteral("stressWarning"));
+    m_warning->setProperty("role", QStringLiteral("status"));
+    m_warning->setWordWrap(true);
+    ui::setTone(m_warning, ui::Tone::Warn);
+    m_warning->setVisible(false);
+    root->addWidget(m_warning);
 
     m_summary = new QLabel(QStringLiteral("Стресс-тест не запущен."), this);
     m_summary->setObjectName(QStringLiteral("stressSummary"));
@@ -116,7 +132,8 @@ StressTestPanel::StressTestPanel(PsSession* session, const QVector<Command>& com
                                             : QStringLiteral("%1 %2").arg(QString::fromStdString(s.cmd.msgType),
                                                                           QString::fromStdString(s.cmd.payload.dump())));
         name->setFlags(name->flags() | Qt::ItemIsUserCheckable);
-        name->setCheckState(Qt::Checked);
+        name->setCheckState(s.cmd.setter ? Qt::Unchecked : Qt::Checked);
+        m_stats[r].enabled = !s.cmd.setter;
     }
     root->addWidget(m_table, 1);
 
@@ -128,10 +145,10 @@ StressTestPanel::StressTestPanel(PsSession* session, const QVector<Command>& com
     connect(m_start, &QPushButton::clicked, this, &StressTestPanel::start);
     connect(m_stop, &QPushButton::clicked, this, [this] { stop(QStringLiteral("остановлено оператором")); });
     connect(reset, &QPushButton::clicked, this, &StressTestPanel::resetCounters);
-    connect(m_rate, &QSpinBox::valueChanged, this, [this](int rate) { m_sendTimer->setInterval(1000 / rate); });
     connect(m_table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* item) {
         if (item->column() == ColCommand && item->row() < m_stats.size()) {
             m_stats[item->row()].enabled = item->checkState() == Qt::Checked;
+            updateWarning();
         }
     });
     connect(m_table, &QTableWidget::currentCellChanged, this, [this](int row) {
@@ -153,6 +170,7 @@ StressTestPanel::StressTestPanel(PsSession* session, const QVector<Command>& com
     connect(link, &PsLink::responseReceived, this, &StressTestPanel::onResponse);
     connect(link, &PsLink::commandTimedOut, this, &StressTestPanel::onTimeout);
     connect(link, &PsLink::stateChanged, this, &StressTestPanel::onLinkState);
+    updateWarning();
     refresh();
 }
 
@@ -201,7 +219,9 @@ void StressTestPanel::start()
     m_runClock.start();
     m_start->setEnabled(false);
     m_stop->setEnabled(true);
-    m_sendTimer->setInterval(1000 / m_rate->value());
+    m_plannedCount = m_count->value();
+    m_plannedMs = durationMs();
+    m_sendTimer->setInterval(5);  // команды набегают по часам, а не по одной за такт: пока 1000 за секунду
     m_sendTimer->start();
     m_refreshTimer->start();
     emit runningChanged(true);
@@ -241,30 +261,46 @@ void StressTestPanel::resetCounters()
     refresh();
 }
 
-void StressTestPanel::sendNext()
+qint64 StressTestPanel::durationMs() const
 {
-    if (!m_running || m_finishing) {
-        return;
+    return static_cast<qint64>(m_duration->value()) * m_unit->currentData().toInt();
+}
+
+void StressTestPanel::updateWarning()
+{
+    QStringList names;
+    for (const Stats& s : m_stats) {
+        if (s.enabled && s.cmd.setter) {
+            names << QString::fromStdString(s.cmd.msgType);
+        }
     }
-    const int limit = m_total->value();
-    if (limit > 0 && totalSent() >= limit) {
-        m_finishing = true;
-        m_sendTimer->stop();
-        finishIfDone();
-        return;
+    names.removeDuplicates();
+    m_warning->setVisible(!names.isEmpty());
+    if (!names.isEmpty()) {
+        m_warning->setText(QStringLiteral("Внимание: отмечены команды, которые меняют настройки платы (%1). "
+                                          "Они уходят с пустой нагрузкой, поэтому PS, как правило, ответит "
+                                          "отказом; на реальной плате включайте их осознанно.")
+                               .arg(names.join(QStringLiteral(", "))));
     }
-    if (!m_session->link()->isReady()) {
-        stop(QStringLiteral("связь с PS потеряна"));
-        return;
-    }
-    // Следующая включённая команда, на которую не ждём ответа; если ждём на все — пропускаем такт.
+}
+
+bool StressTestPanel::sendOne()
+{
+    // Следующая включённая команда по кругу; ответов не ждём.
     for (int step = 0; step < m_stats.size(); ++step) {
         const int i = (m_cursor + step) % static_cast<int>(m_stats.size());
         Stats& s = m_stats[i];
-        if (!s.enabled || rowInFlight(i)) {
+        if (!s.enabled) {
             continue;
         }
         m_cursor = (i + 1) % static_cast<int>(m_stats.size());
+        // msg_count — один байт: больше ~150 ожидающих ответа нельзя, иначе ключи совпадут.
+        if (m_inFlight.size() >= 150) {
+            ++s.notSent;
+            markProblem(s, QStringLiteral("не ушло: PS не успевает отвечать (150 команд без ответа)"),
+                        requestLine(s.cmd.msgType, 0, s.cmd.payload), {});
+            return true;
+        }
         const int count = m_session->send(s.cmd.msgType, s.cmd.payload);
         if (count >= 0) {
             InFlight f;
@@ -280,7 +316,34 @@ void StressTestPanel::sendNext()
             markProblem(s, QStringLiteral("не ушло: %1").arg(m_session->lastError()),
                         requestLine(s.cmd.msgType, 0, s.cmd.payload), {});
         }
+        return true;
+    }
+    return false;
+}
+
+void StressTestPanel::sendNext()
+{
+    if (!m_running || m_finishing) {
         return;
+    }
+    if (!m_session->link()->isReady()) {
+        stop(QStringLiteral("связь с PS потеряна"));
+        return;
+    }
+    // Сколько команд должно было уйти к этому моменту; за один такт — не больше 200, чтобы не вешать окно.
+    const qint64 elapsed = m_runClock.elapsed();
+    const qint64 due = std::min<qint64>(
+        m_plannedCount, 1 + elapsed * m_plannedCount / std::max<qint64>(1, m_plannedMs));
+    int budget = 200;
+    while (totalSent() < due && budget-- > 0) {
+        if (!sendOne()) {
+            break;
+        }
+    }
+    if (totalSent() >= m_plannedCount) {
+        m_finishing = true;
+        m_sendTimer->stop();
+        finishIfDone();
     }
 }
 
@@ -338,7 +401,7 @@ void StressTestPanel::onLinkState()
 void StressTestPanel::finishIfDone()
 {
     if (m_finishing && m_inFlight.isEmpty()) {
-        stop(QStringLiteral("отправлено %1 команд").arg(m_total->value()));
+        stop(QStringLiteral("отправлено %1 команд").arg(m_plannedCount));
     }
 }
 
@@ -385,7 +448,7 @@ void StressTestPanel::refresh()
         m_table->item(r, ColProblem)->setForeground(s.timeout || s.notSent ? QBrush(ui::errorColor()) : QBrush(ui::warnColor()));
     }
     const int answered = ok + refused;
-    const int limit = m_total->value();
+    const int limit = m_running ? m_plannedCount : m_count->value();
     QString counts = QStringLiteral("отправлено %1%2 · OK %3 · отказ PS %4 · нет ответа %5 · не ушло %6")
                          .arg(sent)
                          .arg(limit > 0 ? QStringLiteral(" из %1").arg(limit) : QString())

@@ -435,7 +435,36 @@ void PsSession::onTelemetry(const ps::Telemetry& t)
 
 void PsSession::onFrame(bool outgoing, const QString& channel, const QString& line)
 {
-    LogLine l{QDateTime::currentDateTime(), outgoing, channel, line.trimmed()};
+    // Защита журнала от лавины кадров: за окно в одну секунду пишем не больше kTcpLogPerSec строк TCP
+    // и kUdpLogPerSec строк UDP, остальное считаем и сообщаем одной строкой «пропущено K».
+    const qint64 now = m_logClock.isValid() ? m_logClock.elapsed() : 0;
+    if (!m_logClock.isValid()) {
+        m_logClock.start();
+    }
+    if (now - m_logWindowStartMs >= 1000) {
+        if (m_logSkipped > 0) {
+            appendLog(LogLine{QDateTime::currentDateTime(), false, QStringLiteral("СИС"),
+                              QStringLiteral("Защита от перегрузки: в журнал не вошло %1 кадров за секунду "
+                                             "(счётчики обмена и проверка потока их учитывают).")
+                                  .arg(m_logSkipped)});
+        }
+        m_logWindowStartMs = now;
+        m_logSkipped = 0;
+        m_logTcpInWindow = 0;
+        m_logUdpInWindow = 0;
+    }
+    int& used = channel == QLatin1String("UDP") ? m_logUdpInWindow : m_logTcpInWindow;
+    const int limit = channel == QLatin1String("UDP") ? kUdpLogPerSec : kTcpLogPerSec;
+    if (used >= limit) {
+        ++m_logSkipped;
+        return;
+    }
+    ++used;
+    appendLog(LogLine{QDateTime::currentDateTime(), outgoing, channel, line.trimmed()});
+}
+
+void PsSession::appendLog(const LogLine& l)
+{
     if (m_log.size() >= kLogLimit) {
         m_log.remove(0, kLogLimit / 10);
     }

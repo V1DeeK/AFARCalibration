@@ -6,6 +6,8 @@
 class PsExchangeView;
 class PsSession;
 class StressTestPanel;
+class UdpFloodGenerator;
+class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -23,6 +25,7 @@ public:
     explicit TestRunTab(PsSession* session, QWidget* parent = nullptr);
 
     [[nodiscard]] StressTestPanel* stress() const { return m_stress; }
+    [[nodiscard]] UdpFloodGenerator* flood() const { return m_flood; }
     /// Проверка потока телеметрии на seconds секунд.
     void startUdpCheck(int seconds);
     [[nodiscard]] bool udpCheckRunning() const;
@@ -37,6 +40,10 @@ private:
 
     PsSession* m_session;
     StressTestPanel* m_stress = nullptr;
+    UdpFloodGenerator* m_flood = nullptr;
+    QCheckBox* m_floodOn = nullptr;
+    QSpinBox* m_floodRate = nullptr;
+    QLabel* m_floodState = nullptr;
 
     QLabel* m_udpCounters = nullptr;
     QLabel* m_udpVerdict = nullptr;
