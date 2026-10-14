@@ -275,7 +275,12 @@ void PsLink::onSocketError()
     if (!m_wanted || m_state == State::Disconnected) {
         return;
     }
-    dropLink(QStringLiteral("%1:%2 — %3").arg(m_host).arg(m_port).arg(m_socket.errorString()));
+    QString text = QStringLiteral("%1:%2 — %3").arg(m_host).arg(m_port).arg(m_socket.errorString());
+    // Отказ в соединении при первом подключении: чаще всего плата уже занята другим клиентом (PS держит одно соединение).
+    if (m_socket.error() == QAbstractSocket::ConnectionRefusedError && !m_reachedReady) {
+        text += QStringLiteral(" (возможно, плата занята: к ней уже подключён другой клиент)");
+    }
+    dropLink(text);
 }
 
 void PsLink::onDisconnected()

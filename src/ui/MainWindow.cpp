@@ -17,6 +17,8 @@
 #include "afar/C2220Limits.h"
 #include "Theme.h"
 #include "spectrum_engine.hpp"
+
+#include <mutex>
 #include "spectrum_opengl_widget.hpp"
 
 #include <QApplication>
@@ -107,6 +109,21 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     }
 
     m_psSession = new PsSession(this);
+    // Спектр подключается к плате сам: как только на связи PS, — по тому же адресу; разрыв PS закрывает и его.
+    AppState* spectrumState = &spectrumEngine.state();
+    connect(m_psSession->link(), &PsLink::stateChanged, this, [this, spectrumState] {
+        PsLink* link = m_psSession->link();
+        if (link->isReady()) {
+            const std::string uri = "ip:" + link->host().toStdString();
+            {
+                std::lock_guard<std::mutex> lock(spectrumState->connection_mutex);
+                spectrumState->pluto_ip = uri;
+            }
+            spectrumState->connect_requested.store(true);
+        } else if (spectrumState->is_connected.load()) {
+            spectrumState->disconnect_requested.store(true);
+        }
+    });
 
     m_tabs = new QTabWidget(this);
     m_tabs->setObjectName(QStringLiteral("mainTabs"));

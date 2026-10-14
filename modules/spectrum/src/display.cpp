@@ -232,12 +232,18 @@ void SpectrumRenderer::render_spectrum_contents() {
                         && state_.demod_audio_has_data.load();
     const bool clipPane = state_.clip_stream_active.load() || !local_clip_t_.empty();
     const float spacing = ImGui::GetStyle().ItemSpacing.y;
-    float plotsHeight = kPsdHeight + kWaterfallHeight
-                      + (audioPane ? kAudioPaneHeight : 0.0f)
-                      + (clipPane ? kClipPaneHeight : 0.0f) + spacing * 5.0f;
-    plotsHeight = std::max(1.0f,
-        std::min(plotsHeight, ImGui::GetContentRegionAvail().y - kControlsPaneHeight));
-    ImGui::BeginChild("##plots", ImVec2(0.0f, plotsHeight), ImGuiChildFlags_None,
+    // Сверху настройки приёма, снизу графики; настройки получают столько места, сколько
+    // нужно им, но не больше половины окна — остальное отдаём графикам.
+    const float avail = ImGui::GetContentRegionAvail().y;
+    const float controlsHeight = std::clamp(kControlsPaneHeight + 130.0f, 120.0f, avail * 0.5f);
+    ImGui::BeginChild("##controls_scroll", ImVec2(0.0f, controlsHeight));
+    render_controls();
+    ImGui::EndChild();
+    ImGui::Separator();
+    (void)audioPane;
+    (void)clipPane;
+    (void)spacing;
+    ImGui::BeginChild("##plots", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoScrollbar);
     if (ImPlot::BeginAlignedPlots("psd_waterfall_align")) {
         render_psd_plot();
@@ -251,10 +257,6 @@ void SpectrumRenderer::render_spectrum_contents() {
     }
     ImGui::Separator();
     render_demod_pane();
-    ImGui::EndChild();
-    ImGui::Separator();
-    ImGui::BeginChild("##controls_scroll", ImVec2(0.0f, 0.0f));
-    render_controls();
     ImGui::EndChild();
 }
 
@@ -765,84 +767,7 @@ void SpectrumRenderer::render_device_section() {
     // Секция всегда раскрыта: Leaf убирает стрелку и делает заголовок
     // некликабельным, поэтому настройки не могут схлопнуться под руками —
     // ни по клику, ни при смене состояния подключения.
-    ImGui::CollapsingHeader(text("Устройство", "Device"), ImGuiTreeNodeFlags_Leaf);
-
-    std::vector<std::string> local_uris;
-    {
-        std::lock_guard<std::mutex> lock(state_.uri_list_mutex);
-        local_uris = state_.found_uris;
-    }
-    int current_uri_idx = 0;
-    std::string current_ip = state_.pluto_ip;
-    for (size_t i = 0; i < local_uris.size(); ++i) {
-        if (local_uris[i].rfind(current_ip, 0) == 0 || current_ip == local_uris[i]) {
-            current_uri_idx = static_cast<int>(i);
-            break;
-        }
-    }
-    std::vector<const char*> combo_items;
-    for (const auto& uri : local_uris)
-        combo_items.push_back(uri.c_str());
-
-    labeled_item(text("Устройство", "Device"), 250.0f);
-    if (ImGui::Combo("##uri", &current_uri_idx, combo_items.data(), static_cast<int>(combo_items.size()))) {
-        std::lock_guard<std::mutex> lock(state_.connection_mutex);
-        std::string selected_uri = local_uris[current_uri_idx];
-        size_t space_pos = selected_uri.find(' ');
-        state_.pluto_ip = (space_pos != std::string::npos) ? selected_uri.substr(0, space_pos) : selected_uri;
-    }
-    ImGui::SameLine();
-    if (state_.is_scanning.load()) {
-        ImGui::BeginDisabled();
-        ImGui::Button(text("Поиск...", "Scanning..."));
-        ImGui::EndDisabled();
-    } else if (ImGui::Button(text("Найти", "Scan"))) {
-        state_.scan_requested.store(true);
-    }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(160.0f);
-    ImGui::InputTextWithHint("##manualip", text("или введите ip:192.168.2.1", "or type ip:192.168.2.1"), ip_input_buf_, sizeof(ip_input_buf_));
-    ImGui::SameLine();
-    if (ImGui::Button(text("Применить", "Use"))) {
-        std::string manual = ip_input_buf_;
-        if (!manual.empty()) {
-            if (manual.rfind("ip:", 0) != 0 && manual != "local")
-                manual = "ip:" + manual;
-            std::lock_guard<std::mutex> lock(state_.connection_mutex);
-            state_.pluto_ip = manual;
-        }
-    }
-
-    // Поиск платы по MAC. IP ей выдаёт DHCP и он меняется между загрузками,
-    // поэтому найденный адрес не запоминаем, а ищем заново по постоянному MAC.
-    labeled_item(text("MAC платы", "Board MAC"), 170.0f);
-    ImGui::InputTextWithHint("##boardmac", "42:7e:d7:4e:0f:77", board_mac_buf_, sizeof(board_mac_buf_));
-    ImGui::SameLine();
-    if (state_.board_is_finding.load()) {
-        ImGui::BeginDisabled();
-        ImGui::Button(text("Поиск...", "Searching..."));
-        ImGui::EndDisabled();
-    } else if (ImGui::Button(text("Найти плату", "Find board"))) {
-        std::lock_guard<std::mutex> lock(state_.board_mutex);
-        state_.board_mac = board_mac_buf_;
-        state_.board_find_requested.store(true);
-    }
-
-    std::string board_ip, board_status;
-    {
-        std::lock_guard<std::mutex> lock(state_.board_mutex);
-        board_ip     = state_.board_found_ip;
-        board_status = state_.board_status;
-    }
-    if (!board_ip.empty()) {
-        ImGui::SameLine();
-        if (ImGui::Button(text("Выбрать устройство", "Use as device"))) {
-            std::lock_guard<std::mutex> lock(state_.connection_mutex);
-            state_.pluto_ip = "ip:" + board_ip;
-        }
-    }
-    if (!board_status.empty())
-        ImGui::TextUnformatted(board_status.c_str());
+    ImGui::CollapsingHeader(text("Приём", "Input"), ImGuiTreeNodeFlags_Leaf);
 
     // Настройки ниже применяются только переподключением, но навязывать его
     // отключённой плате нельзя: пользователь разорвал связь намеренно, и
@@ -910,63 +835,6 @@ void SpectrumRenderer::render_device_section() {
         }
     }
 
-    // Калибровка перекоса каналов. Стоит следом за инверсией Rx2: обе правят
-    // одно и то же — разницу между трактами, только инверсия снимает штатные
-    // 180 градусов чипа, а таблица остаток, измеренный генератором.
-    ImGui::TextUnformatted("");
-    ImGui::SameLine(kLabelColumnWidth);
-    bool cal_on = state_.rx_cal_enabled.load();
-    bool cal_loaded = state_.rx_cal_loaded.load();
-    ImGui::BeginDisabled(!cal_loaded);
-    if (ImGui::Checkbox(text("Применить калибровку Rx2", "Apply Rx2 calibration"), &cal_on))
-        state_.rx_cal_enabled.store(cal_on);
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        std::string status;
-        {
-            std::lock_guard<std::mutex> lock(state_.rx_cal_mutex);
-            status = state_.rx_cal_status;
-        }
-        ImGui::SetTooltip(text(
-            "Устраняет собственную фазовую и амплитудную ошибку Rx2/Rx1. Действует только в двухканальном режиме при одинаковом ручном усилении.\n\n%s",
-            "Removes the receivers' own Rx2/Rx1 phase and amplitude error. Applies only in dual-channel mode with equal manual gain.\n\n%s"),
-            status.empty() ? text("таблица не загружена", "no table loaded") : status.c_str());
-    }
-
-    // Путь редактируется здесь, а не зашит: таблица платы и таблица конкретного
-    // стенда — разные файлы, и переключаться между ними переименованием файлов
-    // означает рано или поздно перепутать, какая из них сейчас применяется.
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(240.0f);
-    ImGui::InputTextWithHint("##rxcalpath", "data/rx_calibration.csv",
-                              rx_cal_path_buf_, sizeof(rx_cal_path_buf_));
-
-    ImGui::SameLine();
-    if (ImGui::SmallButton(text("Перезагрузить##rxcal", "Reload##rxcal"))) {
-        {
-            std::lock_guard<std::mutex> lock(state_.rx_cal_mutex);
-            state_.rx_cal_path = rx_cal_path_buf_;
-        }
-        state_.rx_cal_reload_requested.store(true);
-    }
-
-    if (!cal_loaded) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", text("(таблица отсутствует)", "(no table)"));
-    } else if (cal_on) {
-        // Что именно вычитается прямо сейчас. Без этих цифр галочка — вера, а
-        // не измерение: за краем сетки поправка берётся с границы, и это видно.
-        ImGui::SameLine();
-        if (state_.chan_mode.load() != PlutoChannelMode::Both) {
-            ImGui::TextDisabled("%s", text("(только для двух каналов)", "(dual-channel only)"));
-        } else {
-        ImGui::TextDisabled(text("%+.2f град.  %+.2f дБ%s", "%+.2f deg  %+.2f dB%s"),
-                                state_.rx_cal_phase_deg.load(),
-                                state_.rx_cal_amp_db.load(),
-                                state_.rx_cal_in_range.load() ? "" : text("  вне таблицы", "  outside the table"));
-        }
-    }
-
     labeled_item(text("Дискретизация", "Sampling"), 130.0f);
     int sample_rate_mhz = static_cast<int>(state_.sample_rate_hz.load() / 1'000'000);
     if (ImGui::InputInt("MSPS##rate", &sample_rate_mhz)) {
@@ -985,53 +853,6 @@ void SpectrumRenderer::render_device_section() {
         bandwidth_mhz = max(1, min(56, bandwidth_mhz));
         state_.bandwidth_hz.store(bandwidth_mhz * 1'000'000);
         reapply_if_connected();
-    }
-
-    ImGui::SameLine();
-    bool connected_now = state_.is_connected.load();
-    ImGui::PushStyleColor(ImGuiCol_Button, connected_now ? ImVec4(0.2f, 0.5f, 0.25f, 1.0f)
-                                                         : ImVec4(0.6f, 0.25f, 0.25f, 1.0f));
-    if (ImGui::Button(connected_now ? text("Переподключить", "Reconnect")
-                                    : text("Подключить", "Connect")))
-        state_.connect_requested.store(true);
-    ImGui::PopStyleColor();
-
-    // Отключение от платы. Кнопка неактивна, пока связи нет, — чтобы состояние
-    // читалось с одного взгляда, а не проверялось нажатием.
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!connected_now);
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.35f, 0.15f, 1.0f));
-    if (ImGui::Button(text("Отключить", "Disconnect")))
-        state_.disconnect_requested.store(true);
-    ImGui::PopStyleColor();
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("%s", text(
-            "Закрывает соединение libiio и освобождает плату. Поток останавливается, настройки сохраняются.",
-            "Closes the libiio connection and releases the board. Streaming stops; settings are preserved."));
-
-    // Полный снимок SPI-регистров чипа (0x000..0x3FF), а не именованных
-    // debug-атрибутов вроде инверсии/initialize выше. Нужна живая связь: файл
-    // пишет CaptureThread, единственный владелец phy_dev_.
-    bool dump_in_progress = state_.ad9361_reg_dump_in_progress.load();
-    ImGui::BeginDisabled(!connected_now || dump_in_progress);
-    if (ImGui::Button(dump_in_progress ? text("Сохранение...", "Dumping...")
-                                       : text("Сохранить регистры AD9361", "Dump AD9361 registers")))
-        state_.ad9361_reg_dump_requested.store(true);
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("%s", text(
-            "Считывает все SPI-регистры AD9361 (0x000..0x3FF) и сохраняет пары адрес/значение в data/ad9361_regs_<время>.csv.",
-            "Reads all AD9361 SPI registers (0x000..0x3FF) and saves address/value pairs to data/ad9361_regs_<time>.csv."));
-
-    std::string reg_dump_status;
-    {
-        std::lock_guard<std::mutex> lock(state_.ad9361_reg_dump_mutex);
-        reg_dump_status = state_.ad9361_reg_dump_status;
-    }
-    if (!reg_dump_status.empty()) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", reg_dump_status.c_str());
     }
 }
 
