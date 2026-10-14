@@ -664,7 +664,7 @@ TEST_CASE("Полное сканирование: перевод в режим, 
     Ui ui;
     ui.show();
     connectUi(ui, server);
-    QWidget& c = *ui.connection;
+    QWidget& c = *ui.parameters;  // «Полное сканирование» живёт на вкладке «Установка параметров»
 
     child<QDoubleSpinBox>(c, "sffFreqFrom")->setValue(5000.0);  // МГц
     child<QComboBox>(c, "sffFreqToUnit")->setCurrentIndex(1);   // ГГц
@@ -691,7 +691,7 @@ TEST_CASE("Полное сканирование: перевод в режим, 
     child<QDoubleSpinBox>(c, "sffAzFrom")->setValue(25.0);
     afar::ps::SffParams p;
     QString error;
-    CHECK_FALSE(ui.connection->fullScan()->readParams(p, &error));
+    CHECK_FALSE(ui.parameters->fullScan()->readParams(p, &error));
     CHECK(error.contains(QStringLiteral("сектор")));
 }
 

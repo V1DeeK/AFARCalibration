@@ -2,7 +2,6 @@
 
 #include <QWidget>
 
-class FullScanPanel;
 class PsJournalDialog;
 class PsExchangeView;
 class PsPacketPage;
@@ -18,7 +17,7 @@ class StatTile;
 /// окошко «Подключение к PS» РМО: IP, MAC, порты TCP/UDP, статус, кнопки) и
 /// «Тех. состояние» с параметрами платы; слева снизу — «Одна команда» из «Теста
 /// обмена» РМО. Справа — журнал обмена (мозаика счётчиков, последние пакеты,
-/// кнопка модального «Журнала») и полное сканирование.
+/// выбранное сообщение целиком, кнопка модального «Журнала») во всю высоту.
 ///
 /// IP, MAC и порты можно править всегда, пока нет связи, — и во время попыток
 /// подключения, и во время поиска платы по MAC.
@@ -33,7 +32,6 @@ public:
     /// Дополнительный раздел под параметрами платы (очередь ошибок SCPI).
     void addTechSection(QWidget* section);
     [[nodiscard]] PsPacketPage* packetPage() const { return m_packetPage; }
-    [[nodiscard]] FullScanPanel* fullScan() const { return m_fullScan; }
     /// Открыть модальное окно «Журнал».
     void openJournal();
     [[nodiscard]] PsJournalDialog* journal() const { return m_journal; }
@@ -76,6 +74,5 @@ private:
     QSpinBox* m_keepAlive = nullptr;
     QLabel* m_keepAliveHint = nullptr;
     PsPacketPage* m_packetPage = nullptr;
-    FullScanPanel* m_fullScan = nullptr;
     PsJournalDialog* m_journal = nullptr;
 };

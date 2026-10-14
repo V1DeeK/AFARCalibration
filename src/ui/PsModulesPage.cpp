@@ -10,6 +10,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -72,6 +73,7 @@ PsModulesPage::PsModulesPage(PsLink* link, QWidget* parent)
 {
     auto* layout = new QVBoxLayout(this);
     m_tabs = new QTabWidget(this);
+    m_tabs->setUsesScrollButtons(false);
     m_tabs->setObjectName(QStringLiteral("psModulesTabs"));
     m_tabs->addTab(buildModule(Lo1, ps::loFields()), qs(ps::loNameRu(ps::kLoMixer)));
     m_tabs->addTab(buildModule(Lo2, ps::loFields()), qs(ps::loNameRu(ps::kLoCalibration)));
@@ -189,6 +191,24 @@ void PsModulesPage::setEditorValue(const ps::ModuleField& f, QWidget* editor, do
     }
 }
 
+namespace {
+
+/// Поля модуля в прокручиваемой области: «Модули» можно сделать невысокими, кнопки остаются на виду.
+QScrollArea* scrolled(QLayout* content, QWidget* owner)
+{
+    auto* body = new QWidget;
+    body->setLayout(content);
+    auto* area = new QScrollArea(owner);
+    area->setWidgetResizable(true);
+    area->setFrameShape(QFrame::NoFrame);
+    area->setMinimumHeight(110);
+    area->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);  // высоту задаёт карточка, а не число полей
+    area->setWidget(body);
+    return area;
+}
+
+}  // namespace
+
 QWidget* PsModulesPage::buildModule(Module m, const std::vector<ps::ModuleField>& fields)
 {
     auto* page = new QWidget(this);
@@ -253,8 +273,8 @@ QWidget* PsModulesPage::buildModule(Module m, const std::vector<ps::ModuleField>
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
     layout->setSpacing(ui::kGap);
-    layout->addLayout(grid);
-    layout->addStretch(1);
+    grid->setRowStretch(grid->rowCount(), 1);
+    layout->addWidget(scrolled(grid, page), 1);
     layout->addLayout(buttons);
     return page;
 }
@@ -311,8 +331,8 @@ QWidget* PsModulesPage::buildMixer()
     layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
     layout->setSpacing(ui::kGap);
     layout->addWidget(ui::hintLabel(QStringLiteral("В отмеченных каналах передаются все четыре поля."), page));
-    layout->addLayout(grid);
-    layout->addStretch(1);
+    grid->setRowStretch(grid->rowCount(), 1);
+    layout->addWidget(scrolled(grid, page), 1);
     layout->addLayout(buttons);
     return page;
 }

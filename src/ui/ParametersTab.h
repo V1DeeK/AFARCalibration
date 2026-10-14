@@ -6,6 +6,7 @@
 
 #include <vector>
 
+class FullScanPanel;
 class PsExchangeView;
 class PsModulesPage;
 class PsSession;
@@ -25,6 +26,8 @@ class ParametersTab final : public QWidget {
     Q_OBJECT
 
 public:
+    [[nodiscard]] FullScanPanel* fullScan() const { return m_fullScan; }
+
     explicit ParametersTab(PsSession* session, QWidget* parent = nullptr);
     ~ParametersTab() override;
 
@@ -81,6 +84,7 @@ private:
 
     PsExchangeView* m_exchange = nullptr;
     QPlainTextEdit* m_log = nullptr;
+    FullScanPanel* m_fullScan = nullptr;
     PsModulesPage* m_modulesPage = nullptr;
 
     std::vector<QWidget*> m_serviceControls;

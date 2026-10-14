@@ -4,6 +4,7 @@
 #include "PsSession.h"
 #include "UiStyle.h"
 
+#include "FullScanPanel.h"
 #include "PsModulesPage.h"
 
 #include <QCheckBox>
@@ -70,10 +71,21 @@ ParametersTab::ParametersTab(PsSession* session, QWidget* parent)
     m_modulesPage = new PsModulesPage(m_session->link(), modulesBox);
     m_modulesPage->tabs()->addTab(buildCodesPage(), QStringLiteral("Коды решётки"));
     modulesLayout->addWidget(m_modulesPage);
-    // «Модули» вдвое уже, справа от них — обмен с PS и телеметрия; оба тянутся до низа окна.
+    // Слева «Модули» (невысокие) и под ними «Полное сканирование»; справа — обмен с PS и телеметрия.
+    // Обе колонки тянутся до низа окна.
+    auto* scanBox = new QGroupBox(QStringLiteral("Полное сканирование"), this);
+    scanBox->setObjectName(QStringLiteral("scanBox"));
+    auto* scanLayout = new QVBoxLayout(scanBox);
+    scanLayout->setContentsMargins(0, 0, 0, 0);
+    m_fullScan = new FullScanPanel(m_session, scanBox);
+    scanLayout->addWidget(m_fullScan);
+    auto* leftColumn = new QVBoxLayout;
+    leftColumn->setSpacing(ui::kGap);
+    leftColumn->addWidget(modulesBox, 3);
+    leftColumn->addWidget(scanBox, 2);
     auto* lower = new QHBoxLayout;
     lower->setSpacing(ui::kGap);
-    lower->addWidget(modulesBox, 1);
+    lower->addLayout(leftColumn, 1);
     lower->addWidget(buildBottomTabs(), 1);
     root->addLayout(lower, 1);
 
@@ -91,6 +103,7 @@ QWidget* ParametersTab::buildBottomTabs()
 {
     auto* tabs = new QTabWidget(this);
     tabs->setObjectName(QStringLiteral("parametersBottomTabs"));
+    tabs->setUsesScrollButtons(false);
     tabs->setMinimumHeight(360);
     auto* exchangePage = new QWidget(tabs);
     auto* exchangeLayout = new QVBoxLayout(exchangePage);
@@ -230,14 +243,18 @@ QWidget* ParametersTab::buildCodesPage()
     fill->addWidget(new QLabel(QStringLiteral("Атт."), page));
     fill->addWidget(m_fillAtt);
     fill->addWidget(fillBtn);
-    fill->addSpacing(ui::kGap);
+    fill->addStretch(1);
     fill->addWidget(saveBtn);
     fill->addWidget(loadBtn);
-    fill->addStretch(1);
-    fill->addWidget(m_readCodes);
-    fill->addWidget(m_writeCodes);
+    // Две строки кнопок: вкладка не растягивает «Модули» вширь.
+    auto* write = new QHBoxLayout;
+    write->setSpacing(ui::kInnerGap);
+    write->addStretch(1);
+    write->addWidget(m_readCodes);
+    write->addWidget(m_writeCodes);
     layout->addWidget(m_codes, 1);
     layout->addLayout(fill);
+    layout->addLayout(write);
 
     const QString filter = QStringLiteral("Коды решётки (*.json)");
     connect(saveBtn, &QPushButton::clicked, this, [this, filter] {

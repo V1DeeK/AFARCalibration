@@ -1,6 +1,5 @@
 #include "ConnectionTab.h"
 
-#include "FullScanPanel.h"
 #include "MacResolver.h"
 #include "PsExchangeView.h"
 #include "PsJournalDialog.h"
@@ -41,15 +40,8 @@ ConnectionTab::ConnectionTab(PsSession* session, QWidget* parent)
     root->addWidget(buildConnectionBox(), 0, 0);
     root->addWidget(buildTechBox(), 0, 1);
     root->addWidget(buildCommandBox(), 1, 0, 1, 2);
-    // Справа: полное сканирование (сверху) и журнал обмена (во всю остальную высоту).
-    auto* scanBox = new QGroupBox(QStringLiteral("Полное сканирование"), this);
-    scanBox->setObjectName(QStringLiteral("scanBox"));
-    auto* scanLayout = new QVBoxLayout(scanBox);
-    scanLayout->setContentsMargins(0, 0, 0, 0);
-    m_fullScan = new FullScanPanel(m_session, scanBox);
-    scanLayout->addWidget(m_fullScan);
-    root->addWidget(scanBox, 0, 2);
-    root->addWidget(buildJournalBox(), 1, 2);
+    // Справа журнал обмена — во всю высоту.
+    root->addWidget(buildJournalBox(), 0, 2, 2, 1);
 
     root->setColumnStretch(0, 3);
     root->setColumnStretch(1, 4);
