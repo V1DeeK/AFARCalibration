@@ -16,6 +16,7 @@
 #include <QSpinBox>
 #include <QStandardItem>
 #include <QStandardItemModel>
+#include <QTabWidget>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -63,6 +64,11 @@ void ConnectionBar::setMiddleWidget(QWidget* widget)
     m_cards->insertWidget(1, widget, 8);
 }
 
+void ConnectionBar::setRightWidget(QWidget* widget)
+{
+    m_cards->addWidget(widget, 0);
+}
+
 ConnectionBar::ConnectionBar(QWidget* parent)
     : QFrame(parent)
 {
@@ -103,7 +109,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     const auto caption = [this](const QString& text) { return ui::captionLabel(text, this); };
 
     // --- Подключение к прибору ---
-    auto* vnaBox = new QGroupBox(QStringLiteral("Подключение к прибору (VNA)"), this);
+    auto* vnaBox = new QWidget(this);
     vnaBox->setObjectName(QStringLiteral("vnaConnectionBox"));
     auto* vnaLayout = new QVBoxLayout(vnaBox);
     vnaLayout->setSpacing(ui::kInnerGap);
@@ -167,7 +173,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     vnaLayout->addStretch(1);
 
     // --- Контроллер изделия и состояние: одна карточка справа ---
-    auto* stateBox = new QGroupBox(QStringLiteral("Контроллер и состояние"), this);
+    auto* stateBox = new QWidget(this);
     stateBox->setObjectName(QStringLiteral("stateBox"));
     auto* stateLayout = new QVBoxLayout(stateBox);
     stateLayout->setSpacing(ui::kInnerGap);
@@ -206,8 +212,15 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     // Посередине MainWindow ставит карточку «Калибровка ВАЦ» (setMiddleWidget).
     m_cards = new QHBoxLayout;
     m_cards->setSpacing(ui::kGap);
-    m_cards->addWidget(vnaBox, 2);
-    m_cards->addWidget(stateBox, 2);
+    // Слева две вкладки: подключение к прибору и (после подключения) контроллер и состояние.
+    m_leftTabs = new QTabWidget(this);
+    m_leftTabs->setObjectName(QStringLiteral("vnaTabs"));
+    m_leftTabs->setUsesScrollButtons(false);
+    m_leftTabs->addTab(vnaBox, QStringLiteral("Подключение"));
+    m_leftTabs->addTab(stateBox, QStringLiteral("Контроллер"));
+    m_leftTabs->setTabEnabled(1, false);
+    m_leftTabs->setTabToolTip(1, QStringLiteral("Доступно после подключения к прибору"));
+    m_cards->addWidget(m_leftTabs, 3);
     root->addLayout(m_cards);
     disableCombatControllerItem();
 
@@ -527,6 +540,11 @@ void ConnectionBar::setVnaInfo(const QString& model,
     }
     if (!firmware.isEmpty()) {
         detail += QStringLiteral(" · v%1").arg(firmware);
+    }
+    // Контроллер и состояние доступны только при подключённом приборе.
+    m_leftTabs->setTabEnabled(1, connected);
+    if (!connected && m_leftTabs->currentIndex() == 1) {
+        m_leftTabs->setCurrentIndex(0);
     }
     if (connected) {
         m_vna->setText(QStringLiteral("C2220: %1 @ %2").arg(detail, address));

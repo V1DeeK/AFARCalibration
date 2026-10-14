@@ -142,7 +142,7 @@ QTabBar#mainTabBar::tab:selected { background: @accent@; color: #ffffff; font-we
 QTabBar#mainTabBar::tab:hover:!selected { background: @hoverFill@; color: @text@; }
 QTabWidget#mainTabs::pane { border: none; background: transparent; border-radius: 0px; top: 0px; }
 QTabWidget#mainTabs::tab-bar { left: 12px; }
-QTabWidget#calibrationTabs QTabBar::tab { padding: 7px 9px; margin-right: 0px; }
+QTabWidget#calibrationTabs QTabBar::tab, QTabWidget#vnaTabs QTabBar::tab { padding: 6px 7px; margin-right: 0px; font-size: 12px; }
 
 /* ---------- поля ввода ---------- */
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit {

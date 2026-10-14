@@ -160,6 +160,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     auto* calLayout = new QVBoxLayout(calBox);
     calLayout->addWidget(m_measure->calibrationPanel());
     m_connections->setMiddleWidget(calBox);
+    m_connections->setRightWidget(m_measure->sidePanel());
     // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Подключение».
     m_connectionTab->addTechSection(m_connections->scpiPanel());
 

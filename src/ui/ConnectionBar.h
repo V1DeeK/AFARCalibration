@@ -6,6 +6,7 @@
 class QComboBox;
 class QGroupBox;
 class QHBoxLayout;
+class QTabWidget;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -19,6 +20,8 @@ class ConnectionBar final : public QFrame {
 public:
     /// Карточка посередине ряда: между подключением к прибору и состоянием.
     void setMiddleWidget(QWidget* widget);
+    /// Правая карточка ряда (панель управления графиками).
+    void setRightWidget(QWidget* widget);
     /// Очередь ошибок SCPI; MainWindow переносит её в «Тех. состояние».
     [[nodiscard]] QWidget* scpiPanel() const { return m_scpiPanel; }
     explicit ConnectionBar(QWidget* parent = nullptr);
@@ -106,6 +109,7 @@ private:
     QPushButton* m_scpiSimulate = nullptr;
 
     QHBoxLayout* m_cards = nullptr;
+    QTabWidget* m_leftTabs = nullptr;
     QSpinBox* m_connectMs = nullptr;
     QSpinBox* m_sweepMs = nullptr;
     QSpinBox* m_retries = nullptr;

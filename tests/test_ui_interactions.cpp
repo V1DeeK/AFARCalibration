@@ -145,7 +145,24 @@ TEST_CASE("connection cards are always visible", "[ui]")
     auto* host = bar.findChild<QLineEdit*>(QStringLiteral("vnaHost"));
     REQUIRE(host != nullptr);
     REQUIRE(host->isVisible());
-    REQUIRE(bar.findChild<QGroupBox*>(QStringLiteral("vnaConnectionBox")) != nullptr);
+    REQUIRE(bar.findChild<QWidget*>(QStringLiteral("vnaConnectionBox")) != nullptr);
+}
+
+TEST_CASE("controller tab opens only after the instrument is connected", "[ui]")
+{
+    (void)application();
+    ConnectionBar bar;
+    auto* tabs = bar.findChild<QTabWidget*>(QStringLiteral("vnaTabs"));
+    REQUIRE(tabs != nullptr);
+    REQUIRE(tabs->count() == 2);
+    CHECK(tabs->tabText(0) == QStringLiteral("Подключение"));
+    CHECK_FALSE(tabs->isTabEnabled(1));
+    bar.setVnaInfo(QStringLiteral("PLANAR C2220"), QStringLiteral("127.0.0.1:5025"), true);
+    CHECK(tabs->isTabEnabled(1));
+    tabs->setCurrentIndex(1);
+    bar.setVnaInfo(QStringLiteral("PLANAR C2220"), QStringLiteral("127.0.0.1:5025"), false);
+    CHECK_FALSE(tabs->isTabEnabled(1));
+    CHECK(tabs->currentIndex() == 0);
 }
 
 TEST_CASE("S2VNA demo is a distinct local socket backend", "[ui][settings][demo]")

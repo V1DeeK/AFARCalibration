@@ -644,8 +644,10 @@ QWidget* MeasureTab::makeGraphsPage()
     sideScroll->setMaximumWidth(420);
     sideScroll->setWidget(side);
 
+    // Сама вкладка держит панель справа от графиков; MainWindow переносит её в верхний ряд (sidePanel()).
     root->addWidget(plotHost, 1);
     root->addWidget(sideScroll);
+    m_sidePanel = sideScroll;
     refreshGraphsPage();
     return page;
 }
