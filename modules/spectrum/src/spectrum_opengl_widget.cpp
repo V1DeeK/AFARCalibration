@@ -86,6 +86,12 @@ QSurfaceFormat SpectrumOpenGLWidget::surfaceFormat() {
     return format;
 }
 
+void SpectrumOpenGLWidget::applyDefaultFormat() {
+#ifdef Q_OS_MACOS
+    QSurfaceFormat::setDefaultFormat(surfaceFormat());
+#endif
+}
+
 SpectrumOpenGLWidget::SpectrumOpenGLWidget(AppState& state, QWidget* parent)
     : QOpenGLWidget(parent), state_(state), renderer_(state) {
     setFormat(surfaceFormat());

@@ -42,7 +42,7 @@ int main(int argc, char* argv[])
 #endif
 
     // Формат OpenGL задаётся до QApplication: иначе на macOS вкладка «Спектр» чёрная.
-    QSurfaceFormat::setDefaultFormat(SpectrumOpenGLWidget::surfaceFormat());
+    SpectrumOpenGLWidget::applyDefaultFormat();
 
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("AFAR RX Calibration Studio"));

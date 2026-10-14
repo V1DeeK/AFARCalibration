@@ -19,6 +19,9 @@ public:
     /// формат окна и виджета различаются, составной кадр QOpenGLWidget не
     /// отображается (чёрная вкладка с перевёрнутым содержимым окна).
     static QSurfaceFormat surfaceFormat();
+    /// Вызывать до создания QApplication. Только на macOS: там без этого вкладка чёрная;
+    /// на Windows и Linux формат по умолчанию не меняем (с программным OpenGL на CI это ломает загрузку).
+    static void applyDefaultFormat();
 
     explicit SpectrumOpenGLWidget(AppState& state, QWidget* parent = nullptr);
     ~SpectrumOpenGLWidget() override;

@@ -5,7 +5,7 @@
 #include <QTimer>
 
 int main(int argc, char* argv[]) {
-    QSurfaceFormat::setDefaultFormat(SpectrumOpenGLWidget::surfaceFormat());
+    SpectrumOpenGLWidget::applyDefaultFormat();
     QApplication app(argc, argv);
     app.setOrganizationName(QStringLiteral("AFAR"));
     app.setApplicationName(QStringLiteral("SpectrumWidgetTest"));
