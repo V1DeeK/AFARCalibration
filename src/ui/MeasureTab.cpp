@@ -105,8 +105,9 @@ MeasureTab::MeasureTab(QWidget* parent)
         }
     }
     m_workMode->view()->setMinimumWidth(360);
-    navigationLayout->addWidget(modeLabel);
-    navigationLayout->addWidget(m_workMode);
+    // «Режим работы» живёт в отдельном окошке сверху вкладки (MainWindow берёт его через workModeCombo()).
+    modeLabel->hide();
+    m_workMode->setParent(this);
 
     m_stages = new QListWidget(this);
     const QStringList stages = {
@@ -569,6 +570,7 @@ QWidget* MeasureTab::makeGraphsPage()
     side->setMinimumWidth(250);
     auto* sideLayout = new QVBoxLayout(side);
     sideLayout->setContentsMargins(8, 0, 0, 0);
+    sideLayout->setSpacing(10);
 
     auto* readLive = new QPushButton(QStringLiteral("Подключить C2220 и измерить всё"), side);
     readLive->setObjectName(QStringLiteral("btnPrimary"));
@@ -596,28 +598,6 @@ QWidget* MeasureTab::makeGraphsPage()
     m_graphDataStatus = new QLabel(QStringLiteral("Реальные данные прибора ещё не получены"), side);
     m_graphDataStatus->setWordWrap(true);
     m_graphDataStatus->setObjectName(QStringLiteral("hintLabel"));
-
-    auto* reportFields = new QGroupBox(QStringLiteral("Поля PDF-отчёта"), side);
-    auto* reportForm = new QFormLayout(reportFields);
-    m_reportDeviceName = new QLineEdit(reportFields);
-    m_reportDeviceName->setObjectName(QStringLiteral("reportDeviceName"));
-    m_reportDeviceName->setPlaceholderText(QStringLiteral("Название изделия"));
-    m_reportDeviceSerial = new QLineEdit(reportFields);
-    m_reportDeviceSerial->setObjectName(QStringLiteral("reportDeviceSerial"));
-    m_reportDeviceSerial->setPlaceholderText(QStringLiteral("Серийный номер"));
-    m_reportOperator = new QLineEdit(reportFields);
-    m_reportOperator->setObjectName(QStringLiteral("reportOperator"));
-    m_reportOperator->setPlaceholderText(QStringLiteral("ФИО или табельный номер"));
-    m_reportComment = new QLineEdit(reportFields);
-    m_reportComment->setObjectName(QStringLiteral("reportComment"));
-    m_reportComment->setPlaceholderText(QStringLiteral("Необязательно"));
-    m_reportAccepted = new QCheckBox(QStringLiteral("Принято оператором"), reportFields);
-    m_reportAccepted->setObjectName(QStringLiteral("reportAccepted"));
-    reportForm->addRow(QStringLiteral("Изделие:"), m_reportDeviceName);
-    reportForm->addRow(QStringLiteral("Серийный №:"), m_reportDeviceSerial);
-    reportForm->addRow(QStringLiteral("Оператор:"), m_reportOperator);
-    reportForm->addRow(QStringLiteral("Комментарий:"), m_reportComment);
-    reportForm->addRow(m_reportAccepted);
 
     auto* formatBox = new QGroupBox(QStringLiteral("Формат отображения"), side);
     auto* formatLayout = new QVBoxLayout(formatBox);
@@ -726,28 +706,37 @@ QWidget* MeasureTab::makeGraphsPage()
     calcHint->setWordWrap(true);
     calcHint->setObjectName(QStringLiteral("hintLabel"));
 
-    sideLayout->addWidget(readLive);
-    sideLayout->addWidget(measureAll);
-    sideLayout->addWidget(m_exportTwoPort);
-    sideLayout->addWidget(openSweepSettings);
-    sideLayout->addWidget(m_graphDataStatus);
-    sideLayout->addWidget(reportFields);
+    auto* actionBox = new QGroupBox(QStringLiteral("Измерение"), side);
+    actionBox->setObjectName(QStringLiteral("graphActionBox"));
+    auto* actionLayout = new QVBoxLayout(actionBox);
+    actionLayout->setSpacing(8);
+    actionLayout->addWidget(readLive);
+    actionLayout->addWidget(measureAll);
+    actionLayout->addWidget(m_exportTwoPort);
+    actionLayout->addWidget(openSweepSettings);
+    actionLayout->addWidget(m_graphDataStatus);
+    sideLayout->addWidget(actionBox);
     sideLayout->addWidget(formatBox);
     sideLayout->addWidget(traces);
     sideLayout->addWidget(markers);
-    sideLayout->addWidget(terminalTitle);
-    sideLayout->addWidget(m_graphTerminal, 1);
-    sideLayout->addWidget(m_graphExpression);
-    sideLayout->addWidget(calculate);
-    sideLayout->addWidget(calcHint);
+    auto* calcBox = new QGroupBox(QStringLiteral("Значения маркеров и калькулятор"), side);
+    calcBox->setObjectName(QStringLiteral("graphCalcBox"));
+    auto* calcLayout = new QVBoxLayout(calcBox);
+    calcLayout->setSpacing(8);
+    terminalTitle->hide();
+    calcLayout->addWidget(m_graphTerminal, 1);
+    calcLayout->addWidget(m_graphExpression);
+    calcLayout->addWidget(calculate);
+    calcLayout->addWidget(calcHint);
+    sideLayout->addWidget(calcBox, 1);
 
     auto* sideScroll = new QScrollArea(page);
     sideScroll->setObjectName(QStringLiteral("graphControlsScroll"));
     sideScroll->setWidgetResizable(true);
     sideScroll->setFrameShape(QFrame::NoFrame);
     sideScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    sideScroll->setMinimumWidth(340);
-    sideScroll->setMaximumWidth(400);
+    sideScroll->setMinimumWidth(360);
+    sideScroll->setMaximumWidth(420);
     sideScroll->setWidget(side);
 
     root->addWidget(plotHost, 1);

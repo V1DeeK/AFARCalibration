@@ -157,19 +157,16 @@ TEST_CASE("VNA timeouts are collapsed until the engineer expands them", "[ui]")
     REQUIRE(body->isHidden());
 }
 
-TEST_CASE("connection settings keep the top bar compact until expanded", "[ui]")
+TEST_CASE("connection cards are always visible", "[ui]")
 {
     (void)application();
     ConnectionBar bar;
-    auto* toggle = bar.findChild<QToolButton*>(QStringLiteral("connectionSettingsToggle"));
-    auto* body = bar.findChild<QWidget*>(QStringLiteral("connectionSettingsBody"));
-    REQUIRE(toggle != nullptr);
-    REQUIRE(body != nullptr);
-    REQUIRE(body->isHidden());
-    toggle->setChecked(true);
-    REQUIRE_FALSE(body->isHidden());
-    toggle->setChecked(false);
-    REQUIRE(body->isHidden());
+    bar.show();
+    REQUIRE(bar.findChild<QToolButton*>(QStringLiteral("connectionSettingsToggle")) == nullptr);
+    auto* host = bar.findChild<QLineEdit*>(QStringLiteral("vnaHost"));
+    REQUIRE(host != nullptr);
+    REQUIRE(host->isVisible());
+    REQUIRE(bar.findChild<QGroupBox*>(QStringLiteral("vnaConnectionBox")) != nullptr);
 }
 
 TEST_CASE("S2VNA demo is a distinct local socket backend", "[ui][settings][demo]")
@@ -414,26 +411,8 @@ TEST_CASE("two-port mode, center-span entry and report action are explicit", "[u
     tab.setTwoPortExportInProgress(false);
     REQUIRE(exportButton->isEnabled());
 
-    auto* deviceName = tab.findChild<QLineEdit*>(QStringLiteral("reportDeviceName"));
-    auto* deviceSerial = tab.findChild<QLineEdit*>(QStringLiteral("reportDeviceSerial"));
-    auto* operatorName = tab.findChild<QLineEdit*>(QStringLiteral("reportOperator"));
-    auto* comment = tab.findChild<QLineEdit*>(QStringLiteral("reportComment"));
-    auto* accepted = tab.findChild<QCheckBox*>(QStringLiteral("reportAccepted"));
-    REQUIRE(deviceName != nullptr);
-    REQUIRE(deviceSerial != nullptr);
-    REQUIRE(operatorName != nullptr);
-    REQUIRE(comment != nullptr);
-    REQUIRE(accepted != nullptr);
-    deviceName->setText(QStringLiteral("Изделие А"));
-    deviceSerial->setText(QStringLiteral("SN-42"));
-    operatorName->setText(QStringLiteral("Оператор"));
-    comment->setText(QStringLiteral("Комментарий"));
-    accepted->setChecked(true);
-    REQUIRE(tab.reportDeviceName() == QStringLiteral("Изделие А"));
-    REQUIRE(tab.reportDeviceSerial() == QStringLiteral("SN-42"));
-    REQUIRE(tab.reportOperatorName() == QStringLiteral("Оператор"));
-    REQUIRE(tab.reportComment() == QStringLiteral("Комментарий"));
-    REQUIRE(tab.reportAccepted());
+    REQUIRE(tab.findChild<QLineEdit*>(QStringLiteral("reportDeviceName")) == nullptr);
+    REQUIRE(tab.findChild<QLineEdit*>(QStringLiteral("reportOperator")) == nullptr);
 }
 
 TEST_CASE("graph controls scroll after fullscreen is restored to a small window", "[ui]")

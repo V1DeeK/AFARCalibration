@@ -248,8 +248,6 @@ add_library(afar_app_ui STATIC
     ui/S21PlotWidget.h
     ui/CodeMatrixTab.cpp
     ui/CodeMatrixTab.h
-    ui/DataFormatsTab.cpp
-    ui/DataFormatsTab.h
     ui/AcceptanceAtTab.cpp
     ui/AcceptanceAtTab.h
     ui/StartWizard.cpp

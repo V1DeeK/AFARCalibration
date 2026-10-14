@@ -104,6 +104,8 @@ public:
     [[nodiscard]] int ifbwHz() const;
     [[nodiscard]] double powerDbm() const;
     [[nodiscard]] int averages() const;
+    /// Выбор режима работы: выносится в отдельное окошко над вкладками.
+    [[nodiscard]] QComboBox* workModeCombo() const { return m_workMode; }
     [[nodiscard]] QString reportDeviceName() const;
     [[nodiscard]] QString reportDeviceSerial() const;
     [[nodiscard]] QString reportOperatorName() const;

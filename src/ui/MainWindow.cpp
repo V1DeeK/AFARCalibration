@@ -3,7 +3,6 @@
 #include "AcceptanceAtTab.h"
 #include "CodeMatrixTab.h"
 #include "ConnectionBar.h"
-#include "DataFormatsTab.h"
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
 #include "BoardParametersPage.h"
@@ -28,6 +27,8 @@
 #include <QDebug>
 #include <QFrame>
 #include <QFileDialog>
+#include <QComboBox>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -152,38 +153,59 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     auto* tabs = new QTabWidget(root);
     m_measure = new MeasureTab(tabs);
     m_matrix = new CodeMatrixTab(tabs);
-    m_formats = new DataFormatsTab(tabs);
     tabs->addTab(m_measure, QStringLiteral("Измерение"));
     tabs->addTab(m_matrix, QStringLiteral("Матрица кодов"));
-    tabs->addTab(m_formats, QStringLiteral("Форматы данных"));
 
-    auto* cycle = new QFrame(root);
-    cycle->setFrameShape(QFrame::NoFrame);
-    auto* cycleLayout = new QHBoxLayout(cycle);
-    cycleLayout->setContentsMargins(0, 0, 0, 0);
-    cycleLayout->setSpacing(ui::kInnerGap);
+    // Верхний ряд: «Режим работы» и запуск серии (Старт/Пауза/Стоп) — отдельными карточками.
+    auto* modeBox = new QGroupBox(QStringLiteral("Режим работы"), root);
+    modeBox->setObjectName(QStringLiteral("workModeBox"));
+    auto* modeLayout = new QVBoxLayout(modeBox);
+    QComboBox* modeCombo = m_measure->workModeCombo();
+    modeCombo->setParent(modeBox);
+    modeCombo->show();
+    modeLayout->addWidget(modeCombo);
+    modeLayout->addStretch(1);
+
+    auto* cycle = new QGroupBox(QStringLiteral("Запуск серии"), root);
+    cycle->setObjectName(QStringLiteral("runBox"));
+    auto* cycleLayout = new QGridLayout(cycle);
+    cycleLayout->setHorizontalSpacing(ui::kInnerGap);
+    cycleLayout->setVerticalSpacing(ui::kInnerGap);
     m_wizardBtn = new QPushButton(QStringLiteral("Мастер запуска"), cycle);
     m_wizardBtn->setObjectName(QStringLiteral("btnWizard"));
-    cycle->setToolTip(
-        QStringLiteral("Мастер запуска → подтверждения → Готово → Старт"));
+    m_wizardBtn->setToolTip(QStringLiteral("Пошаговая проверка стенда перед серией"));
     m_start = new QPushButton(QStringLiteral("Старт"), cycle);
     m_start->setObjectName(QStringLiteral("btnStart"));
     m_pause = new QPushButton(QStringLiteral("Пауза"), cycle);
     m_pause->setObjectName(QStringLiteral("btnPause"));
     m_stop = new QPushButton(QStringLiteral("Стоп"), cycle);
     m_stop->setObjectName(QStringLiteral("btnStop"));
+    ui::setButtonRole(m_wizardBtn, ui::ButtonRole::Secondary);
+    ui::setButtonRole(m_start, ui::ButtonRole::Primary);
+    ui::setButtonRole(m_pause, ui::ButtonRole::Secondary);
+    ui::setButtonRole(m_stop, ui::ButtonRole::Danger);
     m_start->setEnabled(false);
     m_pause->setEnabled(false);
     m_stop->setEnabled(false);
-    cycleLayout->addWidget(m_wizardBtn);
-    cycleLayout->addStretch(1);
-    cycleLayout->addWidget(m_start);
-    cycleLayout->addWidget(m_pause);
-    cycleLayout->addWidget(m_stop);
+    auto* wizardHint = ui::hintLabel(
+        QStringLiteral("Сначала «Мастер запуска»: он проверяет подключения и связь с прибором. "
+                       "Когда мастер завершён, станет доступна кнопка «Старт»."),
+        cycle);
+    cycleLayout->addWidget(m_wizardBtn, 0, 0);
+    cycleLayout->addWidget(m_start, 0, 1);
+    cycleLayout->addWidget(m_pause, 0, 2);
+    cycleLayout->addWidget(m_stop, 0, 3);
+    cycleLayout->addWidget(wizardHint, 1, 0, 1, 4);
+    cycleLayout->setColumnStretch(0, 1);
 
+    auto* topRow = new QHBoxLayout;
+    topRow->setSpacing(ui::kGap);
+    topRow->addWidget(modeBox, 2);
+    topRow->addWidget(cycle, 3);
+
+    rootLayout->addLayout(topRow);
     rootLayout->addWidget(m_connections);
     rootLayout->addWidget(tabs, 1);
-    rootLayout->addWidget(cycle);
     viewport->setWidget(root);
 
     // --- Спектр ---
@@ -798,8 +820,10 @@ void MainWindow::onPaths(const QString& seriesRoot,
                          const QString& manifest,
                          const QString& runEvents)
 {
-    m_formats->setSeriesPaths(seriesRoot, runConfig, attenuatorCsv, rawS21, directLut, inverseLut,
-                              report, manifest, runEvents);
+    (void)runConfig;
+    (void)attenuatorCsv;
+    (void)rawS21;
+    (void)runEvents;
     m_measure->setSeriesArtifacts(seriesRoot, directLut, inverseLut, report, manifest);
 }
 

@@ -61,16 +61,14 @@ QString formatScpiErrorLine(const QString& raw)
 ConnectionBar::ConnectionBar(QWidget* parent)
     : QFrame(parent)
 {
-    setFrameShape(QFrame::StyledPanel);
+    setFrameShape(QFrame::NoFrame);
     setObjectName(QStringLiteral("ConnectionBar"));
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
-    root->setSpacing(ui::kInnerGap);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(ui::kGap);
 
-    auto* row = new QGridLayout();
-    row->setHorizontalSpacing(ui::kInnerGap);
-    row->setVerticalSpacing(ui::kInnerGap);
+    // Состояния — «таблетки» одного вида; цвет задаёт тон, а не жёсткий цвет текста.
     m_vna = new QLabel(QStringLiteral("C2220: нет связи"), this);
     m_controller = new QLabel(
         QStringLiteral("CTRL: OK — ИМИТАТОР (для S-параметров не нужен)"), this);
@@ -81,54 +79,29 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_status = new QLabel(QStringLiteral("Статус: простой"), this);
     m_source = new QLabel(QStringLiteral("Источник: имитатор (не метрология стенда)"), this);
     m_source->setObjectName(QStringLiteral("dataSourceBadge"));
-    ui::setTone(m_source, ui::Tone::Warn);
-
-    // Все шесть строк — «таблетки» одного вида; цвет задаёт тон, а не жёсткий цвет текста,
-    // поэтому читаются и в тёмной теме.
     for (auto* label : {m_source, m_filterReady, m_vna, m_controller, m_temperature, m_status}) {
         label->setWordWrap(true);
         label->setProperty("role", QStringLiteral("status"));
     }
+    ui::setTone(m_source, ui::Tone::Warn);
     ui::setTone(m_filterReady, ui::Tone::Error);
     ui::setTone(m_vna, ui::Tone::Error);
     ui::setTone(m_controller, ui::Tone::Warn);
-    row->addWidget(m_source, 0, 0);
-    row->addWidget(m_filterReady, 0, 1);
-    row->addWidget(m_vna, 0, 2);
-    row->addWidget(m_controller, 1, 0);
-    row->addWidget(m_temperature, 1, 1);
-    row->addWidget(m_status, 1, 2);
-    auto* settingsToggle = new QToolButton(this);
-    settingsToggle->setObjectName(QStringLiteral("connectionSettingsToggle"));
-    settingsToggle->setText(QStringLiteral("Настройки подключения"));
-    settingsToggle->setCheckable(true);
-    settingsToggle->setArrowType(Qt::RightArrow);
-    settingsToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    row->addWidget(settingsToggle, 0, 3, 2, 1, Qt::AlignVCenter);
+
     // Тему переключает кнопка справа от вкладок; своя кнопка полосы осталась только для совместимости.
     m_theme = new QPushButton(QStringLiteral("Тема: светлая"), this);
     m_theme->setObjectName(QStringLiteral("btnTheme"));
     m_theme->setVisible(false);
     connect(m_theme, &QPushButton::clicked, this, &ConnectionBar::themeToggleRequested);
-    row->setColumnStretch(0, 2);
-    row->setColumnStretch(1, 1);
-    row->setColumnStretch(2, 1);
-    root->addLayout(row);
 
-    auto* settingsBody = new QWidget(this);
-    settingsBody->setObjectName(QStringLiteral("connectionSettingsBody"));
-    auto* settingsLayout = new QVBoxLayout(settingsBody);
-    settingsLayout->setContentsMargins(0, 0, 0, 0);
-    settingsLayout->setSpacing(2);
-    settingsBody->setVisible(false);
-    connect(settingsToggle, &QToolButton::toggled, this,
-            [settingsToggle, settingsBody](bool expanded) {
-                settingsToggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
-                settingsBody->setVisible(expanded);
-            });
+    // Поля подключения — как в окошке «Подключение к плате»: подпись над полем, статус, кнопка.
+    const auto caption = [this](const QString& text) { return ui::captionLabel(text, this); };
 
-    auto* cfg = new QHBoxLayout();
-    cfg->addWidget(new QLabel(QStringLiteral("VNA:"), this));
+    // --- Подключение к прибору ---
+    auto* vnaBox = new QGroupBox(QStringLiteral("Подключение к прибору (VNA)"), this);
+    vnaBox->setObjectName(QStringLiteral("vnaConnectionBox"));
+    auto* vnaLayout = new QVBoxLayout(vnaBox);
+    vnaLayout->setSpacing(ui::kInnerGap);
     m_backend = new QComboBox(this);
     m_backend->setObjectName(QStringLiteral("vnaBackend"));
     m_backend->addItem(QStringLiteral("Связанный демостенд (VNA + DUT)"), 0);
@@ -158,56 +131,86 @@ ConnectionBar::ConnectionBar(QWidget* parent)
         Qt::ToolTipRole);
     m_backend->setToolTip(
         QStringLiteral("S2VNA = SCPI-сервер; калибровка и измерения — из AFAR."));
-    cfg->addWidget(m_backend);
-    cfg->addWidget(new QLabel(QStringLiteral("Host"), this));
     m_host = new QLineEdit(QStringLiteral("127.0.0.1"), this);
     m_host->setObjectName(QStringLiteral("vnaHost"));
-    m_host->setMaximumWidth(140);
-    cfg->addWidget(m_host);
-    cfg->addWidget(new QLabel(QStringLiteral("Port"), this));
     m_port = new QSpinBox(this);
     m_port->setObjectName(QStringLiteral("vnaPort"));
     m_port->setRange(1, 65535);
     m_port->setValue(5025);
-    cfg->addWidget(m_port);
-    cfg->addWidget(new QLabel(QStringLiteral("COM"), this));
+    m_port->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_com = new QLineEdit(QStringLiteral("COM3"), this);
     m_com->setObjectName(QStringLiteral("vnaComPort"));
-    m_com->setMaximumWidth(80);
-    cfg->addWidget(m_com);
     m_probe = new QPushButton(QStringLiteral("Проверить связь"), this);
     m_probe->setObjectName(QStringLiteral("btnPrimary"));
-    cfg->addWidget(m_probe);
-    cfg->addStretch(1);
-    settingsLayout->addLayout(cfg);
+    ui::setButtonRole(m_probe, ui::ButtonRole::Primary);
+    auto* vnaFields = new QGridLayout;
+    vnaFields->setHorizontalSpacing(ui::kInnerGap);
+    vnaFields->setVerticalSpacing(2);
+    vnaFields->addWidget(caption(QStringLiteral("Адрес (Host)")), 0, 0);
+    vnaFields->addWidget(caption(QStringLiteral("Порт")), 0, 1);
+    vnaFields->addWidget(m_host, 1, 0);
+    vnaFields->addWidget(m_port, 1, 1);
+    vnaFields->setColumnStretch(0, 1);
+    vnaLayout->addWidget(caption(QStringLiteral("Тип подключения")));
+    vnaLayout->addWidget(m_backend);
+    vnaLayout->addLayout(vnaFields);
+    vnaLayout->addWidget(caption(QStringLiteral("COM-порт")));
+    vnaLayout->addWidget(m_com);
+    vnaLayout->addWidget(m_vna);
+    vnaLayout->addWidget(m_filterReady);
+    vnaLayout->addWidget(m_probe);
+    vnaLayout->addStretch(1);
 
-    // Контроллер изделия — PS (docs/contracts/ps-json-protocol.md) или деморежим.
-    auto* dutCfg = new QHBoxLayout();
-    dutCfg->addWidget(new QLabel(QStringLiteral("CTRL:"), this));
+    // --- Контроллер изделия (PS изделия или демо) ---
+    auto* ctrlBox = new QGroupBox(QStringLiteral("Контроллер изделия"), this);
+    ctrlBox->setObjectName(QStringLiteral("controllerBox"));
+    auto* ctrlLayout = new QVBoxLayout(ctrlBox);
+    ctrlLayout->setSpacing(ui::kInnerGap);
     m_ctrlBackend = new QComboBox(this);
     m_ctrlBackend->setObjectName(QStringLiteral("controllerBackend"));
     m_ctrlBackend->addItem(QStringLiteral("Демо-контроллер (DutSimulator)"), 0);
     m_ctrlBackend->addItem(QStringLiteral("PS изделия (JSON, TCP :49600)"), 3);
-    dutCfg->addWidget(m_ctrlBackend);
-    dutCfg->addWidget(new QLabel(QStringLiteral("Host"), this));
     m_dutHost = new QLineEdit(QStringLiteral("192.168.0.10"), this);
-    m_dutHost->setMaximumWidth(140);
     m_dutHost->setToolTip(QStringLiteral("адрес PS из профиля стенда"));
-    dutCfg->addWidget(m_dutHost);
-    dutCfg->addWidget(new QLabel(QStringLiteral("Port"), this));
     m_dutPort = new QSpinBox(this);
     m_dutPort->setRange(1, 65535);
     m_dutPort->setValue(4001);
+    m_dutPort->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_dutPort->setToolTip(QStringLiteral("TCP-порт канала управления PS"));
-    dutCfg->addWidget(m_dutPort);
-    dutCfg->addWidget(new QLabel(QStringLiteral("COM"), this));
     m_dutCom = new QLineEdit(QStringLiteral("COM4"), this);
-    m_dutCom->setMaximumWidth(80);
     m_dutCom->setToolTip(QStringLiteral("нужен протокол т.14"));
-    dutCfg->addWidget(m_dutCom);
-    dutCfg->addStretch(1);
-    settingsLayout->addLayout(dutCfg);
-    root->addWidget(settingsBody);
+    auto* dutFields = new QGridLayout;
+    dutFields->setHorizontalSpacing(ui::kInnerGap);
+    dutFields->setVerticalSpacing(2);
+    dutFields->addWidget(caption(QStringLiteral("Адрес (Host)")), 0, 0);
+    dutFields->addWidget(caption(QStringLiteral("Порт")), 0, 1);
+    dutFields->addWidget(m_dutHost, 1, 0);
+    dutFields->addWidget(m_dutPort, 1, 1);
+    dutFields->setColumnStretch(0, 1);
+    ctrlLayout->addWidget(caption(QStringLiteral("Контроллер")));
+    ctrlLayout->addWidget(m_ctrlBackend);
+    ctrlLayout->addLayout(dutFields);
+    ctrlLayout->addWidget(caption(QStringLiteral("COM-порт")));
+    ctrlLayout->addWidget(m_dutCom);
+    ctrlLayout->addWidget(m_controller);
+    ctrlLayout->addStretch(1);
+
+    // --- Состояние ---
+    auto* stateBox = new QGroupBox(QStringLiteral("Состояние"), this);
+    stateBox->setObjectName(QStringLiteral("stateBox"));
+    auto* stateLayout = new QVBoxLayout(stateBox);
+    stateLayout->setSpacing(ui::kInnerGap);
+    stateLayout->addWidget(m_source);
+    stateLayout->addWidget(m_temperature);
+    stateLayout->addWidget(m_status);
+    stateLayout->addStretch(1);
+
+    auto* cards = new QHBoxLayout;
+    cards->setSpacing(ui::kGap);
+    cards->addWidget(vnaBox, 3);
+    cards->addWidget(ctrlBox, 3);
+    cards->addWidget(stateBox, 2);
+    root->addLayout(cards);
     disableCombatControllerItem();
 
     m_diagnostic = new QLabel(this);

@@ -9,7 +9,6 @@ class AcceptanceAtTab;
 class BoardParametersPage;
 class CodeMatrixTab;
 class ConnectionBar;
-class DataFormatsTab;
 class MeasureTab;
 class MeasureWorker;
 class ConnectionTab;
@@ -139,7 +138,6 @@ private:
     ConnectionBar* m_connections = nullptr;
     MeasureTab* m_measure = nullptr;
     CodeMatrixTab* m_matrix = nullptr;
-    DataFormatsTab* m_formats = nullptr;
     AcceptanceAtTab* m_acceptance = nullptr;
     PsSession* m_psSession = nullptr;
     QTabWidget* m_tabs = nullptr;
