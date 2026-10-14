@@ -429,7 +429,9 @@ void PsSession::onEvent(const ps::Envelope& event)
 void PsSession::onTelemetry(const ps::Telemetry& t)
 {
     m_telemetry = t;
-    setMode(t.mode, QString::fromStdString(t.state));
+    if (t.hasMode) {
+        setMode(t.mode, QString::fromStdString(t.state));
+    }
     emit telemetryChanged();
 }
 

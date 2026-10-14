@@ -554,11 +554,21 @@ void ParametersTab::onTelemetry()
     }
     const ps::Telemetry& t = *tlm;
     std::vector<std::pair<QString, QString>> rows;
-    rows.emplace_back(QStringLiteral("Режим"), QString::fromStdString(ps::modeRu(t.mode)));
+    if (t.hasMode) {
+        rows.emplace_back(QStringLiteral("Режим"), QString::fromStdString(ps::modeRu(t.mode)));
+    }
+    if (t.cpuLoad) {
+        rows.emplace_back(QStringLiteral("Загрузка процессора"), QStringLiteral("%1 %").arg(*t.cpuLoad, 0, 'f', 1));
+    }
+    for (std::size_t i = 0; i < t.cpuCores.size(); ++i) {
+        rows.emplace_back(QStringLiteral("Ядро %1").arg(i), QStringLiteral("%1 %").arg(t.cpuCores[i], 0, 'f', 1));
+    }
     if (!t.state.empty()) {
         rows.emplace_back(QStringLiteral("Состояние"), QString::fromStdString(ps::stateRu(t.state)));
     }
-    rows.emplace_back(QStringLiteral("Время работы"), QStringLiteral("%1 с").arg(t.uptime));
+    if (t.uptime > 0) {
+        rows.emplace_back(QStringLiteral("Время работы"), QStringLiteral("%1 с").arg(t.uptime));
+    }
     for (const auto& [id, h] : t.devices) {
         rows.emplace_back(QStringLiteral("Проверка: %1").arg(QString::fromStdString(ps::selfTestRu(id))),
                           qs(ps::toString(h)));

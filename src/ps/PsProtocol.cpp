@@ -740,14 +740,16 @@ bool MixerState::fromJson(const nlohmann::json& o, MixerState& out, std::string*
 
 bool Telemetry::fromJson(const nlohmann::json& o, Telemetry& out, std::string* error)
 {
-    Telemetry t;
-    std::string mode;
-    if (!readInt(o, "time", t.time) || !readInt(o, "uptime", t.uptime) ||
-        !readString(o, "mode", mode) || !parseMode(mode, t.mode) ||
-        !readString(o, "state", t.state)) {
-        setError(error, "нет обязательных полей телеметрии");
+    if (!o.is_object()) {
+        setError(error, "телеметрия: payload не объект");
         return false;
     }
+    Telemetry t;
+    std::string mode;
+    readInt(o, "time", t.time);
+    readInt(o, "uptime", t.uptime);
+    readString(o, "state", t.state);
+    t.hasMode = readString(o, "mode", mode) && parseMode(mode, t.mode);
     if (const auto it = o.find("devices"); it != o.end() && it->is_object()) {
         for (const auto& [id, value] : it->items()) {
             DeviceHealth h = DeviceHealth::NotChecked;
@@ -770,6 +772,21 @@ bool Telemetry::fromJson(const nlohmann::json& o, Telemetry& out, std::string* e
     };
     numbers("temperature", t.temperature);
     numbers("power", t.power);
+    // Поля реальной PS: "temp" — температура платы, "voltages" — напряжения, "cpu_load"/"cpu_cores" — загрузка.
+    if (const auto it = o.find("temp"); it != o.end() && it->is_number()) {
+        t.temperature.emplace_back("плата", it->get<double>());
+    }
+    numbers("voltages", t.power);
+    if (const auto it = o.find("cpu_load"); it != o.end() && it->is_number()) {
+        t.cpuLoad = it->get<double>();
+    }
+    if (const auto it = o.find("cpu_cores"); it != o.end() && it->is_array()) {
+        for (const auto& v : *it) {
+            if (v.is_number()) {
+                t.cpuCores.push_back(v.get<double>());
+            }
+        }
+    }
     out = std::move(t);
     return true;
 }

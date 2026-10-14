@@ -252,7 +252,12 @@ struct Telemetry {
     std::vector<std::pair<std::string, DeviceHealth>> devices;
     std::vector<std::pair<std::string, double>> temperature;
     std::vector<std::pair<std::string, double>> power;
+    /// Режим и состояние есть не во всякой телеметрии: реальная PS присылает и загрузку процессора.
+    bool hasMode = false;
+    std::optional<double> cpuLoad;      // %, поле "cpu_load"
+    std::vector<double> cpuCores;       // %, поле "cpu_cores"
 
+    /// Принимает любой объект: известные поля разбираются, остальные игнорируются.
     static bool fromJson(const nlohmann::json& o, Telemetry& out, std::string* error = nullptr);
 };
 

@@ -243,7 +243,23 @@ TEST_CASE("PS: телеметрия по предложению контракт
     CHECK(t.mode == ps::Mode::Service);
     REQUIRE(t.devices.size() == 2);
     CHECK(t.temperature.at(0).second == 54.5);
-    CHECK_FALSE(ps::Telemetry::fromJson(json{{"time", 1}}, t));
+    CHECK(t.hasMode);
+    CHECK_FALSE(ps::Telemetry::fromJson(json::array(), t));
+
+    // Реальная PS: другой набор полей, без режима и времени работы — всё равно телеметрия.
+    const std::string real =
+        R"({"msg_type":"telemetry","msg_class":"event","msg_count":196,"payload":{"cpu_cores":[87.0,1.0],"cpu_load":44.0,"temp":63.6,"voltages":{"vccaux":1.797,"vccint":1.022}}})";
+    ps::Envelope renv;
+    REQUIRE(ps::decodeLine(real, renv));
+    ps::Telemetry rt;
+    REQUIRE(ps::Telemetry::fromJson(renv.payload, rt));
+    CHECK_FALSE(rt.hasMode);
+    REQUIRE(rt.cpuLoad.has_value());
+    CHECK(*rt.cpuLoad == 44.0);
+    CHECK(rt.cpuCores.size() == 2);
+    REQUIRE(rt.temperature.size() == 1);
+    CHECK(rt.temperature.at(0).second == 63.6);
+    CHECK(rt.power.size() == 2);
 }
 
 TEST_CASE("PS: совместимость версий", "[ps][protocol]")

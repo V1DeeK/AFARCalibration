@@ -803,6 +803,30 @@ TEST_CASE("Журнал обмена: выбранное сообщение ви
     CHECK(detail->toPlainText().contains(QStringLiteral("\"msg_type\": \"hello\"")));
 }
 
+TEST_CASE("UDP: телеметрия реальной PS без режима считается принятой", "[ps][ui][udp]")
+{
+    app();
+    TestPsServer server;
+    server.setTelemetryPeriodMs(100000);  // свои датаграммы шлём сами
+    Ui ui;
+    ui.show();
+    connectUi(ui, server);
+    const quint64 before = ui.session->link()->telemetryPackets();
+    QUdpSocket sender;
+    const std::string dg =
+        R"({"msg_type":"telemetry","msg_class":"event","msg_count":10,"payload":{"cpu_cores":[87.0,1.0],"cpu_load":44.0,"temp":63.6,"voltages":{"vccaux":1.797}}})";
+    for (int i = 0; i < 3; ++i) {
+        const std::string one = dg + "\n";
+        sender.writeDatagram(one.data(), static_cast<qint64>(one.size()), QHostAddress::LocalHost,
+                             ui.session->link()->telemetryPort());
+    }
+    REQUIRE(waitFor([&] { return ui.session->link()->telemetryPackets() >= before + 1; }));
+    // Плитка «UDP принято» обновляется вместе с пакетами.
+    auto* tile = ui.connection->findChild<StatTile*>(QStringLiteral("psTileUdpIn"));
+    REQUIRE(tile != nullptr);
+    CHECK(waitFor([&] { return tile->value() != QStringLiteral("0"); }));
+}
+
 TEST_CASE("Модули — гетеродины, смеситель, видеоприёмник по JSON", "[ps][ui][modules]")
 {
     app();
