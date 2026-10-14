@@ -4,6 +4,7 @@
 #include <QString>
 #include <QVector>
 
+class QCloseEvent;
 class AcceptanceAtTab;
 class BoardParametersPage;
 class CodeMatrixTab;
@@ -30,6 +31,9 @@ class MainWindow final : public QMainWindow {
 public:
     explicit MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent = nullptr);
     ~MainWindow() override;
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
 
 private slots:
     void onOpenWizard();

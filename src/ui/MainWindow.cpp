@@ -23,6 +23,7 @@
 
 #include <QApplication>
 #include <QButtonGroup>
+#include <QCloseEvent>
 #include <QDir>
 #include <QDebug>
 #include <QFrame>
@@ -86,13 +87,24 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
 {
     setWindowTitle(QStringLiteral("AFAR RX Calibration Studio / Spectrum Analyzer"));
 
-    // Окно не больше экрана: страницы вкладок прокручиваются, а не растягивают окно.
+    // Адаптивность: окно не больше доступной области экрана (ноутбук 14–15″ с масштабом 125–150 %,
+    // монитор 24″ и больше), страницы вкладок прокручиваются, а не растягивают окно.
     const QRect workArea = screen() ? screen()->availableGeometry()
                                     : QGuiApplication::primaryScreen()->availableGeometry();
-    setMinimumSize(qMin(960, workArea.width()), qMin(600, workArea.height()));
-    resize(qMin(1360, qMax(1, workArea.width() - 40)),
-           qMin(860, qMax(1, workArea.height() - 60)));
+    setMinimumSize(qMin(900, workArea.width()), qMin(560, workArea.height()));
+    const int width = qBound(minimumWidth(), static_cast<int>(workArea.width() * 0.88), 1700);
+    const int height = qBound(minimumHeight(), static_cast<int>(workArea.height() * 0.88), 1050);
+    resize(width, height);
     move(workArea.center() - rect().center());
+    // Прошлый размер и место окна, если они ещё помещаются на текущем экране.
+    const QByteArray savedGeometry = QSettings().value(QStringLiteral("ui/window_geometry_v1")).toByteArray();
+    if (!savedGeometry.isEmpty()) {
+        restoreGeometry(savedGeometry);
+        if (!workArea.intersects(frameGeometry()) || this->width() > workArea.width() || this->height() > workArea.height()) {
+            resize(width, height);
+            move(workArea.center() - rect().center());
+        }
+    }
 
     m_psSession = new PsSession(this);
 
@@ -354,6 +366,12 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     connect(moduleStatusTimer, &QTimer::timeout, this, &MainWindow::updateModuleStatus);
     moduleStatusTimer->start();
     updateModuleStatus();
+}
+
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    QSettings().setValue(QStringLiteral("ui/window_geometry_v1"), saveGeometry());
+    QMainWindow::closeEvent(event);
 }
 
 MainWindow::~MainWindow()

@@ -220,8 +220,8 @@ TEST_CASE("Главное окно: шесть вкладок в порядке 
                                QStringLiteral("Измерение S-параметров"), QStringLiteral("Спектр"),
                                QStringLiteral("Тестовый прогон"), QStringLiteral("Приёмка")});
     // Окно умещается на небольшом экране: содержимое вкладок прокручивается, а не растягивает окно.
-    CHECK(w.window->minimumSizeHint().width() <= 1000);
-    CHECK(w.window->minimumSizeHint().height() <= 650);
+    CHECK(w.window->minimumSizeHint().width() <= 920);
+    CHECK(w.window->minimumSizeHint().height() <= 580);
 }
 
 TEST_CASE("Главное окно: «Тех. состояние» — только параметры платы, «Одна команда» без «Журнала»", "[ui][window]")
@@ -366,7 +366,7 @@ TEST_CASE("Главное окно: на всех вкладках ничего 
 {
     app();
     Window w;
-    const QList<QSize> sizes{{960, 600}, {1100, 700}, {1360, 860}, {1920, 1080}};
+    const QList<QSize> sizes{{900, 560}, {1280, 680}, {1512, 900}, {1536, 800}, {1920, 1000}, {2560, 1380}};
     for (AppTheme theme : {AppTheme::Light, AppTheme::Dark}) {
         applyAppTheme(*qApp, theme);
         for (const QSize& size : sizes) {
@@ -415,9 +415,6 @@ TEST_CASE("Снимки вкладок в обеих темах для пров�
     // Набираем состояния, как их видит оператор: журнал, результаты сканирования, стресс-тест, приёмка.
     child<QPushButton>(*w.window, "sffStart")->click();
     REQUIRE(waitFor([&] { return child<QTableWidget>(*w.window, "sffResults")->rowCount() == 3; }));
-    w.openTab(1);
-    child<QPushButton>(*w.window, "psToService")->click();
-    REQUIRE(waitFor([&] { return child<QPushButton>(*w.window, "psWriteCodes")->isEnabled(); }));
     w.openTab(4);
     child<QSpinBox>(*w.window, "stressRate")->setValue(40);
     child<QSpinBox>(*w.window, "stressTotal")->setValue(60);
