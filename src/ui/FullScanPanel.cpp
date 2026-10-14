@@ -1,6 +1,7 @@
 #include "FullScanPanel.h"
 
 #include "PsSession.h"
+#include "UiStyle.h"
 
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -27,6 +28,7 @@ constexpr double kGhz = 1e9;
 void makeFrequency(QWidget* parent, double hz, int unitIndex, QDoubleSpinBox*& value, QComboBox*& unit)
 {
     value = new QDoubleSpinBox(parent);
+    value->setButtonSymbols(QAbstractSpinBox::NoButtons);
     value->setDecimals(3);
     value->setRange(0.0, double(ps::kFrequencyLimitHz) / kMhz);
     unit = new QComboBox(parent);
@@ -51,6 +53,7 @@ double toHz(const QDoubleSpinBox* value, const QComboBox* unit)
 QDoubleSpinBox* degBox(QWidget* parent, double value)
 {
     auto* box = new QDoubleSpinBox(parent);
+    box->setButtonSymbols(QAbstractSpinBox::NoButtons);
     box->setDecimals(1);
     box->setRange(-ps::kAzimuthLimitDeg, ps::kAzimuthLimitDeg);
     box->setSuffix(QStringLiteral("°"));
@@ -65,7 +68,11 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
     , m_session(session)
 {
     auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(ui::kInnerGap);
     auto* grid = new QGridLayout;
+    grid->setHorizontalSpacing(ui::kInnerGap);
+    grid->setVerticalSpacing(ui::kInnerGap);
     makeFrequency(this, 4.9e9, 0, m_freqFrom, m_freqFromUnit);
     makeFrequency(this, 6.0e9, 1, m_freqTo, m_freqToUnit);
     m_freqFrom->setObjectName(QStringLiteral("sffFreqFrom"));
@@ -81,6 +88,7 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
     m_period->setRange(0, ps::kSffPeriodMaxSec);
     m_period->setSuffix(QStringLiteral(" с"));
     m_period->setSpecialValueText(QStringLiteral("однократно"));
+    m_period->setButtonSymbols(QAbstractSpinBox::NoButtons);
 
     grid->addWidget(new QLabel(QStringLiteral("Частоты"), this), 0, 0);
     grid->addWidget(m_freqFrom, 0, 1);
@@ -96,12 +104,16 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
     layout->addLayout(grid);
 
     auto* buttons = new QHBoxLayout;
+    buttons->setSpacing(ui::kInnerGap);
     m_apply = new QPushButton(QStringLiteral("Применить параметры"), this);
     m_apply->setObjectName(QStringLiteral("sffApply"));
     m_start = new QPushButton(QStringLiteral("Старт"), this);
     m_start->setObjectName(QStringLiteral("sffStart"));
     m_stop = new QPushButton(QStringLiteral("Стоп"), this);
     m_stop->setObjectName(QStringLiteral("sffStop"));
+    ui::setButtonRole(m_apply, ui::ButtonRole::Secondary);
+    ui::setButtonRole(m_start, ui::ButtonRole::Success);
+    ui::setButtonRole(m_stop, ui::ButtonRole::Danger);
     buttons->addWidget(m_apply);
     buttons->addWidget(m_start);
     buttons->addWidget(m_stop);
@@ -110,10 +122,11 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
 
     m_state = new QLabel(this);
     m_state->setObjectName(QStringLiteral("sffState"));
+    m_state->setProperty("role", QStringLiteral("hint"));
     m_state->setWordWrap(true);
     layout->addWidget(m_state);
 
-    layout->addWidget(new QLabel(QStringLiteral("Результаты"), this));
+    layout->addWidget(ui::captionLabel(QStringLiteral("Результаты"), this));
     m_results = new QTableWidget(0, 4, this);
     m_results->setObjectName(QStringLiteral("sffResults"));
     m_results->setHorizontalHeaderLabels({QStringLiteral("Частота, МГц"), QStringLiteral("Калибровка"),
@@ -122,6 +135,9 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
     m_results->verticalHeader()->setVisible(false);
     m_results->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_results->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_results->setAlternatingRowColors(true);
+    m_results->setShowGrid(false);
+    m_results->setMinimumHeight(140);
     layout->addWidget(m_results, 1);
 
     connect(m_apply, &QPushButton::clicked, this, [this] { inScanMode([this] { apply(); }); });

@@ -5,6 +5,7 @@
 #include <QVector>
 
 class AcceptanceAtTab;
+class BoardParametersPage;
 class CodeMatrixTab;
 class ConnectionBar;
 class DataFormatsTab;
@@ -120,7 +121,6 @@ private slots:
     void onCalibrateStep(int kind, int step, int port);
 
 private:
-    QWidget* buildBoardParametersPage();
     void loadExampleDefaults();
     void refreshThemeButton();
     void scanUnfinishedSeries();
@@ -141,6 +141,7 @@ private:
     QTabWidget* m_tabs = nullptr;
     QPushButton* m_themeButton = nullptr;
     ConnectionTab* m_connectionTab = nullptr;
+    BoardParametersPage* m_boardPage = nullptr;
     ParametersTab* m_parametersTab = nullptr;
     SpectrumOpenGLWidget* m_spectrum = nullptr;
     TestRunTab* m_testRun = nullptr;

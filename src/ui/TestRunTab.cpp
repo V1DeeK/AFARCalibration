@@ -3,6 +3,7 @@
 #include "PsExchangeView.h"
 #include "PsSession.h"
 #include "StressTestPanel.h"
+#include "UiStyle.h"
 
 #include <QFontDatabase>
 #include <QHBoxLayout>
@@ -36,7 +37,7 @@ TestRunTab::TestRunTab(PsSession* session, QWidget* parent)
     , m_session(session)
 {
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(6, 6, 6, 6);
+    root->setContentsMargins(ui::kPageMargin, ui::kPageMargin, ui::kPageMargin, ui::kPageMargin);
     auto* tabs = new QTabWidget(this);
     tabs->setObjectName(QStringLiteral("testRunTabs"));
     tabs->addTab(buildStressPage(), QStringLiteral("Стресс-тест TCP"));
@@ -108,20 +109,24 @@ QWidget* TestRunTab::buildUdpPage()
 {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
-    auto* hint = new QLabel(QStringLiteral("PS шлёт телеметрию раз в секунду (контракт §5). Проверка "
-                                           "считает принятые, потерянные по msg_count и отброшенные "
-                                           "датаграммы за выбранное время. Ниже — состояние узлов платы "
-                                           "из последней телеметрии: ПЛИС (PL), RS-485, АЦП и др."),
-                            page);
-    hint->setWordWrap(true);
+    layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
+    layout->setSpacing(ui::kGap);
+    auto* hint = ui::hintLabel(QStringLiteral("PS шлёт телеметрию раз в секунду (контракт §5). Проверка "
+                                              "считает принятые, потерянные по msg_count и отброшенные "
+                                              "датаграммы за выбранное время. Ниже — состояние узлов платы "
+                                              "из последней телеметрии: ПЛИС (PL), RS-485, АЦП и др."),
+                               page);
     auto* row = new QHBoxLayout;
+    row->setSpacing(ui::kInnerGap);
     m_udpSeconds = new QSpinBox(page);
     m_udpSeconds->setObjectName(QStringLiteral("udpCheckSeconds"));
     m_udpSeconds->setRange(2, 3600);
     m_udpSeconds->setValue(10);
     m_udpSeconds->setSuffix(QStringLiteral(" с"));
+    m_udpSeconds->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_udpStart = new QPushButton(QStringLiteral("Проверить поток"), page);
     m_udpStart->setObjectName(QStringLiteral("udpCheckStart"));
+    ui::setButtonRole(m_udpStart, ui::ButtonRole::Primary);
     row->addWidget(new QLabel(QStringLiteral("Длительность"), page));
     row->addWidget(m_udpSeconds);
     row->addWidget(m_udpStart);
@@ -130,6 +135,7 @@ QWidget* TestRunTab::buildUdpPage()
     m_udpCounters->setObjectName(QStringLiteral("udpCounters"));
     m_udpVerdict = new QLabel(page);
     m_udpVerdict->setObjectName(QStringLiteral("udpVerdict"));
+    m_udpVerdict->setProperty("role", QStringLiteral("status"));
     m_udpVerdict->setWordWrap(true);
     m_devices = new QTableWidget(0, 2, page);
     m_devices->setObjectName(QStringLiteral("udpDevices"));
@@ -137,6 +143,9 @@ QWidget* TestRunTab::buildUdpPage()
     m_devices->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_devices->verticalHeader()->setVisible(false);
     m_devices->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_devices->setAlternatingRowColors(true);
+    m_devices->setShowGrid(false);
+    m_devices->setMinimumHeight(140);
     layout->addWidget(hint);
     layout->addLayout(row);
     layout->addWidget(m_udpCounters);
@@ -159,16 +168,19 @@ QWidget* TestRunTab::buildRs485Page()
 {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
+    layout->setSpacing(ui::kGap);
     m_rawHex = new QLineEdit(page);
     m_rawHex->setObjectName(QStringLiteral("psRawHex"));
     m_rawHex->setPlaceholderText(QStringLiteral("например 0101020F1E…"));
     m_rawSend = new QPushButton(QStringLiteral("Передать в линию"), page);
     m_rawSend->setObjectName(QStringLiteral("psRawSend"));
-    m_rawResult = new QLabel(QStringLiteral("Байты уходят в линию RS-485 без изменений, включая CRC16 "
-                                            "(rs485_send, только в сервисном режиме). Ответ устройства PS "
-                                            "пока не возвращает — смотрите статус ответа и журнал."),
-                             page);
-    m_rawResult->setWordWrap(true);
+    ui::setButtonRole(m_rawSend, ui::ButtonRole::Primary);
+    m_rawResult = ui::hintLabel(QStringLiteral("Байты уходят в линию RS-485 без изменений, включая CRC16 "
+                                               "(rs485_send, только в сервисном режиме). Ответ устройства PS "
+                                               "пока не возвращает — смотрите статус ответа и журнал."),
+                                page);
+    m_rawResult->setObjectName(QStringLiteral("psRawResult"));
     auto* row = new QHBoxLayout;
     row->addWidget(m_rawHex, 1);
     row->addWidget(m_rawSend);
@@ -199,6 +211,7 @@ void TestRunTab::startUdpCheck(int seconds)
     m_udpTimer->start();
     m_udpStart->setEnabled(false);
     m_udpVerdict->setText(QStringLiteral("Идёт проверка потока %1 с…").arg(seconds));
+    ui::setTone(m_udpVerdict, ui::Tone::Info);
 }
 
 bool TestRunTab::udpCheckRunning() const
@@ -222,6 +235,7 @@ void TestRunTab::finishUdpCheck()
                               .arg(received)
                               .arg(lost)
                               .arg(rejected));
+    ui::setTone(m_udpVerdict, ok ? ui::Tone::Ok : ui::Tone::Error);
     refreshEnabled();
 }
 
@@ -244,7 +258,7 @@ void TestRunTab::refreshUdp()
             QString::fromStdString(ps::selfTestRu(id)), QString::fromStdString(id)));
         auto* value = new QTableWidgetItem(QString::fromUtf8(h.data(), static_cast<qsizetype>(h.size())));
         if (health == ps::DeviceHealth::Fail) {
-            value->setForeground(QBrush(Qt::red));
+            value->setForeground(QBrush(ui::errorColor()));
         }
         m_devices->setItem(row, 0, name);
         m_devices->setItem(row, 1, value);

@@ -232,10 +232,12 @@ configure_file(
 )
 target_include_directories(afar_report PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/report)
 
-add_executable(AfarRxCalibrationStudio WIN32 MACOSX_BUNDLE
-    app/main.cpp
+# Интерфейс программы — статическая библиотека: из неё собираются и приложение, и автотесты окна.
+add_library(afar_app_ui STATIC
     ui/Theme.cpp
     ui/Theme.h
+    ui/UiStyle.cpp
+    ui/UiStyle.h
     ui/MainWindow.cpp
     ui/MainWindow.h
     ui/ConnectionBar.cpp
@@ -254,6 +256,8 @@ add_executable(AfarRxCalibrationStudio WIN32 MACOSX_BUNDLE
     ui/StartWizard.h
     ui/MeasureWorker.cpp
     ui/MeasureWorker.h
+    ui/BoardParametersPage.cpp
+    ui/BoardParametersPage.h
     ui/ParametersTab.cpp
     ui/ParametersTab.h
     ui/ConnectionTab.cpp
@@ -275,18 +279,19 @@ add_executable(AfarRxCalibrationStudio WIN32 MACOSX_BUNDLE
     ui/PsServiceCheckPage.cpp
     ui/PsServiceCheckPage.h
 )
-target_include_directories(AfarRxCalibrationStudio PRIVATE
+target_include_directories(afar_app_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui
     ${PROJECT_SOURCE_DIR}/include
 )
 file(TO_CMAKE_PATH "${PROJECT_SOURCE_DIR}/examples" _afar_examples_dir)
-target_compile_definitions(AfarRxCalibrationStudio PRIVATE
+target_compile_definitions(afar_app_ui PRIVATE
     "AFAR_EXAMPLES_DIR=\"${_afar_examples_dir}\""
 )
 unset(_afar_examples_dir)
 # MinGW + AUTOMOC: вложенные кавычки в -D ломают генерацию moc_predefs.h.
-set_target_properties(AfarRxCalibrationStudio PROPERTIES AUTOMOC_COMPILER_PREDEFINES OFF)
-target_link_libraries(AfarRxCalibrationStudio PRIVATE
+set_target_properties(afar_app_ui PROPERTIES AUTOMOC_COMPILER_PREDEFINES OFF)
+target_link_libraries(afar_app_ui PUBLIC
     Qt6::Widgets
     Qt6::OpenGLWidgets
     OpenGL::GL
@@ -303,6 +308,17 @@ target_link_libraries(AfarRxCalibrationStudio PRIVATE
     afar_ps
     afar_dut_ps
 )
+if(WIN32)
+    target_link_libraries(afar_app_ui PUBLIC Psapi)
+endif()
+afar_enable_warnings(afar_app_ui)
+
+add_executable(AfarRxCalibrationStudio WIN32 MACOSX_BUNDLE app/main.cpp)
+target_include_directories(AfarRxCalibrationStudio PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(AfarRxCalibrationStudio PRIVATE afar_app_ui)
 foreach(_spectrum_table IN LISTS SPECTRUM_CALIBRATION_TABLES)
     get_filename_component(_spectrum_table_name "${_spectrum_table}" NAME)
     add_custom_command(TARGET AfarRxCalibrationStudio POST_BUILD
@@ -315,9 +331,6 @@ foreach(_spectrum_table IN LISTS SPECTRUM_CALIBRATION_TABLES)
 endforeach()
 unset(_spectrum_table)
 unset(_spectrum_table_name)
-if(WIN32)
-    target_link_libraries(AfarRxCalibrationStudio PRIVATE Psapi)
-endif()
 afar_enable_warnings(AfarRxCalibrationStudio)
 
 # macOS: .app с понятным именем; примеры кладутся в Contents/Resources.

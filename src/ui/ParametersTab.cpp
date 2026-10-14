@@ -2,6 +2,7 @@
 
 #include "PsExchangeView.h"
 #include "PsSession.h"
+#include "UiStyle.h"
 
 #include "PsModulesPage.h"
 
@@ -50,17 +51,22 @@ ParametersTab::ParametersTab(PsSession* session, QWidget* parent)
     : QWidget(parent)
     , m_session(session)
 {
+    setObjectName(QStringLiteral("parametersTab"));
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(6, 6, 6, 6);
+    root->setContentsMargins(ui::kPageMargin, ui::kPageMargin, ui::kPageMargin, ui::kPageMargin);
+    root->setSpacing(ui::kGap);
 
     auto* top = new QHBoxLayout;
+    top->setSpacing(ui::kGap);
     top->addWidget(buildModeBox(), 1);
     top->addWidget(buildAdcBox(), 1);
     top->addWidget(buildBeamBox(), 1);
     root->addLayout(top);
 
     auto* modulesBox = new QGroupBox(QStringLiteral("Модули"), this);
+    modulesBox->setObjectName(QStringLiteral("modulesBox"));
     auto* modulesLayout = new QVBoxLayout(modulesBox);
+    modulesLayout->setContentsMargins(0, 0, 0, 0);
     m_modulesPage = new PsModulesPage(m_session->link(), modulesBox);
     m_modulesPage->tabs()->addTab(buildCodesPage(), QStringLiteral("Коды решётки"));
     modulesLayout->addWidget(m_modulesPage);
@@ -81,15 +87,18 @@ QWidget* ParametersTab::buildBottomTabs()
 {
     auto* tabs = new QTabWidget(this);
     tabs->setObjectName(QStringLiteral("parametersBottomTabs"));
+    tabs->setMinimumHeight(220);
     auto* exchangePage = new QWidget(tabs);
     auto* exchangeLayout = new QVBoxLayout(exchangePage);
+    exchangeLayout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
+    exchangeLayout->setSpacing(ui::kInnerGap);
     m_exchange = new PsExchangeView(m_session, exchangePage);
     m_exchange->table()->setObjectName(QStringLiteral("psExchange"));
     m_log = new QPlainTextEdit(exchangePage);
     m_log->setObjectName(QStringLiteral("psLog"));
     m_log->setReadOnly(true);
     m_log->setMaximumBlockCount(kLogLines);
-    m_log->setMaximumHeight(60);
+    m_log->setFixedHeight(64);
     m_log->setPlaceholderText(QStringLiteral("ошибки связи, отказы PS и сообщения программы"));
     exchangeLayout->addWidget(m_exchange, 1);
     exchangeLayout->addWidget(m_log);
@@ -97,8 +106,11 @@ QWidget* ParametersTab::buildBottomTabs()
 
     auto* tlmPage = new QWidget(tabs);
     auto* tlmLayout = new QVBoxLayout(tlmPage);
+    tlmLayout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
+    tlmLayout->setSpacing(ui::kInnerGap);
     m_tlmCounters = new QLabel(QStringLiteral("датаграмм нет"), tlmPage);
     m_tlmCounters->setObjectName(QStringLiteral("psTlmCounters"));
+    m_tlmCounters->setProperty("role", QStringLiteral("hint"));
     m_tlmTable = new QTableWidget(0, 2, tlmPage);
     m_tlmTable->setObjectName(QStringLiteral("psTlmTable"));
     m_tlmTable->setHorizontalHeaderLabels({QStringLiteral("Параметр"), QStringLiteral("Значение")});
@@ -106,6 +118,8 @@ QWidget* ParametersTab::buildBottomTabs()
     m_tlmTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_tlmTable->verticalHeader()->setVisible(false);
     m_tlmTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_tlmTable->setAlternatingRowColors(true);
+    m_tlmTable->setShowGrid(false);
     tlmLayout->addWidget(m_tlmCounters);
     tlmLayout->addWidget(m_tlmTable, 1);
     tabs->addTab(tlmPage, QStringLiteral("Телеметрия"));
@@ -120,24 +134,30 @@ QTableWidget* ParametersTab::exchangeTable() const
 QWidget* ParametersTab::buildModeBox()
 {
     auto* box = new QGroupBox(QStringLiteral("Режим изделия"), this);
+    box->setObjectName(QStringLiteral("modeBox"));
     auto* layout = new QVBoxLayout(box);
+    layout->setSpacing(ui::kInnerGap);
     m_modeLabel = new QLabel(QStringLiteral("режим: —"), box);
     m_modeLabel->setObjectName(QStringLiteral("psMode"));
+    m_modeLabel->setProperty("role", QStringLiteral("status"));
+    m_modeLabel->setWordWrap(true);
     m_toService = new QPushButton(QStringLiteral("Перейти в сервисный"), box);
     m_toService->setObjectName(QStringLiteral("psToService"));
     m_toIdle = new QPushButton(QStringLiteral("Вернуть в ожидание"), box);
     m_toIdle->setObjectName(QStringLiteral("psToIdle"));
     m_getState = new QPushButton(QStringLiteral("Запросить состояние"), box);
-    auto* hint = new QLabel(
-        QStringLiteral("В сервисный режим PS переходит только из ожидания (READY). "
-                       "При выходе из него PS сам восстанавливает рабочую конфигурацию."),
-        box);
-    hint->setWordWrap(true);
+    m_getState->setObjectName(QStringLiteral("psGetState"));
+    ui::setButtonRole(m_toService, ui::ButtonRole::Primary);
+    ui::setButtonRole(m_toIdle, ui::ButtonRole::Secondary);
+    ui::setButtonRole(m_getState, ui::ButtonRole::Secondary);
     layout->addWidget(m_modeLabel);
     layout->addWidget(m_toService);
     layout->addWidget(m_toIdle);
     layout->addWidget(m_getState);
-    layout->addWidget(hint);
+    layout->addWidget(ui::hintLabel(
+        QStringLiteral("В сервисный режим PS переходит только из ожидания (READY). "
+                       "При выходе из него PS сам восстанавливает рабочую конфигурацию."),
+        box));
     layout->addStretch(1);
 
     connect(m_toService, &QPushButton::clicked, this,
@@ -152,13 +172,19 @@ QWidget* ParametersTab::buildCodesPage()
 {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
+    layout->setSpacing(ui::kInnerGap);
     m_codes = new QTableWidget(ps::kChannels, 5, page);
     m_codes->setObjectName(QStringLiteral("psCodes"));
+    m_codes->setMinimumHeight(200);
     m_codes->setHorizontalHeaderLabels({QStringLiteral("Канал"), QStringLiteral("Фаза: задать"),
                                         QStringLiteral("Атт.: задать"), QStringLiteral("Фаза: прочитано"),
                                         QStringLiteral("Атт.: прочитано")});
     m_codes->verticalHeader()->setVisible(false);
+    m_codes->verticalHeader()->setDefaultSectionSize(34);
     m_codes->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_codes->setAlternatingRowColors(true);
+    m_codes->setShowGrid(false);
     for (int row = 0; row < ps::kChannels; ++row) {
         auto* ch = new QTableWidgetItem(QString::number(row + 1));
         ch->setFlags(Qt::ItemIsEnabled);
@@ -166,6 +192,7 @@ QWidget* ParametersTab::buildCodesPage()
         for (int col : {1, 2}) {
             auto* spin = new QSpinBox(m_codes);
             spin->setRange(0, ps::kCodeMax);
+            spin->setButtonSymbols(QAbstractSpinBox::NoButtons);
             m_codes->setCellWidget(row, col, spin);
         }
         for (int col : {3, 4}) {
@@ -176,32 +203,37 @@ QWidget* ParametersTab::buildCodesPage()
     }
 
     auto* fill = new QHBoxLayout;
+    fill->setSpacing(ui::kInnerGap);
     m_fillPh = new QSpinBox(page);
     m_fillPh->setRange(0, ps::kCodeMax);
+    m_fillPh->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_fillAtt = new QSpinBox(page);
     m_fillAtt->setRange(0, ps::kCodeMax);
+    m_fillAtt->setButtonSymbols(QAbstractSpinBox::NoButtons);
     auto* fillBtn = new QPushButton(QStringLiteral("Заполнить все"), page);
     m_writeCodes = new QPushButton(QStringLiteral("Записать 16 каналов"), page);
     m_writeCodes->setObjectName(QStringLiteral("psWriteCodes"));
     m_readCodes = new QPushButton(QStringLiteral("Прочитать из микросхем"), page);
     m_readCodes->setObjectName(QStringLiteral("psReadCodes"));
+    auto* saveBtn = new QPushButton(QStringLiteral("Сохранить набор…"), page);
+    auto* loadBtn = new QPushButton(QStringLiteral("Загрузить набор…"), page);
+    ui::setButtonRole(m_writeCodes, ui::ButtonRole::Primary);
+    for (QPushButton* b : {fillBtn, m_readCodes, saveBtn, loadBtn}) {
+        ui::setButtonRole(b, ui::ButtonRole::Secondary);
+    }
     fill->addWidget(new QLabel(QStringLiteral("Фаза"), page));
     fill->addWidget(m_fillPh);
     fill->addWidget(new QLabel(QStringLiteral("Атт."), page));
     fill->addWidget(m_fillAtt);
     fill->addWidget(fillBtn);
+    fill->addSpacing(ui::kGap);
+    fill->addWidget(saveBtn);
+    fill->addWidget(loadBtn);
     fill->addStretch(1);
-    fill->addWidget(m_writeCodes);
     fill->addWidget(m_readCodes);
-    auto* files = new QHBoxLayout;
-    auto* saveBtn = new QPushButton(QStringLiteral("Сохранить набор…"), page);
-    auto* loadBtn = new QPushButton(QStringLiteral("Загрузить набор…"), page);
-    files->addWidget(saveBtn);
-    files->addWidget(loadBtn);
-    files->addStretch(1);
+    fill->addWidget(m_writeCodes);
     layout->addWidget(m_codes, 1);
     layout->addLayout(fill);
-    layout->addLayout(files);
 
     const QString filter = QStringLiteral("Коды решётки (*.json)");
     connect(saveBtn, &QPushButton::clicked, this, [this, filter] {
@@ -234,76 +266,116 @@ QWidget* ParametersTab::buildCodesPage()
 
 QWidget* ParametersTab::buildAdcBox()
 {
-    auto* page = new QGroupBox(QStringLiteral("АЦП"), this);
-    auto* form = new QFormLayout(page);
-    const auto mhz = [page](double value, double max) {
-        auto* s = new QDoubleSpinBox(page);
+    auto* box = new QGroupBox(QStringLiteral("АЦП"), this);
+    box->setObjectName(QStringLiteral("adcBox"));
+    auto* layout = new QVBoxLayout(box);
+    layout->setSpacing(ui::kInnerGap);
+    const auto mhz = [box](double value, double max) {
+        auto* s = new QDoubleSpinBox(box);
         s->setRange(0.0, max);
         s->setDecimals(6);
         s->setSuffix(QStringLiteral(" МГц"));
         s->setValue(value);
+        s->setButtonSymbols(QAbstractSpinBox::NoButtons);
         return s;
     };
     m_adcLoMhz = mhz(5800.0, 100000.0);
     m_adcLoMhz->setObjectName(QStringLiteral("psAdcLo"));
     m_adcBwMhz = mhz(20.0, 100000.0);
+    m_adcBwMhz->setObjectName(QStringLiteral("psAdcBw"));
     m_adcFsMhz = mhz(30.72, 100000.0);
-    m_adcGain = new QDoubleSpinBox(page);
+    m_adcFsMhz->setObjectName(QStringLiteral("psAdcFs"));
+    m_adcGain = new QDoubleSpinBox(box);
+    m_adcGain->setObjectName(QStringLiteral("psAdcGain"));
     m_adcGain->setRange(-100.0, 100.0);
     m_adcGain->setDecimals(1);
     m_adcGain->setSuffix(QStringLiteral(" дБ"));
     m_adcGain->setValue(40.0);
-    m_adcActual = new QLabel(QStringLiteral("установлено: —"), page);
+    m_adcGain->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    m_adcActual = new QLabel(QStringLiteral("установлено: —"), box);
+    m_adcActual->setObjectName(QStringLiteral("psAdcActual"));
+    m_adcActual->setProperty("role", QStringLiteral("hint"));
     m_adcActual->setWordWrap(true);
-    auto* apply = new QPushButton(QStringLiteral("Применить"), page);
+    auto* apply = new QPushButton(QStringLiteral("Применить"), box);
     apply->setObjectName(QStringLiteral("psAdcApply"));
-    auto* read = new QPushButton(QStringLiteral("Прочитать"), page);
-    auto* buttons = new QHBoxLayout;
-    buttons->addWidget(apply);
-    buttons->addWidget(read);
-    buttons->addStretch(1);
+    auto* read = new QPushButton(QStringLiteral("Прочитать"), box);
+    read->setObjectName(QStringLiteral("psAdcRead"));
+    ui::setButtonRole(apply, ui::ButtonRole::Primary);
+    ui::setButtonRole(read, ui::ButtonRole::Secondary);
 
-    form->addRow(QStringLiteral("Гетеродин приёмника lo"), m_adcLoMhz);
-    form->addRow(QStringLiteral("Полоса RF bw"), m_adcBwMhz);
-    form->addRow(QStringLiteral("Частота дискретизации fs"), m_adcFsMhz);
-    form->addRow(QStringLiteral("Усиление gain (ручное)"), m_adcGain);
-    form->addRow(buttons);
-    form->addRow(m_adcActual);
-    form->addRow(new QLabel(QStringLiteral("Рабочий диапазон изделия 4,9–6,0 ГГц; частоту вне "
-                                           "диапазона отклоняет PS."),
-                            page));
+    auto* grid = new QGridLayout;
+    grid->setHorizontalSpacing(ui::kInnerGap);
+    grid->setVerticalSpacing(2);
+    grid->addWidget(ui::captionLabel(QStringLiteral("Гетеродин приёмника lo"), box), 0, 0);
+    grid->addWidget(ui::captionLabel(QStringLiteral("Полоса RF bw"), box), 0, 1);
+    grid->addWidget(m_adcLoMhz, 1, 0);
+    grid->addWidget(m_adcBwMhz, 1, 1);
+    grid->addWidget(ui::captionLabel(QStringLiteral("Частота дискретизации fs"), box), 2, 0);
+    grid->addWidget(ui::captionLabel(QStringLiteral("Усиление gain (ручное)"), box), 2, 1);
+    grid->addWidget(m_adcFsMhz, 3, 0);
+    grid->addWidget(m_adcGain, 3, 1);
+    auto* buttons = new QHBoxLayout;
+    buttons->setSpacing(ui::kInnerGap);
+    buttons->addWidget(apply, 1);
+    buttons->addWidget(read, 1);
+    layout->addLayout(grid);
+    layout->addLayout(buttons);
+    layout->addWidget(m_adcActual);
+    layout->addWidget(ui::hintLabel(QStringLiteral("Рабочий диапазон изделия 4,9–6,0 ГГц; частоту вне "
+                                                   "диапазона отклоняет PS."),
+                                    box));
+    layout->addStretch(1);
 
     connect(apply, &QPushButton::clicked, this, &ParametersTab::applyAdc);
     connect(read, &QPushButton::clicked, this, [this] { send(ps::msg::GetAdc); });
     m_serviceControls.insert(m_serviceControls.end(), {apply, read});
-    return page;
+    return box;
 }
 
 QWidget* ParametersTab::buildBeamBox()
 {
-    auto* page = new QGroupBox(QStringLiteral("Луч"), this);
-    auto* form = new QFormLayout(page);
-    m_beamAz = new QDoubleSpinBox(page);
+    auto* box = new QGroupBox(QStringLiteral("Луч"), this);
+    box->setObjectName(QStringLiteral("beamBox"));
+    auto* layout = new QVBoxLayout(box);
+    layout->setSpacing(ui::kInnerGap);
+    m_beamAz = new QDoubleSpinBox(box);
+    m_beamAz->setObjectName(QStringLiteral("psBeamAz"));
     m_beamAz->setRange(-ps::kAzimuthLimitDeg, ps::kAzimuthLimitDeg);
     m_beamAz->setDecimals(2);
     m_beamAz->setSuffix(QStringLiteral("°"));
-    auto* setAz = new QPushButton(QStringLiteral("Установить азимут"), page);
-    m_beamId = new QSpinBox(page);
+    m_beamAz->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    auto* setAz = new QPushButton(QStringLiteral("Установить азимут"), box);
+    setAz->setObjectName(QStringLiteral("psSetAzimuth"));
+    m_beamId = new QSpinBox(box);
+    m_beamId->setObjectName(QStringLiteral("psBeamId"));
     m_beamId->setRange(0, 1'000'000);
-    auto* setBeam = new QPushButton(QStringLiteral("Установить луч"), page);
-    auto* getBeam = new QPushButton(QStringLiteral("Запросить состояние луча"), page);
-    m_beamState = new QLabel(QStringLiteral("луч: —"), page);
+    m_beamId->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    auto* setBeam = new QPushButton(QStringLiteral("Установить луч"), box);
+    setBeam->setObjectName(QStringLiteral("psSetBeam"));
+    auto* getBeam = new QPushButton(QStringLiteral("Запросить состояние луча"), box);
+    getBeam->setObjectName(QStringLiteral("psGetBeam"));
+    ui::setButtonRole(setAz, ui::ButtonRole::Primary);
+    ui::setButtonRole(setBeam, ui::ButtonRole::Primary);
+    ui::setButtonRole(getBeam, ui::ButtonRole::Secondary);
+    m_beamState = new QLabel(QStringLiteral("луч: —"), box);
+    m_beamState->setObjectName(QStringLiteral("psBeamState"));
+    m_beamState->setProperty("role", QStringLiteral("hint"));
+    m_beamState->setWordWrap(true);
 
-    auto* azRow = new QHBoxLayout;
-    azRow->addWidget(m_beamAz);
-    azRow->addWidget(setAz);
-    auto* idRow = new QHBoxLayout;
-    idRow->addWidget(m_beamId);
-    idRow->addWidget(setBeam);
-    form->addRow(QStringLiteral("Азимут луча"), azRow);
-    form->addRow(QStringLiteral("Луч из таблицы"), idRow);
-    form->addRow(getBeam);
-    form->addRow(m_beamState);
+    auto* grid = new QGridLayout;
+    grid->setHorizontalSpacing(ui::kInnerGap);
+    grid->setVerticalSpacing(2);
+    grid->addWidget(ui::captionLabel(QStringLiteral("Азимут луча"), box), 0, 0);
+    grid->addWidget(m_beamAz, 1, 0);
+    grid->addWidget(setAz, 1, 1);
+    grid->addWidget(ui::captionLabel(QStringLiteral("Луч из таблицы"), box), 2, 0);
+    grid->addWidget(m_beamId, 3, 0);
+    grid->addWidget(setBeam, 3, 1);
+    grid->setColumnStretch(0, 1);
+    layout->addLayout(grid);
+    layout->addWidget(getBeam);
+    layout->addWidget(m_beamState);
+    layout->addStretch(1);
 
     connect(setAz, &QPushButton::clicked, this,
             [this] { send(ps::msg::SetBeamAzimuth, json{{"az", m_beamAz->value()}}); });
@@ -311,7 +383,7 @@ QWidget* ParametersTab::buildBeamBox()
             [this] { send(ps::msg::SetBeam, json{{"beam", m_beamId->value()}}); });
     connect(getBeam, &QPushButton::clicked, this, [this] { send(ps::msg::GetBeam); });
     m_serviceControls.insert(m_serviceControls.end(), {setAz, setBeam, getBeam});
-    return page;
+    return box;
 }
 
 void ParametersTab::send(std::string_view msgType, const json& payload)
@@ -513,6 +585,8 @@ void ParametersTab::refreshMode()
         }
     }
     m_modeLabel->setText(text);
+    ui::setTone(m_modeLabel, m_session->modeKnown() ? (m_session->mode() == ps::Mode::Service ? ui::Tone::Warn : ui::Tone::Ok)
+                                                    : ui::Tone::Neutral);
     refreshEnabled();
 }
 

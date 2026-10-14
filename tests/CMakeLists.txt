@@ -180,23 +180,9 @@ if(AFAR_POWERSHELL_EXECUTABLE)
                 -File ${PROJECT_SOURCE_DIR}/tools/verify-series.ps1 -SelfTest)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
-add_executable(test_ui_interactions
-    test_ui_interactions.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/AcceptanceAtTab.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/AcceptanceAtTab.h
-    ${PROJECT_SOURCE_DIR}/src/ui/ConnectionBar.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/ConnectionBar.h
-    ${PROJECT_SOURCE_DIR}/src/ui/S21PlotWidget.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/S21PlotWidget.h
-    ${PROJECT_SOURCE_DIR}/src/ui/MeasureTab.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/MeasureTab.h
-    ${PROJECT_SOURCE_DIR}/src/ui/StartWizard.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/StartWizard.h
-)
-target_include_directories(test_ui_interactions PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
-target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_cal afar_core)
-set_target_properties(test_ui_interactions PROPERTIES AUTOMOC ON)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
+add_executable(test_ui_interactions test_ui_interactions.cpp)
+target_link_libraries(test_ui_interactions PRIVATE Catch2::Catch2WithMain afar_app_ui)
 afar_enable_warnings(test_ui_interactions)
 add_test(NAME ui_interactions COMMAND test_ui_interactions)
 set_tests_properties(ui_interactions PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -239,35 +225,17 @@ target_link_libraries(test_ps_link PRIVATE Catch2::Catch2WithMain afar_ps afar_t
 afar_enable_warnings(test_ps_link)
 add_test(NAME ps_link COMMAND test_ps_link)
 
-add_executable(test_ps_tab
-    test_ps_tab.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/ParametersTab.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/ParametersTab.h
-    ${PROJECT_SOURCE_DIR}/src/ui/ConnectionTab.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/ConnectionTab.h
-    ${PROJECT_SOURCE_DIR}/src/ui/FullScanPanel.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/FullScanPanel.h
-    ${PROJECT_SOURCE_DIR}/src/ui/PsExchangeView.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/PsExchangeView.h
-    ${PROJECT_SOURCE_DIR}/src/ui/PsJournalDialog.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/PsJournalDialog.h
-    ${PROJECT_SOURCE_DIR}/src/ui/StressTestPanel.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/StressTestPanel.h
-    ${PROJECT_SOURCE_DIR}/src/ui/TestRunTab.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/TestRunTab.h
-    ${PROJECT_SOURCE_DIR}/src/ui/PsModulesPage.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/PsModulesPage.h
-    ${PROJECT_SOURCE_DIR}/src/ui/PsPacketPage.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/PsPacketPage.h
-    ${PROJECT_SOURCE_DIR}/src/ui/PsServiceCheckPage.cpp
-    ${PROJECT_SOURCE_DIR}/src/ui/PsServiceCheckPage.h
-)
-target_include_directories(test_ps_tab PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
-target_link_libraries(test_ps_tab PRIVATE Catch2::Catch2WithMain Qt6::Widgets afar_ps afar_test_ps_server)
-set_target_properties(test_ps_tab PROPERTIES AUTOMOC ON)
+add_executable(test_ps_tab test_ps_tab.cpp)
+target_link_libraries(test_ps_tab PRIVATE Catch2::Catch2WithMain Qt6::Test afar_app_ui afar_test_ps_server)
 afar_enable_warnings(test_ps_tab)
 add_test(NAME ps_tab COMMAND test_ps_tab)
 set_tests_properties(ps_tab PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(test_main_window test_main_window.cpp)
+target_link_libraries(test_main_window PRIVATE Catch2::Catch2WithMain Qt6::Test afar_app_ui afar_test_ps_server)
+afar_enable_warnings(test_main_window)
+add_test(NAME main_window COMMAND test_main_window)
+set_tests_properties(main_window PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 180)
 
 add_executable(test_ps_dut_controller test_ps_dut_controller.cpp)
 target_link_libraries(test_ps_dut_controller PRIVATE

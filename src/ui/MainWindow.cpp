@@ -6,11 +6,13 @@
 #include "DataFormatsTab.h"
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
+#include "BoardParametersPage.h"
 #include "ConnectionTab.h"
 #include "ParametersTab.h"
 #include "PsServiceCheckPage.h"
 #include "PsSession.h"
 #include "TestRunTab.h"
+#include "UiStyle.h"
 #include "RunConfig.h"
 #include "RunStateMachine.h"
 #include "StartWizard.h"
@@ -42,6 +44,7 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStackedWidget>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QThread>
 #include <QTimer>
@@ -83,10 +86,12 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
 {
     setWindowTitle(QStringLiteral("AFAR RX Calibration Studio / Spectrum Analyzer"));
 
+    // Окно не больше экрана: страницы вкладок прокручиваются, а не растягивают окно.
     const QRect workArea = screen() ? screen()->availableGeometry()
                                     : QGuiApplication::primaryScreen()->availableGeometry();
-    resize(qMin(1200, qMax(1, workArea.width() - 32)),
-           qMin(800, qMax(1, workArea.height() - 32)));
+    setMinimumSize(qMin(960, workArea.width()), qMin(600, workArea.height()));
+    resize(qMin(1360, qMax(1, workArea.width() - 40)),
+           qMin(860, qMax(1, workArea.height() - 60)));
     move(workArea.center() - rect().center());
 
     m_psSession = new PsSession(this);
@@ -94,6 +99,9 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_tabs = new QTabWidget(this);
     m_tabs->setObjectName(QStringLiteral("mainTabs"));
     m_tabs->setDocumentMode(true);
+    m_tabs->tabBar()->setObjectName(QStringLiteral("mainTabBar"));
+    m_tabs->tabBar()->setDrawBase(false);
+    m_tabs->tabBar()->setExpanding(false);
 
     m_themeButton = new QPushButton(m_tabs);
     m_themeButton->setObjectName(QStringLiteral("btnThemeToggle"));
@@ -103,7 +111,11 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
 
     // --- Подключение ---
     m_connectionTab = new ConnectionTab(m_psSession, m_tabs);
-    m_connectionTab->addTechPage(buildBoardParametersPage(), QStringLiteral("Параметры платы"));
+    m_boardPage = new BoardParametersPage(spectrumEngine,
+                                          [this] { return m_connectionTab->macText(); });
+    m_connectionTab->setTechPage(m_boardPage);
+    connect(m_boardPage, &BoardParametersPage::operationProgress, this,
+            [this](const QString& text, int done, int total) { setOperationProgress(text, done, total); });
 
     // --- Установка параметров ---
     m_parametersTab = new ParametersTab(m_psSession, m_tabs);
@@ -116,8 +128,8 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
 
     auto* root = new QWidget(viewport);
     auto* rootLayout = new QVBoxLayout(root);
-    rootLayout->setContentsMargins(6, 6, 6, 6);
-    rootLayout->setSpacing(4);
+    rootLayout->setContentsMargins(ui::kPageMargin, ui::kPageMargin, ui::kPageMargin, ui::kPageMargin);
+    rootLayout->setSpacing(ui::kGap);
 
     m_connections = new ConnectionBar(root);
     m_connections->setVnaInfo(QStringLiteral("PLANAR C2220"), QStringLiteral("VnaSimulator"),
@@ -134,8 +146,10 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     tabs->addTab(m_formats, QStringLiteral("Форматы данных"));
 
     auto* cycle = new QFrame(root);
-    cycle->setFrameShape(QFrame::StyledPanel);
+    cycle->setFrameShape(QFrame::NoFrame);
     auto* cycleLayout = new QHBoxLayout(cycle);
+    cycleLayout->setContentsMargins(0, 0, 0, 0);
+    cycleLayout->setSpacing(ui::kInnerGap);
     m_wizardBtn = new QPushButton(QStringLiteral("Мастер запуска"), cycle);
     m_wizardBtn->setObjectName(QStringLiteral("btnWizard"));
     cycle->setToolTip(
@@ -181,12 +195,13 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     connect(m_psSession, &PsSession::controlsChanged, this, refreshCheck);
     refreshCheck();
 
-    m_tabs->addTab(m_connectionTab, QStringLiteral("Подключение"));
-    m_tabs->addTab(m_parametersTab, QStringLiteral("Установка параметров"));
+    // Страницы прокручиваются: при тесной рамке окна появляется прокрутка, а виджеты не налезают друг на друга.
+    m_tabs->addTab(ui::scrollPage(m_connectionTab), QStringLiteral("Подключение"));
+    m_tabs->addTab(ui::scrollPage(m_parametersTab), QStringLiteral("Установка параметров"));
     m_tabs->addTab(viewport, QStringLiteral("Измерение S-параметров"));
     m_tabs->addTab(m_spectrum, QStringLiteral("Спектр"));
-    m_tabs->addTab(m_testRun, QStringLiteral("Тестовый прогон"));
-    m_tabs->addTab(acceptance, QStringLiteral("Приёмка"));
+    m_tabs->addTab(ui::scrollPage(m_testRun), QStringLiteral("Тестовый прогон"));
+    m_tabs->addTab(ui::scrollPage(acceptance), QStringLiteral("Приёмка"));
     setCentralWidget(m_tabs);
 
     const QString tabKey = QStringLiteral("ui/active_tab_v3");
@@ -206,7 +221,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_operationProgress->setVisible(false);
     m_moduleStatus = new QLabel(this);
     m_moduleStatus->setObjectName(QStringLiteral("moduleStatusText"));
-    m_moduleStatus->setMaximumWidth(460);
+    m_moduleStatus->setMaximumWidth(520);
     statusBar()->addWidget(m_moduleStatus);
     statusBar()->addPermanentWidget(m_operationText, 1);
     statusBar()->addPermanentWidget(m_operationProgress);
@@ -356,123 +371,6 @@ MainWindow::~MainWindow()
             m_thread->wait();
         }
     }
-}
-
-QWidget* MainWindow::buildBoardParametersPage()
-{
-    // Чтение параметров платы через libiio — то, что раньше было отдельным
-    // экраном «Получить параметры». Плата ищется по MAC из окна «Подключение».
-    auto* page = new QWidget(this);
-    page->setObjectName(QStringLiteral("parametersWorkspace"));
-    auto* layout = new QVBoxLayout(page);
-    auto* readOnlyHint = new QLabel(
-        QStringLiteral("Поиск по MAC и безопасное чтение параметров libiio. Настройки платы не изменяются."),
-        page);
-    readOnlyHint->setWordWrap(true);
-    readOnlyHint->setObjectName(QStringLiteral("hintLabel"));
-
-    auto* row = new QHBoxLayout;
-    auto* boardIp = new QLabel(QStringLiteral("IP-адрес: —"), page);
-    boardIp->setObjectName(QStringLiteral("boardIpAddress"));
-    auto* readParameters = new QPushButton(QStringLiteral("Получить параметры"), page);
-    readParameters->setObjectName(QStringLiteral("readBoardParameters"));
-    row->addWidget(boardIp, 1);
-    row->addWidget(readParameters);
-    auto* boardStatus = new QLabel(QStringLiteral("Готово к чтению"), page);
-    boardStatus->setObjectName(QStringLiteral("boardParametersStatus"));
-    boardStatus->setWordWrap(true);
-
-    auto* resultTabs = new QTabWidget(page);
-    resultTabs->setObjectName(QStringLiteral("boardParametersTabs"));
-    auto* boardOutput = new QPlainTextEdit(resultTabs);
-    boardOutput->setObjectName(QStringLiteral("boardParametersOutput"));
-    boardOutput->setReadOnly(true);
-    boardOutput->setLineWrapMode(QPlainTextEdit::NoWrap);
-    boardOutput->setPlaceholderText(
-        QStringLiteral("После нажатия здесь появятся основные параметры платы."));
-    auto* boardDetails = new QPlainTextEdit(resultTabs);
-    boardDetails->setObjectName(QStringLiteral("boardParametersDetails"));
-    boardDetails->setReadOnly(true);
-    boardDetails->setLineWrapMode(QPlainTextEdit::NoWrap);
-    boardDetails->setPlaceholderText(
-        QStringLiteral("Здесь появится полный перечень технических IIO-атрибутов."));
-    resultTabs->addTab(boardOutput, QStringLiteral("Основное"));
-    resultTabs->addTab(boardDetails, QStringLiteral("Подробно"));
-    layout->addWidget(readOnlyHint);
-    layout->addLayout(row);
-    layout->addWidget(boardStatus);
-    layout->addWidget(resultTabs, 1);
-
-    connect(readParameters, &QPushButton::clicked, page,
-            [this, page, boardIp, boardStatus, boardOutput, boardDetails, resultTabs, readParameters] {
-        const QString mac = m_connectionTab->macText();
-        auto& state = m_spectrumEngine->state();
-        {
-            std::lock_guard<std::mutex> lock(state.board_mutex);
-            state.board_mac = mac.toStdString();
-            state.board_found_ip.clear();
-            state.board_parameters.clear();
-            state.board_status = "ожидание запуска поиска...";
-        }
-        state.board_read_parameters_requested.store(true);
-        state.board_find_requested.store(true);
-        page->setProperty("operationActive", true);
-        setOperationProgress(QStringLiteral("Поиск платы по MAC"), 0, 2);
-        readParameters->setEnabled(false);
-        boardIp->setText(QStringLiteral("IP-адрес: поиск…"));
-        boardStatus->setText(QStringLiteral("Поиск платы по MAC %1…").arg(mac));
-        boardOutput->clear();
-        boardDetails->clear();
-        resultTabs->setCurrentIndex(0);
-    });
-
-    auto* parametersTimer = new QTimer(page);
-    connect(parametersTimer, &QTimer::timeout, page,
-            [this, page, boardIp, boardStatus, boardOutput, boardDetails,
-             readParameters, lastParameters = QString()]() mutable {
-        auto& state = m_spectrumEngine->state();
-        std::string ip;
-        std::string status;
-        std::string parameters;
-        {
-            std::lock_guard<std::mutex> lock(state.board_mutex);
-            ip = state.board_found_ip;
-            status = state.board_status;
-            parameters = state.board_parameters;
-        }
-        const bool busy = state.board_find_requested.load() || state.board_is_finding.load();
-        readParameters->setEnabled(!busy);
-        boardIp->setText(ip.empty()
-                             ? QStringLiteral("IP-адрес: —")
-                             : QStringLiteral("IP-адрес: %1").arg(QString::fromStdString(ip)));
-        if (!status.empty()) boardStatus->setText(QString::fromStdString(status));
-        const QString snapshot = QString::fromStdString(parameters);
-        if (snapshot != lastParameters) {
-            lastParameters = snapshot;
-            const QString detailsMarker =
-                QStringLiteral("\nВСЕ СТАНДАРТНЫЕ ДОСТУПНЫЕ IIO-АТРИБУТЫ\n");
-            const qsizetype detailsAt = snapshot.indexOf(detailsMarker);
-            boardOutput->setPlainText(
-                detailsAt < 0 ? snapshot.trimmed() : snapshot.left(detailsAt).trimmed());
-            boardDetails->setPlainText(
-                detailsAt < 0 ? QString() : snapshot.mid(detailsAt + detailsMarker.size()).trimmed());
-        }
-        if (page->property("operationActive").toBool()) {
-            if (busy) {
-                setOperationProgress(ip.empty() ? QStringLiteral("Поиск платы по MAC")
-                                                : QStringLiteral("Чтение параметров платы"),
-                                     ip.empty() ? 0 : 1, 2);
-            } else if (!status.empty()) {
-                setOperationProgress(parameters.empty()
-                                         ? QStringLiteral("Параметры платы не получены")
-                                         : QStringLiteral("Параметры платы получены"),
-                                     2, 2);
-                page->setProperty("operationActive", false);
-            }
-        }
-    });
-    parametersTimer->start(100);
-    return page;
 }
 
 void MainWindow::loadExampleDefaults()

@@ -2,6 +2,7 @@
 
 #include "PsExchangeView.h"
 #include "PsSession.h"
+#include "UiStyle.h"
 
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -45,6 +46,7 @@ PsJournalDialog::PsJournalDialog(PsSession* session, QWidget* parent)
     m_payload = new QLineEdit(page);
     m_payload->setPlaceholderText(QStringLiteral("payload JSON, например {\"mode\":\"SERVICE\"}"));
     auto* send = new QPushButton(QStringLiteral("Отправить"), page);
+    ui::setButtonRole(send, ui::ButtonRole::Primary);
     raw->addWidget(m_type);
     raw->addWidget(m_payload, 1);
     raw->addWidget(send);
@@ -56,6 +58,7 @@ PsJournalDialog::PsJournalDialog(PsSession* session, QWidget* parent)
     root->addWidget(tabs, 1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    ui::setButtonRole(buttons->button(QDialogButtonBox::Close), ui::ButtonRole::Secondary);
     root->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(send, &QPushButton::clicked, this, &PsJournalDialog::sendRaw);

@@ -1,5 +1,7 @@
 #include "ConnectionBar.h"
 
+#include "UiStyle.h"
+
 #include <QComboBox>
 #include <QFormLayout>
 #include <QGridLayout>
@@ -63,10 +65,12 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     setObjectName(QStringLiteral("ConnectionBar"));
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(8, 6, 8, 6);
-    root->setSpacing(4);
+    root->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
+    root->setSpacing(ui::kInnerGap);
 
     auto* row = new QGridLayout();
+    row->setHorizontalSpacing(ui::kInnerGap);
+    row->setVerticalSpacing(ui::kInnerGap);
     m_vna = new QLabel(QStringLiteral("C2220: нет связи"), this);
     m_controller = new QLabel(
         QStringLiteral("CTRL: OK — ИМИТАТОР (для S-параметров не нужен)"), this);
@@ -77,12 +81,17 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_status = new QLabel(QStringLiteral("Статус: простой"), this);
     m_source = new QLabel(QStringLiteral("Источник: имитатор (не метрология стенда)"), this);
     m_source->setObjectName(QStringLiteral("dataSourceBadge"));
-    m_source->setStyleSheet(
-        QStringLiteral("color:#664d03; font-weight:600; padding:1px 4px;"));
+    ui::setTone(m_source, ui::Tone::Warn);
 
+    // Все шесть строк — «таблетки» одного вида; цвет задаёт тон, а не жёсткий цвет текста,
+    // поэтому читаются и в тёмной теме.
     for (auto* label : {m_source, m_filterReady, m_vna, m_controller, m_temperature, m_status}) {
         label->setWordWrap(true);
+        label->setProperty("role", QStringLiteral("status"));
     }
+    ui::setTone(m_filterReady, ui::Tone::Error);
+    ui::setTone(m_vna, ui::Tone::Error);
+    ui::setTone(m_controller, ui::Tone::Warn);
     row->addWidget(m_source, 0, 0);
     row->addWidget(m_filterReady, 0, 1);
     row->addWidget(m_vna, 0, 2);
@@ -95,11 +104,12 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     settingsToggle->setCheckable(true);
     settingsToggle->setArrowType(Qt::RightArrow);
     settingsToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    row->addWidget(settingsToggle, 0, 3);
+    row->addWidget(settingsToggle, 0, 3, 2, 1, Qt::AlignVCenter);
+    // Тему переключает кнопка справа от вкладок; своя кнопка полосы осталась только для совместимости.
     m_theme = new QPushButton(QStringLiteral("Тема: светлая"), this);
     m_theme->setObjectName(QStringLiteral("btnTheme"));
+    m_theme->setVisible(false);
     connect(m_theme, &QPushButton::clicked, this, &ConnectionBar::themeToggleRequested);
-    row->addWidget(m_theme, 1, 3);
     row->setColumnStretch(0, 2);
     row->setColumnStretch(1, 1);
     row->setColumnStretch(2, 1);
@@ -203,8 +213,8 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_diagnostic = new QLabel(this);
     m_diagnostic->setWordWrap(true);
     m_diagnostic->setVisible(false);
-    m_diagnostic->setStyleSheet(
-        QStringLiteral("background:#fff3cd; color:#664d03; padding:4px 6px; border-radius:3px;"));
+    m_diagnostic->setProperty("role", QStringLiteral("status"));
+    ui::setTone(m_diagnostic, ui::Tone::Warn);
     root->addWidget(m_diagnostic);
 
     // UI-ERR-001: немодальная очередь SCPI (не QMessageBox).
@@ -214,7 +224,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     scpiLay->setSpacing(2);
     auto* scpiHead = new QHBoxLayout();
     auto* scpiTitle = new QLabel(QStringLiteral("Очередь ошибок SCPI"), m_scpiPanel);
-    scpiTitle->setStyleSheet(QStringLiteral("font-weight:600; color:#8a1f11;"));
+    scpiTitle->setStyleSheet(QStringLiteral("font-weight:600;"));
     scpiHead->addWidget(scpiTitle);
     scpiHead->addStretch(1);
     m_scpiSimulate = new QPushButton(QStringLiteral("Симулировать ошибку SCPI"), m_scpiPanel);
@@ -226,9 +236,6 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_scpiErrors = new QListWidget(m_scpiPanel);
     m_scpiErrors->setMaximumHeight(88);
     m_scpiErrors->setObjectName(QStringLiteral("scpiErrorQueue"));
-    m_scpiErrors->setStyleSheet(
-        QStringLiteral("QListWidget { background:#fdecea; border:1px solid #f5c2c0; "
-                       "border-radius:4px; }"));
     scpiLay->addWidget(m_scpiErrors);
     m_scpiPanel->setVisible(false);
     root->addWidget(m_scpiPanel);
@@ -542,14 +549,14 @@ void ConnectionBar::setVnaInfo(const QString& model,
     }
     if (connected) {
         m_vna->setText(QStringLiteral("C2220: %1 @ %2").arg(detail, address));
-        m_vna->setStyleSheet(QStringLiteral("color:#0a7a2f;"));
+        ui::setTone(m_vna, ui::Tone::Ok);
         m_filterReady->setText(QStringLiteral("S-параметры: ГОТОВО"));
-        m_filterReady->setStyleSheet(QStringLiteral("color:#0a7a2f; font-weight:700;"));
+        ui::setTone(m_filterReady, ui::Tone::Ok);
     } else {
         m_vna->setText(QStringLiteral("C2220: нет связи (%1 @ %2)").arg(detail, address));
-        m_vna->setStyleSheet(QStringLiteral("color:#8a1f11;"));
+        ui::setTone(m_vna, ui::Tone::Error);
         m_filterReady->setText(QStringLiteral("S-параметры: нужна связь VNA"));
-        m_filterReady->setStyleSheet(QStringLiteral("color:#8a1f11; font-weight:700;"));
+        ui::setTone(m_filterReady, ui::Tone::Error);
     }
 }
 
@@ -562,27 +569,27 @@ void ConnectionBar::setControllerInfo(const QString& iface, bool connected)
     if (stub) {
         m_controller->setText(
             QStringLiteral("CTRL: stub — протокол т.14 не передан (%1)").arg(iface));
-        m_controller->setStyleSheet(QStringLiteral("color:#9a6700; font-weight:600;"));
+        ui::setTone(m_controller, ui::Tone::Warn);
         return;
     }
     if (simulator) {
         m_controller->setText(
             QStringLiteral("CTRL: ДЕМО — DutSimulator (для пассивных S-параметров не нужен)"));
-        m_controller->setStyleSheet(QStringLiteral("color:#9a6700; font-weight:600;"));
+        ui::setTone(m_controller, ui::Tone::Warn);
         return;
     }
     if (iface.contains(QStringLiteral("отсутств"), Qt::CaseInsensitive)) {
         m_controller->setText(QStringLiteral(
             "CTRL: НЕТ КОНТРОЛЛЕРА — реальная калибровка 64×64 недоступна"));
-        m_controller->setStyleSheet(QStringLiteral("color:#8a1f11; font-weight:600;"));
+        ui::setTone(m_controller, ui::Tone::Error);
         return;
     }
     if (connected) {
         m_controller->setText(QStringLiteral("CTRL: OK — %1").arg(iface));
-        m_controller->setStyleSheet(QStringLiteral("color:#0a7a2f; font-weight:600;"));
+        ui::setTone(m_controller, ui::Tone::Ok);
     } else {
         m_controller->setText(QStringLiteral("CTRL: нет связи (%1)").arg(iface));
-        m_controller->setStyleSheet(QStringLiteral("color:#8a1f11; font-weight:600;"));
+        ui::setTone(m_controller, ui::Tone::Error);
     }
 }
 
@@ -599,7 +606,18 @@ void ConnectionBar::setTemperatureC(double temperature_c, bool valid)
 void ConnectionBar::setRunStatus(const QString& text, const QString& colorName)
 {
     m_status->setText(QStringLiteral("Статус: %1").arg(text));
-    m_status->setStyleSheet(QStringLiteral("color:%1; font-weight:600;").arg(colorName));
+    // Цвет состояния приходит из рабочего потока строкой; на экране это тон «таблетки».
+    ui::Tone tone = ui::Tone::Neutral;
+    if (colorName == QLatin1String("#0a7a2f")) {
+        tone = ui::Tone::Ok;
+    } else if (colorName == QLatin1String("#0b5cab")) {
+        tone = ui::Tone::Info;
+    } else if (colorName == QLatin1String("#9a6700")) {
+        tone = ui::Tone::Warn;
+    } else if (colorName == QLatin1String("#8a1f11")) {
+        tone = ui::Tone::Error;
+    }
+    ui::setTone(m_status, tone);
 }
 
 void ConnectionBar::setDiagnostic(const QString& text)
@@ -617,4 +635,6 @@ void ConnectionBar::setThemeButtonText(const QString& text)
 void ConnectionBar::setDataSourceText(const QString& text)
 {
     m_source->setText(text);
+    const bool live = text.contains(QStringLiteral("живой"), Qt::CaseInsensitive);
+    ui::setTone(m_source, live ? ui::Tone::Ok : ui::Tone::Warn);
 }

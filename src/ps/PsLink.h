@@ -36,6 +36,9 @@ public:
 
     void setTimeouts(const Timeouts& t) { m_timeouts = t; }
     [[nodiscard]] const Timeouts& timeouts() const { return m_timeouts; }
+    /// Автопереподключение только для связи, которая уже была установлена (Ready):
+    /// первая неудачная попытка заканчивается ошибкой — дальше решает вызывающий
+    /// (поиск платы по MAC, правка адреса оператором).
     void setAutoReconnect(bool on) { m_autoReconnect = on; }
 
     /// TCP к host:port, затем hello с адресом доставки телеметрии.
@@ -47,6 +50,8 @@ public:
 
     [[nodiscard]] State state() const { return m_state; }
     [[nodiscard]] bool isReady() const { return m_state == State::Ready; }
+    /// Идёт попытка соединения или ждём очередную после обрыва установленной связи.
+    [[nodiscard]] bool isTrying() const { return m_state != State::Disconnected || m_reconnect.isActive(); }
     [[nodiscard]] QString host() const { return m_host; }
     [[nodiscard]] quint16 port() const { return m_port; }
     /// Фактический локальный порт телеметрии; 0 — не открыт.
@@ -112,6 +117,7 @@ private:
     QString m_peerVersion;
     bool m_wanted = false;
     bool m_autoReconnect = true;
+    bool m_reachedReady = false;  ///< с последнего connectToPs() связь хоть раз стала Ready
     afar::ps::LineSplitter m_splitter;
     quint8 m_txCount = 0;
     QHash<QString, Pending> m_pending;

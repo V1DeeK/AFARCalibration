@@ -1,6 +1,7 @@
 #include "PsPacketPage.h"
 
 #include "PsSession.h"
+#include "UiStyle.h"
 
 #include <QComboBox>
 #include <QFontDatabase>
@@ -85,7 +86,10 @@ PsPacketPage::PsPacketPage(PsSession* session, QWidget* parent)
     , m_session(session)
 {
     auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(ui::kInnerGap);
     auto* head = new QHBoxLayout;
+    head->setSpacing(ui::kInnerGap);
     m_type = new QComboBox(this);
     m_type->setObjectName(QStringLiteral("psPacketType"));
     for (std::string_view t :
@@ -101,6 +105,9 @@ PsPacketPage::PsPacketPage(PsSession* session, QWidget* parent)
     m_send = new QPushButton(QStringLiteral("Отправить"), this);
     m_send->setObjectName(QStringLiteral("psPacketSend"));
     auto* clear = new QPushButton(QStringLiteral("Очистить историю"), this);
+    ui::setButtonRole(m_send, ui::ButtonRole::Primary);
+    ui::setButtonRole(reset, ui::ButtonRole::Secondary);
+    ui::setButtonRole(clear, ui::ButtonRole::Secondary);
     head->addWidget(new QLabel(QStringLiteral("msg_type"), this));
     head->addWidget(m_type, 1);
     head->addWidget(reset);
@@ -115,6 +122,7 @@ PsPacketPage::PsPacketPage(PsSession* session, QWidget* parent)
     m_payload->setMaximumHeight(110);
     m_result = new QLabel(QStringLiteral("Выберите команду и нажмите «Отправить»."), this);
     m_result->setObjectName(QStringLiteral("psPacketResult"));
+    m_result->setProperty("role", QStringLiteral("hint"));
     m_result->setWordWrap(true);
 
     auto* split = new QSplitter(Qt::Horizontal, this);
@@ -127,11 +135,15 @@ PsPacketPage::PsPacketPage(PsSession* session, QWidget* parent)
     m_history->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_history->setSelectionMode(QAbstractItemView::SingleSelection);
     m_history->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_history->setAlternatingRowColors(true);
+    m_history->setShowGrid(false);
+    m_history->setMinimumHeight(120);
     m_history->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_history->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
     auto* packets = new QWidget(split);
     auto* pl = new QVBoxLayout(packets);
     pl->setContentsMargins(0, 0, 0, 0);
+    pl->setSpacing(2);
     m_request = new QPlainTextEdit(packets);
     m_request->setObjectName(QStringLiteral("psPacketRequest"));
     m_response = new QPlainTextEdit(packets);
@@ -142,9 +154,9 @@ PsPacketPage::PsPacketPage(PsSession* session, QWidget* parent)
     }
     m_request->setPlaceholderText(QStringLiteral("здесь будет пакет, который ушёл в PS"));
     m_response->setPlaceholderText(QStringLiteral("здесь будет ответ PS"));
-    pl->addWidget(new QLabel(QStringLiteral("Отправлено"), packets));
+    pl->addWidget(ui::captionLabel(QStringLiteral("Отправлено"), packets));
     pl->addWidget(m_request, 1);
-    pl->addWidget(new QLabel(QStringLiteral("Получено"), packets));
+    pl->addWidget(ui::captionLabel(QStringLiteral("Получено"), packets));
     pl->addWidget(m_response, 1);
     split->addWidget(m_history);
     split->addWidget(packets);
@@ -325,7 +337,7 @@ void PsPacketPage::refreshRow(int index)
         }
         item->setText(cells.at(c));
         if (c == 3 && e.result != Result::Ok && e.result != Result::Waiting) {
-            item->setForeground(QBrush(Qt::red));
+            item->setForeground(QBrush(ui::errorColor()));
         }
     }
 }

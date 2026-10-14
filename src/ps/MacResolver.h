@@ -2,7 +2,10 @@
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QStringList>
+
+#include <functional>
 
 class QTcpSocket;
 class QTimer;
@@ -18,9 +21,18 @@ public:
     explicit MacResolver(QObject* parent = nullptr);
     ~MacResolver() override;
 
+    /// Подмена источников для автотестов: таблица ARP (MAC → IP) и список адресов
+    /// для опроса. По умолчанию — `arp -a` и подсети компьютера.
+    using ArpReader = std::function<QHash<QString, QString>()>;
+    using CandidateProvider = std::function<QStringList()>;
+    void setArpReader(ArpReader reader) { m_arpReader = std::move(reader); }
+    void setCandidateProvider(CandidateProvider provider) { m_candidateProvider = std::move(provider); }
+
     [[nodiscard]] bool busy() const { return m_busy; }
     /// probePort — TCP-порт, на который стучимся при опросе подсети.
+    /// Новый поиск отменяет идущий: результат старого уже не придёт.
     void resolve(const QString& mac, quint16 probePort);
+    /// Прерывает поиск сразу и без сигналов resolved/failed.
     void cancel();
 
     /// 12 шестнадцатеричных цифр прописными или пусто, если MAC неверный.
@@ -37,8 +49,10 @@ signals:
     void progress(const QString& text);
 
 private:
-    static QHash<QString, QString> readArpTable();
+    static QHash<QString, QString> readSystemArpTable();
+    [[nodiscard]] QHash<QString, QString> readArpTable() const;
     [[nodiscard]] QStringList buildCandidates() const;
+    [[nodiscard]] static QStringList systemCandidates();
     void startSweep();
     void launchNextProbes();
     void finishProbe(QTcpSocket* socket);
@@ -49,6 +63,8 @@ private:
     quint16 m_port = 0;
     QStringList m_candidates;
     int m_nextCandidate = 0;
-    int m_activeProbes = 0;
+    QSet<QTcpSocket*> m_probes;  ///< сокеты опроса, ещё не завершившие попытку
     QTimer* m_sweepTimeout = nullptr;
+    ArpReader m_arpReader;
+    CandidateProvider m_candidateProvider;
 };

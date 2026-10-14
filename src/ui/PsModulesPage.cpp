@@ -1,6 +1,7 @@
 #include "PsModulesPage.h"
 
 #include "PsLink.h"
+#include "UiStyle.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -9,7 +10,6 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -135,6 +135,7 @@ QWidget* PsModulesPage::makeEditor(const ps::ModuleField& f, const QString& name
         box->setDecimals(6);
         box->setRange(0.0, 7000.0);
         box->setSuffix(QStringLiteral(" МГц"));
+        box->setButtonSymbols(QAbstractSpinBox::NoButtons);
         connect(box, &QDoubleSpinBox::valueChanged, this, mark);
         editor = box;
         break;
@@ -146,6 +147,7 @@ QWidget* PsModulesPage::makeEditor(const ps::ModuleField& f, const QString& name
         box->setSingleStep(0.5);
         box->setRange(0.0, f.kind == ps::ModuleFieldKind::Att31 ? 31.5 : 15.5);
         box->setSuffix(QStringLiteral(" дБ"));
+        box->setButtonSymbols(QAbstractSpinBox::NoButtons);
         connect(box, &QDoubleSpinBox::valueChanged, this, mark);
         editor = box;
         break;
@@ -191,48 +193,68 @@ QWidget* PsModulesPage::buildModule(Module m, const std::vector<ps::ModuleField>
 {
     auto* page = new QWidget(this);
     auto* grid = new QGridLayout;
-    grid->addWidget(new QLabel(QStringLiteral("Передать"), page), 0, 0);
-    grid->addWidget(new QLabel(QStringLiteral("Поле"), page), 0, 1);
-    grid->addWidget(new QLabel(QStringLiteral("Значение"), page), 0, 2);
-    grid->addWidget(new QLabel(QStringLiteral("Прочитано из модуля"), page), 0, 3);
-    auto& ui = m_ui[m];
-    int row = 1;
+    grid->setHorizontalSpacing(ui::kInnerGap);
+    grid->setVerticalSpacing(ui::kInnerGap);
+    auto& mod = m_ui[m];
+    // Широкое окошко: поля идут двумя колонками, каждая — «Передать | Поле | Значение | Прочитано».
+    const int columns = fields.size() > 6 ? 2 : 1;
+    const int perColumn = (static_cast<int>(fields.size()) + columns - 1) / columns;
+    constexpr int kColumnWidth = 5;  // send, поле, значение, прочитано, зазор
+    for (int c = 0; c < columns; ++c) {
+        const int base = c * kColumnWidth;
+        grid->addWidget(ui::captionLabel(QStringLiteral("Передать"), page), 0, base);
+        grid->addWidget(ui::captionLabel(QStringLiteral("Поле"), page), 0, base + 1);
+        grid->addWidget(ui::captionLabel(QStringLiteral("Значение"), page), 0, base + 2);
+        grid->addWidget(ui::captionLabel(QStringLiteral("Прочитано из модуля"), page), 0, base + 3);
+        grid->setColumnStretch(base + 1, 3);
+        grid->setColumnStretch(base + 3, 2);
+        grid->setColumnMinimumWidth(base + 2, 150);
+        if (c + 1 < columns) {
+            grid->setColumnMinimumWidth(base + 4, ui::kGap * 2);
+        }
+    }
+    int index = 0;
     for (const auto& f : fields) {
+        const int column = index / perColumn;
+        const int row = index % perColumn + 1;
+        const int base = column * kColumnWidth;
         const QString name = prefix(m) + QLatin1Char('_') + qs(f.key);
         FieldRow r{f};
         r.send = new QCheckBox(page);
         r.send->setObjectName(name + QStringLiteral("_send"));
         r.editor = makeEditor(f, name, r.send);
         r.actual = new QLabel(QStringLiteral("—"), page);
-        grid->addWidget(r.send, row, 0);
-        grid->addWidget(new QLabel(QStringLiteral("%1 (%2)").arg(qs(f.titleRu), qs(f.key)), page), row, 1);
-        grid->addWidget(r.editor, row, 2);
-        grid->addWidget(r.actual, row, 3);
-        ui.rows.push_back(r);
-        ++row;
+        r.actual->setProperty("role", QStringLiteral("hint"));
+        grid->addWidget(r.send, row, base, Qt::AlignHCenter);
+        grid->addWidget(new QLabel(QStringLiteral("%1 (%2)").arg(qs(f.titleRu), qs(f.key)), page), row, base + 1);
+        grid->addWidget(r.editor, row, base + 2);
+        grid->addWidget(r.actual, row, base + 3);
+        mod.rows.push_back(r);
+        ++index;
     }
-    grid->setColumnStretch(3, 1);
 
     auto* buttons = new QHBoxLayout;
-    ui.write = new QPushButton(QStringLiteral("Записать"), page);
-    ui.write->setObjectName(prefix(m) + QStringLiteral("Write"));
-    ui.read = new QPushButton(QStringLiteral("Прочитать"), page);
-    ui.read->setObjectName(prefix(m) + QStringLiteral("Read"));
-    ui.state = new QLabel(QStringLiteral("Ответ: —"), page);
-    ui.state->setObjectName(prefix(m) + QStringLiteral("State"));
-    buttons->addWidget(ui.write);
-    buttons->addWidget(ui.read);
-    buttons->addWidget(ui.state, 1);
-    connect(ui.write, &QPushButton::clicked, this, [this, m] { write(m); });
-    connect(ui.read, &QPushButton::clicked, this, [this, m] { read(m); });
+    buttons->setSpacing(ui::kInnerGap);
+    mod.write = new QPushButton(QStringLiteral("Записать"), page);
+    mod.write->setObjectName(prefix(m) + QStringLiteral("Write"));
+    ui::setButtonRole(mod.write, ui::ButtonRole::Primary);
+    mod.read = new QPushButton(QStringLiteral("Прочитать"), page);
+    mod.read->setObjectName(prefix(m) + QStringLiteral("Read"));
+    ui::setButtonRole(mod.read, ui::ButtonRole::Secondary);
+    mod.state = new QLabel(QStringLiteral("Ответ: —"), page);
+    mod.state->setObjectName(prefix(m) + QStringLiteral("State"));
+    mod.state->setProperty("role", QStringLiteral("hint"));
+    buttons->addWidget(mod.write);
+    buttons->addWidget(mod.read);
+    buttons->addWidget(mod.state, 1);
+    connect(mod.write, &QPushButton::clicked, this, [this, m] { write(m); });
+    connect(mod.read, &QPushButton::clicked, this, [this, m] { read(m); });
 
-    auto* inner = new QWidget(page);
-    inner->setLayout(grid);
-    auto* scroll = new QScrollArea(page);
-    scroll->setWidgetResizable(true);
-    scroll->setWidget(inner);
     auto* layout = new QVBoxLayout(page);
-    layout->addWidget(scroll, 1);
+    layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
+    layout->setSpacing(ui::kGap);
+    layout->addLayout(grid);
+    layout->addStretch(1);
     layout->addLayout(buttons);
     return page;
 }
@@ -241,13 +263,15 @@ QWidget* PsModulesPage::buildMixer()
 {
     auto* page = new QWidget(this);
     auto* grid = new QGridLayout;
-    grid->addWidget(new QLabel(QStringLiteral("Передать"), page), 0, 0);
+    grid->setHorizontalSpacing(ui::kInnerGap);
+    grid->setVerticalSpacing(ui::kInnerGap);
+    grid->addWidget(ui::captionLabel(QStringLiteral("Передать"), page), 0, 0);
     const auto& fields = ps::mixerChannelFields();
     for (std::size_t i = 0; i < fields.size(); ++i) {
-        grid->addWidget(new QLabel(QStringLiteral("%1 (%2)").arg(qs(fields[i].titleRu), qs(fields[i].key)), page),
+        grid->addWidget(ui::captionLabel(QStringLiteral("%1 (%2)").arg(qs(fields[i].titleRu), qs(fields[i].key)), page),
                         0, static_cast<int>(i) + 1);
     }
-    grid->addWidget(new QLabel(QStringLiteral("Прочитано из модуля"), page), 0,
+    grid->addWidget(ui::captionLabel(QStringLiteral("Прочитано из модуля"), page), 0,
                     static_cast<int>(fields.size()) + 1);
     for (int n = 1; n <= ps::kMixerChannels; ++n) {
         auto& r = m_mixer[static_cast<std::size_t>(n - 1)];
@@ -259,37 +283,45 @@ QWidget* PsModulesPage::buildMixer()
             grid->addWidget(r.editors[i], n, static_cast<int>(i) + 1);
         }
         r.actual = new QLabel(QStringLiteral("—"), page);
+        r.actual->setProperty("role", QStringLiteral("hint"));
         grid->addWidget(r.actual, n, static_cast<int>(fields.size()) + 1);
     }
     grid->setColumnStretch(static_cast<int>(fields.size()) + 1, 1);
     grid->setRowStretch(ps::kMixerChannels + 1, 1);
 
-    auto& ui = m_ui[Mixer];
+    auto& mod = m_ui[Mixer];
     auto* buttons = new QHBoxLayout;
-    ui.write = new QPushButton(QStringLiteral("Записать"), page);
-    ui.write->setObjectName(QStringLiteral("psMixerWrite"));
-    ui.read = new QPushButton(QStringLiteral("Прочитать"), page);
-    ui.read->setObjectName(QStringLiteral("psMixerRead"));
-    ui.state = new QLabel(QStringLiteral("Ответ: —"), page);
-    ui.state->setObjectName(QStringLiteral("psMixerState"));
-    buttons->addWidget(ui.write);
-    buttons->addWidget(ui.read);
-    buttons->addWidget(ui.state, 1);
-    connect(ui.write, &QPushButton::clicked, this, [this] { write(Mixer); });
-    connect(ui.read, &QPushButton::clicked, this, [this] { read(Mixer); });
+    buttons->setSpacing(ui::kInnerGap);
+    mod.write = new QPushButton(QStringLiteral("Записать"), page);
+    mod.write->setObjectName(QStringLiteral("psMixerWrite"));
+    ui::setButtonRole(mod.write, ui::ButtonRole::Primary);
+    mod.read = new QPushButton(QStringLiteral("Прочитать"), page);
+    mod.read->setObjectName(QStringLiteral("psMixerRead"));
+    ui::setButtonRole(mod.read, ui::ButtonRole::Secondary);
+    mod.state = new QLabel(QStringLiteral("Ответ: —"), page);
+    mod.state->setObjectName(QStringLiteral("psMixerState"));
+    mod.state->setProperty("role", QStringLiteral("hint"));
+    buttons->addWidget(mod.write);
+    buttons->addWidget(mod.read);
+    buttons->addWidget(mod.state, 1);
+    connect(mod.write, &QPushButton::clicked, this, [this] { write(Mixer); });
+    connect(mod.read, &QPushButton::clicked, this, [this] { read(Mixer); });
 
     auto* layout = new QVBoxLayout(page);
-    layout->addWidget(new QLabel(QStringLiteral("В отмеченных каналах передаются все четыре поля."), page));
-    layout->addLayout(grid, 1);
+    layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
+    layout->setSpacing(ui::kGap);
+    layout->addWidget(ui::hintLabel(QStringLiteral("В отмеченных каналах передаются все четыре поля."), page));
+    layout->addLayout(grid);
+    layout->addStretch(1);
     layout->addLayout(buttons);
     return page;
 }
 
 void PsModulesPage::setAllowed(bool allowed)
 {
-    for (auto& ui : m_ui) {
-        ui.write->setEnabled(allowed);
-        ui.read->setEnabled(allowed);
+    for (auto& mod : m_ui) {
+        mod.write->setEnabled(allowed);
+        mod.read->setEnabled(allowed);
     }
 }
 
@@ -409,13 +441,13 @@ void PsModulesPage::onResponse(const ps::Envelope& r, ps::Status status)
 
 void PsModulesPage::showModule(Module m, ps::Status status, const json& payload)
 {
-    auto& ui = m_ui[m];
-    ui.state->setText(stateText(status, payload));
+    auto& mod = m_ui[m];
+    mod.state->setText(stateText(status, payload));
     if (status != ps::Status::Ok) {
         return;
     }
     m_filling = true;
-    for (auto& r : ui.rows) {
+    for (auto& r : mod.rows) {
         const auto it = payload.find(r.field.key);
         if (it == payload.end() || !it->is_number()) {
             continue;

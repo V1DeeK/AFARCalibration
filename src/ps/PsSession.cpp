@@ -93,11 +93,15 @@ quint16 PsSession::telemetryPort() const
 QString PsSession::mac() const
 {
     QSettings s;
-    for (const QString& key : {kGroup + QStringLiteral("mac"), QStringLiteral("board/mac")}) {
+    const QString key = kGroup + QStringLiteral("mac");
+    if (s.contains(key)) {
+        // Оператор мог оставить поле пустым: тогда плату по MAC не ищем.
         const QString saved = s.value(key).toString();
-        if (MacResolver::isValidMac(saved)) {
-            return MacResolver::formatMac(saved);
-        }
+        return MacResolver::isValidMac(saved) ? MacResolver::formatMac(saved) : QString();
+    }
+    const QString legacy = s.value(QStringLiteral("board/mac")).toString();
+    if (MacResolver::isValidMac(legacy)) {
+        return MacResolver::formatMac(legacy);
     }
     return QString::fromLatin1(kDefaultMac);
 }
@@ -119,6 +123,8 @@ void PsSession::saveSettings(const QString& host, quint16 port, quint16 telemetr
         // Тот же MAC читает «Параметры платы» (libiio): плата одна.
         s.setValue(kGroup + QStringLiteral("mac"), MacResolver::formatMac(mac));
         s.setValue(QStringLiteral("board/mac"), MacResolver::formatMac(mac));
+    } else if (mac.trimmed().isEmpty()) {
+        s.setValue(kGroup + QStringLiteral("mac"), QString());
     }
     s.setValue(kGroup + QStringLiteral("auto_connect"), true);
 }
@@ -151,9 +157,6 @@ bool PsSession::connectTo(const QString& host, quint16 port, quint16 telemetryPo
     }
     m_lastError.clear();
     saveSettings(h, port, telemetryPort, m);
-    if (m.isEmpty()) {
-        QSettings().remove(kGroup + QStringLiteral("mac"));
-    }
     startLink(h, port, telemetryPort);
     return true;
 }
@@ -202,16 +205,21 @@ void PsSession::connectFromSettings()
         return;
     }
     const QString h = host();
-    if (h.isEmpty()) {
-        findByMac(mac(), port(), telemetryPort());
-    } else {
+    if (!h.isEmpty()) {
         startLink(h, port(), telemetryPort());
+    } else if (MacResolver::isValidMac(mac())) {
+        findByMac(mac(), port(), telemetryPort());
     }
 }
 
 bool PsSession::searching() const
 {
     return m_resolver->busy();
+}
+
+bool PsSession::busy() const
+{
+    return m_resolver->busy() || m_link->isTrying();
 }
 
 // Адрес не ответил — ищем плату по MAC: IP у неё мог смениться. Один раз на
@@ -236,11 +244,15 @@ QString PsSession::statusText() const
         return m_searchText.isEmpty() ? QStringLiteral("поиск платы по MAC…") : m_searchText;
     }
     switch (m_link->state()) {
-    case PsLink::State::Disconnected:
-        return m_link->lastError().isEmpty() && m_lastError.isEmpty()
-                   ? QStringLiteral("нет связи")
-                   : QStringLiteral("нет связи: %1")
-                         .arg(m_lastError.isEmpty() ? m_link->lastError() : m_lastError);
+    case PsLink::State::Disconnected: {
+        const QString why = m_lastError.isEmpty() ? m_link->lastError() : m_lastError;
+        if (why.isEmpty()) {
+            return QStringLiteral("нет связи");
+        }
+        return m_link->isTrying()
+                   ? QStringLiteral("нет связи: %1 — пробую снова").arg(why)
+                   : QStringLiteral("нет связи: %1").arg(why);
+    }
     case PsLink::State::Connecting:
         return QStringLiteral("подключение к %1:%2…").arg(m_link->host()).arg(m_link->port());
     case PsLink::State::Handshaking:

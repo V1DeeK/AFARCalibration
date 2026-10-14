@@ -5,9 +5,9 @@
 #include "PsJournalDialog.h"
 #include "PsPacketPage.h"
 #include "PsSession.h"
+#include "UiStyle.h"
 
 #include <QFontDatabase>
-#include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -16,8 +16,6 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
-#include <QSplitter>
-#include <QTabWidget>
 #include <QVBoxLayout>
 
 namespace ps = afar::ps;
@@ -26,76 +24,47 @@ namespace {
 
 constexpr int kRecentLines = 300;
 
-/// Плитка мозаики: полупрозрачный фон читается и в светлой, и в тёмной теме.
-QLabel* tile(QWidget* parent, const QString& text, const char* tone)
-{
-    auto* label = new QLabel(text, parent);
-    label->setAlignment(Qt::AlignCenter);
-    label->setWordWrap(true);
-    label->setMinimumHeight(34);
-    QString bg = QStringLiteral("rgba(128,128,128,0.18)");
-    if (qstrcmp(tone, "ok") == 0) {
-        bg = QStringLiteral("rgba(46,160,67,0.28)");
-    } else if (qstrcmp(tone, "fail") == 0) {
-        bg = QStringLiteral("rgba(220,53,69,0.32)");
-    } else if (qstrcmp(tone, "info") == 0) {
-        bg = QStringLiteral("rgba(56,132,229,0.22)");
-    }
-    label->setStyleSheet(QStringLiteral("QLabel { background: %1; border-radius: 4px; padding: 3px 6px; }").arg(bg));
-    return label;
-}
-
-QString uptimeText(qint64 sec)
-{
-    return QStringLiteral("%1:%2:%3")
-        .arg(sec / 3600)
-        .arg((sec / 60) % 60, 2, 10, QLatin1Char('0'))
-        .arg(sec % 60, 2, 10, QLatin1Char('0'));
-}
-
 }  // namespace
 
 ConnectionTab::ConnectionTab(PsSession* session, QWidget* parent)
     : QWidget(parent)
     , m_session(session)
 {
-    auto* root = new QHBoxLayout(this);
-    root->setContentsMargins(6, 6, 6, 6);
-    auto* split = new QSplitter(Qt::Horizontal, this);
-    split->setChildrenCollapsible(false);
+    setObjectName(QStringLiteral("connectionTab"));
+    auto* root = new QGridLayout(this);
+    root->setContentsMargins(ui::kPageMargin, ui::kPageMargin, ui::kPageMargin, ui::kPageMargin);
+    root->setHorizontalSpacing(ui::kGap);
+    root->setVerticalSpacing(ui::kGap);
 
-    auto* left = new QWidget(split);
-    auto* leftLayout = new QVBoxLayout(left);
-    leftLayout->setContentsMargins(0, 0, 0, 0);
-    auto* top = new QHBoxLayout;
-    top->addWidget(buildConnectionBox(), 1);
-    top->addWidget(buildTechBox(), 1);
-    leftLayout->addLayout(top);
-    leftLayout->addWidget(buildCommandBox(), 1);
-
-    auto* right = new QWidget(split);
-    auto* rightLayout = new QVBoxLayout(right);
-    rightLayout->setContentsMargins(0, 0, 0, 0);
-    rightLayout->addWidget(buildJournalBox());
-    auto* scanBox = new QGroupBox(QStringLiteral("Полное сканирование"), right);
+    // Слева: подключение и тех. состояние рядом, под ними — «Одна команда».
+    root->addWidget(buildConnectionBox(), 0, 0);
+    root->addWidget(buildTechBox(), 0, 1);
+    root->addWidget(buildCommandBox(), 1, 0, 1, 2);
+    // Справа: журнал обмена и полное сканирование.
+    root->addWidget(buildJournalBox(), 0, 2);
+    auto* scanBox = new QGroupBox(QStringLiteral("Полное сканирование"), this);
     auto* scanLayout = new QVBoxLayout(scanBox);
+    scanLayout->setContentsMargins(0, 0, 0, 0);
     m_fullScan = new FullScanPanel(m_session, scanBox);
     scanLayout->addWidget(m_fullScan);
-    rightLayout->addWidget(scanBox, 1);
+    root->addWidget(scanBox, 1, 2);
 
-    split->addWidget(left);
-    split->addWidget(right);
-    split->setStretchFactor(0, 1);
-    split->setStretchFactor(1, 1);
-    root->addWidget(split);
+    root->setColumnStretch(0, 3);
+    root->setColumnStretch(1, 4);
+    root->setColumnStretch(2, 6);
+    root->setRowStretch(0, 0);
+    root->setRowStretch(1, 1);
 
     m_journal = new PsJournalDialog(m_session, this);
 
     connect(m_session, &PsSession::statusChanged, this, &ConnectionTab::refreshConnection);
     connect(m_session, &PsSession::controlsChanged, this, &ConnectionTab::refreshConnection);
-    connect(m_session, &PsSession::modeChanged, this, &ConnectionTab::refreshTech);
-    connect(m_session, &PsSession::telemetryChanged, this, &ConnectionTab::refreshTech);
-    connect(m_session, &PsSession::hostResolved, m_host, &QLineEdit::setText);
+    connect(m_session, &PsSession::hostResolved, this, [this](const QString& ip) {
+        // Найденный адрес подставляем, но не затираем то, что оператор сейчас печатает.
+        if (!m_host->hasFocus()) {
+            m_host->setText(ip);
+        }
+    });
     connect(m_session, &PsSession::message, this, [this](const QString& text) {
         m_message->setText(text);
         ++m_errorCount;
@@ -133,62 +102,89 @@ ConnectionTab::ConnectionTab(PsSession* session, QWidget* parent)
     });
 
     refreshConnection();
-    refreshTech();
     refreshCounters();
 }
 
 QWidget* ConnectionTab::buildConnectionBox()
 {
     auto* box = new QGroupBox(QStringLiteral("Подключение к плате"), this);
-    auto* form = new QFormLayout(box);
+    box->setObjectName(QStringLiteral("connectionBox"));
+    auto* layout = new QVBoxLayout(box);
+    layout->setSpacing(ui::kInnerGap);
+
     m_host = new QLineEdit(m_session->host(), box);
     m_host->setObjectName(QStringLiteral("psHost"));
-    m_host->setPlaceholderText(QStringLiteral("IP-адрес PS; пусто — искать по MAC"));
+    m_host->setPlaceholderText(QStringLiteral("например 172.16.226.99"));
+    m_host->setClearButtonEnabled(true);
+    m_host->setToolTip(QStringLiteral("IP-адрес платы. Если он пустой или плата по нему не отвечает, "
+                                      "плата ищется по MAC-адресу в локальной сети."));
     m_mac = new QLineEdit(m_session->mac(), box);
     m_mac->setObjectName(QStringLiteral("psMac"));
     m_mac->setPlaceholderText(QStringLiteral("AA:BB:CC:DD:EE:FF"));
-    m_mac->setToolTip(QStringLiteral("IP платы меняется, MAC постоянный: если по адресу PS не "
-                                     "отвечает, плата ищется по MAC в локальной сети"));
+    m_mac->setToolTip(QStringLiteral("IP платы меняется, MAC постоянный: по нему плату находят в сети."));
+
     m_port = new QSpinBox(box);
     m_port->setObjectName(QStringLiteral("psPort"));
     m_port->setRange(1, 65535);
     m_port->setValue(m_session->port());
     m_port->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    m_port->setToolTip(QStringLiteral("TCP-порт канала управления PS"));
     m_tlmPort = new QSpinBox(box);
     m_tlmPort->setObjectName(QStringLiteral("psTlmPort"));
     m_tlmPort->setRange(1, 65535);
     m_tlmPort->setValue(m_session->telemetryPort());
     m_tlmPort->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    auto* ports = new QHBoxLayout;
-    ports->addWidget(m_port, 1);
-    ports->addWidget(new QLabel(QStringLiteral("UDP-порт"), box));
-    ports->addWidget(m_tlmPort, 1);
+    m_tlmPort->setToolTip(QStringLiteral("UDP-порт, на который PS присылает телеметрию"));
+
+    auto* ports = new QGridLayout;
+    ports->setHorizontalSpacing(ui::kInnerGap);
+    ports->setVerticalSpacing(2);
+    ports->addWidget(ui::captionLabel(QStringLiteral("TCP-порт"), box), 0, 0);
+    ports->addWidget(ui::captionLabel(QStringLiteral("UDP-порт"), box), 0, 1);
+    ports->addWidget(m_port, 1, 0);
+    ports->addWidget(m_tlmPort, 1, 1);
 
     m_linkState = new QLabel(box);
     m_linkState->setObjectName(QStringLiteral("psLinkState"));
+    m_linkState->setProperty("role", QStringLiteral("status"));
     m_linkState->setWordWrap(true);
-    m_message = new QLabel(box);
-    m_message->setObjectName(QStringLiteral("psMessage"));
-    m_message->setWordWrap(true);
-    m_message->setStyleSheet(QStringLiteral("color: palette(mid);"));
 
     m_connect = new QPushButton(QStringLiteral("Подключиться"), box);
     m_connect->setObjectName(QStringLiteral("psConnect"));
+    ui::setButtonRole(m_connect, ui::ButtonRole::Primary);
     m_findByMac = new QPushButton(QStringLiteral("Найти по MAC"), box);
     m_findByMac->setObjectName(QStringLiteral("psFindByMac"));
+    ui::setButtonRole(m_findByMac, ui::ButtonRole::Secondary);
     auto* buttons = new QHBoxLayout;
+    buttons->setSpacing(ui::kInnerGap);
     buttons->addWidget(m_connect, 1);
-    buttons->addWidget(m_findByMac);
+    buttons->addWidget(m_findByMac, 1);
 
-    form->addRow(QStringLiteral("IP"), m_host);
-    form->addRow(QStringLiteral("MAC"), m_mac);
-    form->addRow(QStringLiteral("TCP-порт"), ports);
-    form->addRow(QStringLiteral("Статус"), m_linkState);
-    form->addRow(buttons);
-    form->addRow(m_message);
+    m_message = ui::hintLabel(QString(), box);
+    m_message->setObjectName(QStringLiteral("psMessage"));
 
-    connect(m_connect, &QPushButton::clicked, this, &ConnectionTab::onConnectClicked);
-    connect(m_host, &QLineEdit::returnPressed, this, &ConnectionTab::onConnectClicked);
+    layout->addWidget(ui::captionLabel(QStringLiteral("IP-адрес"), box));
+    layout->addWidget(m_host);
+    layout->addWidget(ui::captionLabel(QStringLiteral("MAC-адрес"), box));
+    layout->addWidget(m_mac);
+    layout->addLayout(ports);
+    layout->addWidget(m_linkState);
+    layout->addLayout(buttons);
+    layout->addWidget(m_message);
+    layout->addStretch(1);
+
+    connect(m_connect, &QPushButton::clicked, this, &ConnectionTab::onMainButton);
+    // Enter в любом поле — подключиться с тем, что введено (и повторить попытку, если она уже идёт).
+    for (QLineEdit* edit : {m_host, m_mac}) {
+        connect(edit, &QLineEdit::returnPressed, this, &ConnectionTab::connectNow);
+    }
+    for (QSpinBox* spin : {m_port, m_tlmPort}) {
+        connect(spin, &QSpinBox::editingFinished, this, [this, spin] {
+            if (spin->hasFocus()) {
+                connectNow();
+            }
+        });
+    }
     connect(m_findByMac, &QPushButton::clicked, this, [this] {
         m_session->findByMac(m_mac->text().trimmed(), static_cast<quint16>(m_port->value()),
                              static_cast<quint16>(m_tlmPort->value()));
@@ -199,59 +195,56 @@ QWidget* ConnectionTab::buildConnectionBox()
 QWidget* ConnectionTab::buildTechBox()
 {
     auto* box = new QGroupBox(QStringLiteral("Тех. состояние"), this);
+    box->setObjectName(QStringLiteral("techBox"));
     auto* layout = new QVBoxLayout(box);
-    m_techTabs = new QTabWidget(box);
-    auto* page = new QWidget(m_techTabs);
-    auto* pageLayout = new QVBoxLayout(page);
-    m_techMode = new QLabel(page);
-    m_techMode->setObjectName(QStringLiteral("psTechMode"));
-    m_techMode->setWordWrap(true);
-    m_techTiles = new QGridLayout;
-    m_techTiles->setSpacing(4);
-    m_techValues = new QLabel(page);
-    m_techValues->setObjectName(QStringLiteral("psTechValues"));
-    m_techValues->setWordWrap(true);
-    m_techValues->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    pageLayout->addWidget(m_techMode);
-    pageLayout->addLayout(m_techTiles);
-    pageLayout->addWidget(m_techValues);
-    pageLayout->addStretch(1);
-    m_techTabs->addTab(page, QStringLiteral("Телеметрия PS"));
-    layout->addWidget(m_techTabs);
+    layout->setContentsMargins(0, 0, 0, 0);
+    m_techBody = new QWidget(box);
+    auto* bodyLayout = new QVBoxLayout(m_techBody);
+    bodyLayout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(m_techBody, 1);
     return box;
 }
 
 QWidget* ConnectionTab::buildJournalBox()
 {
     auto* box = new QGroupBox(QStringLiteral("Журнал обмена"), this);
+    box->setObjectName(QStringLiteral("journalBox"));
     auto* layout = new QVBoxLayout(box);
-    auto* tiles = new QGridLayout;
-    tiles->setSpacing(4);
-    m_tcpOut = tile(box, QString(), "info");
-    m_tcpIn = tile(box, QString(), "info");
-    m_udpIn = tile(box, QString(), "info");
-    m_udpLost = tile(box, QString(), "info");
-    m_errors = tile(box, QString(), "info");
+    layout->setSpacing(ui::kInnerGap);
+
+    auto* tiles = new QHBoxLayout;
+    tiles->setSpacing(ui::kInnerGap);
+    m_tcpOut = new StatTile(QStringLiteral("TCP ушло"), box);
+    m_tcpIn = new StatTile(QStringLiteral("TCP пришло"), box);
+    m_udpIn = new StatTile(QStringLiteral("UDP принято"), box);
+    m_udpLost = new StatTile(QStringLiteral("UDP потеряно"), box);
+    m_errors = new StatTile(QStringLiteral("Сообщений"), box);
+    m_tcpOut->setObjectName(QStringLiteral("psTileTcpOut"));
+    m_tcpIn->setObjectName(QStringLiteral("psTileTcpIn"));
+    m_udpIn->setObjectName(QStringLiteral("psTileUdpIn"));
+    m_udpLost->setObjectName(QStringLiteral("psTileUdpLost"));
     m_errors->setObjectName(QStringLiteral("psJournalErrors"));
-    tiles->addWidget(m_tcpOut, 0, 0);
-    tiles->addWidget(m_tcpIn, 0, 1);
-    tiles->addWidget(m_udpIn, 0, 2);
-    tiles->addWidget(m_udpLost, 0, 3);
-    tiles->addWidget(m_errors, 0, 4);
+    for (StatTile* tile : {m_tcpOut, m_tcpIn, m_udpIn, m_udpLost, m_errors}) {
+        tiles->addWidget(tile, 1);
+    }
+
     m_recent = new QPlainTextEdit(box);
     m_recent->setObjectName(QStringLiteral("psJournalRecent"));
     m_recent->setReadOnly(true);
     m_recent->setMaximumBlockCount(kRecentLines);
     m_recent->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_recent->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    m_recent->setFixedHeight(130);
+    m_recent->setPlaceholderText(QStringLiteral("Здесь появятся последние пакеты TCP и UDP"));
+    m_recent->setMinimumHeight(110);
     auto* open = new QPushButton(QStringLiteral("Открыть журнал…"), box);
     open->setObjectName(QStringLiteral("psOpenJournal"));
+    ui::setButtonRole(open, ui::ButtonRole::Secondary);
     auto* row = new QHBoxLayout;
     row->addStretch(1);
     row->addWidget(open);
+
     layout->addLayout(tiles);
-    layout->addWidget(m_recent);
+    layout->addWidget(m_recent, 1);
     layout->addLayout(row);
     connect(open, &QPushButton::clicked, this, &ConnectionTab::openJournal);
     return box;
@@ -259,40 +252,22 @@ QWidget* ConnectionTab::buildJournalBox()
 
 QWidget* ConnectionTab::buildCommandBox()
 {
-    m_commandTabs = new QTabWidget(this);
-    m_commandTabs->setObjectName(QStringLiteral("connectionCommandTabs"));
-    m_packetPage = new PsPacketPage(m_session, m_commandTabs);
-    m_commandTabs->addTab(m_packetPage, QStringLiteral("Одна команда"));
-    auto* journalPage = new QWidget(m_commandTabs);
-    auto* journalLayout = new QVBoxLayout(journalPage);
-    auto* note = new QLabel(QStringLiteral("Журнал обмена открывается отдельным окном."), journalPage);
-    auto* open = new QPushButton(QStringLiteral("Открыть журнал…"), journalPage);
-    journalLayout->addWidget(note);
-    journalLayout->addWidget(open);
-    journalLayout->addStretch(1);
-    m_commandTabs->addTab(journalPage, QStringLiteral("Журнал"));
-    connect(open, &QPushButton::clicked, this, &ConnectionTab::openJournal);
-    // Нажали «Журнал» — открываем модальное окно и возвращаемся к «Одной команде».
-    connect(m_commandTabs, &QTabWidget::currentChanged, this, [this, journalPage](int index) {
-        if (m_commandTabs->widget(index) == journalPage) {
-            m_commandTabs->setCurrentWidget(m_packetPage);
-            openJournal();
-        }
-    });
+    auto* box = new QGroupBox(QStringLiteral("Одна команда"), this);
+    box->setObjectName(QStringLiteral("commandBox"));
+    auto* layout = new QVBoxLayout(box);
+    layout->setContentsMargins(0, 0, 0, 0);
+    m_packetPage = new PsPacketPage(m_session, box);
+    layout->addWidget(m_packetPage);
     connect(m_session, &PsSession::controlsChanged, this,
             [this] { m_packetPage->setAllowed(m_session->manualAllowed()); });
     m_packetPage->setAllowed(m_session->manualAllowed());
-    return m_commandTabs;
+    return box;
 }
 
-void ConnectionTab::addTechPage(QWidget* page, const QString& title)
+void ConnectionTab::setTechPage(QWidget* page)
 {
-    m_techTabs->addTab(page, title);
-}
-
-QString ConnectionTab::macText() const
-{
-    return MacResolver::formatMac(m_mac->text().trimmed());
+    page->setParent(m_techBody);
+    m_techBody->layout()->addWidget(page);
 }
 
 void ConnectionTab::openJournal()
@@ -301,97 +276,61 @@ void ConnectionTab::openJournal()
     m_journal->raise();
 }
 
-void ConnectionTab::onConnectClicked()
+QString ConnectionTab::macText() const
 {
-    PsLink* link = m_session->link();
-    if (link->state() != PsLink::State::Disconnected || m_session->searching()) {
-        m_session->disconnectFromPs();
+    return MacResolver::formatMac(m_mac->text().trimmed());
+}
+
+void ConnectionTab::connectNow()
+{
+    if (m_session->link()->isReady() || m_session->seriesActive()) {
         return;
     }
     m_session->connectTo(m_host->text(), static_cast<quint16>(m_port->value()),
                          static_cast<quint16>(m_tlmPort->value()), m_mac->text());
 }
 
-void ConnectionTab::refreshConnection()
+void ConnectionTab::onMainButton()
 {
-    const PsLink::State state = m_session->link()->state();
-    const bool idle = state == PsLink::State::Disconnected && !m_session->searching();
-    const bool ready = state == PsLink::State::Ready;
-    m_linkState->setText(m_session->statusText());
-    m_connect->setText(idle ? QStringLiteral("Подключиться")
-                            : (ready ? QStringLiteral("Отключиться") : QStringLiteral("Отмена")));
-    m_connect->setEnabled(!m_session->seriesActive());
-    m_findByMac->setEnabled(idle && !m_session->seriesActive());
-    for (QWidget* w : {static_cast<QWidget*>(m_host), static_cast<QWidget*>(m_mac),
-                       static_cast<QWidget*>(m_port), static_cast<QWidget*>(m_tlmPort)}) {
-        w->setEnabled(idle);
+    // Связь есть — отключиться; идёт попытка или поиск — отменить; иначе подключиться.
+    if (m_session->link()->isReady() || m_session->busy()) {
+        m_session->disconnectFromPs();
+        return;
     }
-    emit summaryChanged(ready ? QStringLiteral("PS: OK") : QStringLiteral("PS: нет связи"), ready);
-    refreshTech();
+    connectNow();
 }
 
-void ConnectionTab::refreshTech()
+void ConnectionTab::refreshConnection()
 {
-    while (QLayoutItem* item = m_techTiles->takeAt(0)) {
-        delete item->widget();
-        delete item;
+    const bool ready = m_session->link()->isReady();
+    const bool busy = m_session->busy();
+    const bool series = m_session->seriesActive();
+    m_linkState->setText(m_session->statusText());
+    ui::setTone(m_linkState, ready ? ui::Tone::Ok
+                             : busy ? ui::Tone::Info
+                             : m_session->lastError().isEmpty() && m_session->link()->lastError().isEmpty()
+                                 ? ui::Tone::Neutral
+                                 : ui::Tone::Error);
+    m_connect->setText(ready ? QStringLiteral("Отключиться")
+                             : busy ? QStringLiteral("Отмена") : QStringLiteral("Подключиться"));
+    ui::setButtonRole(m_connect, ready || busy ? ui::ButtonRole::Danger : ui::ButtonRole::Primary);
+    m_connect->setEnabled(!series);
+    // Пока связи нет, поля можно править всегда — и во время попыток подключения, и во время поиска по MAC.
+    m_findByMac->setEnabled(!ready && !series);
+    for (QWidget* w : {static_cast<QWidget*>(m_host), static_cast<QWidget*>(m_mac),
+                       static_cast<QWidget*>(m_port), static_cast<QWidget*>(m_tlmPort)}) {
+        w->setEnabled(!ready);
     }
-    if (!m_session->link()->isReady()) {
-        m_techMode->setText(QStringLiteral("нет данных: PS не подключён"));
-        m_techValues->clear();
-        return;
-    }
-    QString mode = m_session->modeKnown()
-                       ? QString::fromStdString(ps::modeRu(m_session->mode()))
-                       : QStringLiteral("режим неизвестен");
-    if (!m_session->state().isEmpty()) {
-        mode += QStringLiteral(", %1").arg(QString::fromStdString(ps::stateRu(m_session->state().toStdString())));
-    }
-    m_techMode->setText(QStringLiteral("Режим: %1").arg(mode));
-    const auto& t = m_session->telemetry();
-    if (!t) {
-        m_techValues->setText(QStringLiteral("телеметрия UDP %1 ещё не приходила")
-                                  .arg(m_session->link()->telemetryPort()));
-        return;
-    }
-    int i = 0;
-    for (const auto& [id, health] : t->devices) {
-        const char* tone = health == ps::DeviceHealth::Ok     ? "ok"
-                           : health == ps::DeviceHealth::Fail ? "fail"
-                                                              : "none";
-        auto* label = tile(this, QString::fromStdString(ps::selfTestRu(id)), tone);
-        const std::string_view healthText = ps::toString(health);
-        label->setToolTip(QStringLiteral("%1: %2").arg(
-            QString::fromStdString(id),
-            QString::fromUtf8(healthText.data(), static_cast<qsizetype>(healthText.size()))));
-        m_techTiles->addWidget(label, i / 4, i % 4);
-        ++i;
-    }
-    QStringList lines;
-    QStringList temps;
-    for (const auto& [id, v] : t->temperature) {
-        temps << QStringLiteral("%1 %2 °C").arg(QString::fromStdString(id)).arg(v, 0, 'f', 1);
-    }
-    if (!temps.isEmpty()) {
-        lines << QStringLiteral("Температура: %1").arg(temps.join(QStringLiteral(" · ")));
-    }
-    QStringList power;
-    for (const auto& [id, v] : t->power) {
-        power << QStringLiteral("%1 %2 В").arg(QString::fromStdString(id)).arg(v, 0, 'f', 2);
-    }
-    if (!power.isEmpty()) {
-        lines << QStringLiteral("Питание: %1").arg(power.join(QStringLiteral(" · ")));
-    }
-    lines << QStringLiteral("Работа: %1").arg(uptimeText(t->uptime));
-    m_techValues->setText(lines.join(QLatin1Char('\n')));
 }
 
 void ConnectionTab::refreshCounters()
 {
     const PsLink* link = m_session->link();
-    m_tcpOut->setText(QStringLiteral("TCP ушло\n%1").arg(m_tcpOutCount));
-    m_tcpIn->setText(QStringLiteral("TCP пришло\n%1").arg(m_tcpInCount));
-    m_udpIn->setText(QStringLiteral("UDP принято\n%1").arg(link->telemetryPackets()));
-    m_udpLost->setText(QStringLiteral("UDP потеряно\n%1").arg(link->telemetryLost()));
-    m_errors->setText(QStringLiteral("Сообщений\n%1").arg(m_errorCount));
+    m_tcpOut->setValue(QString::number(m_tcpOutCount));
+    m_tcpIn->setValue(QString::number(m_tcpInCount));
+    m_udpIn->setValue(QString::number(link->telemetryPackets()));
+    m_udpLost->setValue(QString::number(link->telemetryLost()));
+    m_udpLost->setTone(link->telemetryLost() > 0 ? ui::Tone::Warn : ui::Tone::Neutral);
+    m_errors->setValue(QString::number(m_errorCount));
+    m_errors->setTone(m_errorCount > 0 ? ui::Tone::Warn : ui::Tone::Neutral);
 }

@@ -1,4 +1,5 @@
 #include "PsExchangeView.h"
+#include "UiStyle.h"
 
 #include <QCheckBox>
 #include <QHBoxLayout>
@@ -34,11 +35,14 @@ PsExchangeView::PsExchangeView(PsSession* session, QWidget* parent)
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(ColJson, QHeaderView::Stretch);
     m_table->setMinimumHeight(110);
+    m_table->setAlternatingRowColors(true);
+    m_table->setShowGrid(false);
 
     auto* row = new QHBoxLayout;
     m_showUdp = new QCheckBox(QStringLiteral("Показывать датаграммы телеметрии (UDP)"), this);
     m_showUdp->setChecked(true);
     auto* clear = new QPushButton(QStringLiteral("Очистить журнал"), this);
+    ui::setButtonRole(clear, ui::ButtonRole::Secondary);
     row->addWidget(m_showUdp);
     row->addStretch(1);
     row->addWidget(clear);
@@ -99,7 +103,7 @@ void PsExchangeView::append(const PsSession::LogLine& line)
             item->setToolTip(line.line);
         }
         if (bad) {
-            item->setForeground(QBrush(Qt::red));
+            item->setForeground(QBrush(ui::errorColor()));
         }
         m_table->setItem(row, col, item);
     }

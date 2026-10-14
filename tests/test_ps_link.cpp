@@ -209,3 +209,85 @@ TEST_CASE("PS-связь: нет PS по адресу — ошибка без з
     link.disconnectFromPs();
     CHECK(link.state() == PsLink::State::Disconnected);
 }
+
+TEST_CASE("PS-связь: на адрес, который ни разу не ответил, повторных попыток нет", "[ps][link]")
+{
+    app();
+    PsLink link;
+    PsLink::Timeouts t;
+    t.connectMs = 300;
+    t.reconnectMs = 150;  // если бы повтор был, он случился бы за это время
+    link.setTimeouts(t);
+    TestPsServer probe;
+    REQUIRE(probe.listen());
+    const quint16 freePort = probe.port();
+    probe.close();
+
+    int attempts = 0;
+    QObject::connect(&link, &PsLink::stateChanged, &link, [&](PsLink::State s) {
+        if (s == PsLink::State::Connecting) {
+            ++attempts;
+        }
+    });
+    link.connectToPs(QStringLiteral("127.0.0.1"), freePort, 0);
+    REQUIRE(waitFor([&] { return link.state() == PsLink::State::Disconnected && !link.lastError().isEmpty(); }));
+    // Ждём заведомо дольше reconnectMs: связь остаётся разорванной, попытка одна.
+    waitFor([&] { return false; }, 700);
+    CHECK(link.state() == PsLink::State::Disconnected);
+    CHECK_FALSE(link.isTrying());
+    CHECK(attempts == 1);
+}
+
+TEST_CASE("PS-связь: установленная связь после обрыва восстанавливается сама", "[ps][link]")
+{
+    app();
+    TestPsServer sim;
+    PsLink link;
+    PsLink::Timeouts t;
+    t.reconnectMs = 150;
+    t.connectMs = 400;
+    link.setTimeouts(t);
+    connectToSim(link, sim);
+    const quint16 port = sim.port();
+
+    sim.close();
+    REQUIRE(waitFor([&] { return link.state() != PsLink::State::Ready; }));
+    // Пока PS нет, связь «пытается»: интерфейс показывает «Отмена», а не «Подключиться».
+    REQUIRE(waitFor([&] { return link.isTrying(); }));
+
+    REQUIRE(sim.listen(port));
+    CHECK(waitFor([&] { return link.isReady(); }, 5000));
+}
+
+TEST_CASE("PS-связь: подписчик на разрыв может сразу начать новое подключение", "[ps][link]")
+{
+    app();
+    TestPsServer dead;
+    REQUIRE(dead.listen());
+    const quint16 deadPort = dead.port();
+    dead.close();
+    TestPsServer sim;
+    REQUIRE(sim.listen());
+
+    PsLink link;
+    PsLink::Timeouts t;
+    t.connectMs = 400;
+    t.reconnectMs = 60000;
+    t.commandMs = 300;
+    t.keepAliveIdleMs = 200;
+    link.setTimeouts(t);
+    // Как поиск платы по MAC: адрес находится мгновенно и подключение идёт из обработчика разрыва.
+    bool redirected = false;
+    QObject::connect(&link, &PsLink::stateChanged, &link, [&](PsLink::State s) {
+        if (s == PsLink::State::Disconnected && !redirected) {
+            redirected = true;
+            link.connectToPs(QStringLiteral("127.0.0.1"), sim.port(), 0);
+        }
+    });
+    link.connectToPs(QStringLiteral("127.0.0.1"), deadPort, 0);
+    CHECK(waitFor([&] { return link.isReady(); }, 4000));
+    // Таймеры новой попытки живы: молчащий PS обнаруживается, а не висит вечно.
+    sim.setSilent(true);
+    REQUIRE(link.sendCommand(ps::msg::GetState) >= 0);
+    CHECK(waitFor([&] { return link.state() == PsLink::State::Disconnected; }, 8000));
+}

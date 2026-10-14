@@ -7,6 +7,7 @@
 #include "afar/C2220Limits.h"
 
 #include <QCheckBox>
+#include <QAbstractItemView>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -89,6 +90,9 @@ MeasureTab::MeasureTab(QWidget* parent)
     modeLabel->setStyleSheet(QStringLiteral("font-weight: 700;"));
     m_workMode = new QComboBox(navigation);
     m_workMode->setObjectName(QStringLiteral("measurementWorkMode"));
+    // Узкая колонка: длинные названия режимов видны в раскрывающемся списке, а сам выбор не растягивает колонку.
+    m_workMode->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_workMode->setMinimumContentsLength(16);
     m_workMode->addItem(QStringLiteral("Двухпортовое устройство"));
     m_workMode->addItem(QStringLiteral("Демо: калибровка канала 64×64"));
     m_workMode->addItem(
@@ -100,6 +104,7 @@ MeasureTab::MeasureTab(QWidget* parent)
                 "Контроллер изделия отсутствует. Используйте деморежим."));
         }
     }
+    m_workMode->view()->setMinimumWidth(360);
     navigationLayout->addWidget(modeLabel);
     navigationLayout->addWidget(m_workMode);
 
@@ -741,8 +746,8 @@ QWidget* MeasureTab::makeGraphsPage()
     sideScroll->setWidgetResizable(true);
     sideScroll->setFrameShape(QFrame::NoFrame);
     sideScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    sideScroll->setMinimumWidth(270);
-    sideScroll->setMaximumWidth(340);
+    sideScroll->setMinimumWidth(340);
+    sideScroll->setMaximumWidth(400);
     sideScroll->setWidget(side);
 
     root->addWidget(plotHost, 1);

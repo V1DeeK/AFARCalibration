@@ -55,6 +55,10 @@ public:
     void connectFromSettings();
 
     [[nodiscard]] bool searching() const;
+    /// Идёт попытка подключения, поиск платы по MAC или ожидание переподключения.
+    [[nodiscard]] bool busy() const;
+    /// Для автотестов: подмена ARP и списка адресов опроса.
+    [[nodiscard]] MacResolver* macResolver() const { return m_resolver; }
     [[nodiscard]] QString lastError() const { return m_lastError; }
     /// Состояние связи одной строкой для окошка «Подключение».
     [[nodiscard]] QString statusText() const;

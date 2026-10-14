@@ -1,6 +1,7 @@
 #include "StressTestPanel.h"
 
 #include "PsSession.h"
+#include "UiStyle.h"
 
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -43,21 +44,29 @@ StressTestPanel::StressTestPanel(PsSession* session, const QVector<Command>& com
     }
 
     auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(ui::kInnerGap);
     auto* controls = new QHBoxLayout;
+    controls->setSpacing(ui::kInnerGap);
     m_rate = new QSpinBox(this);
     m_rate->setObjectName(QStringLiteral("stressRate"));
     m_rate->setRange(1, 50);
     m_rate->setValue(10);
+    m_rate->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_total = new QSpinBox(this);
     m_total->setObjectName(QStringLiteral("stressTotal"));
     m_total->setRange(0, 1'000'000);
     m_total->setValue(1000);
+    m_total->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_start = new QPushButton(QStringLiteral("Запустить"), this);
     m_start->setObjectName(QStringLiteral("stressStart"));
     m_stop = new QPushButton(QStringLiteral("Остановить"), this);
     m_stop->setObjectName(QStringLiteral("stressStop"));
     m_stop->setEnabled(false);
     auto* reset = new QPushButton(QStringLiteral("Сбросить счётчики"), this);
+    ui::setButtonRole(m_start, ui::ButtonRole::Primary);
+    ui::setButtonRole(m_stop, ui::ButtonRole::Danger);
+    ui::setButtonRole(reset, ui::ButtonRole::Secondary);
     controls->addWidget(new QLabel(QStringLiteral("Темп, команд/с"), this));
     controls->addWidget(m_rate);
     controls->addSpacing(8);
@@ -69,16 +78,15 @@ StressTestPanel::StressTestPanel(PsSession* session, const QVector<Command>& com
     controls->addWidget(reset);
     root->addLayout(controls);
 
-    auto* hint = new QLabel(QStringLiteral("Команды идут по кругу; одна и та же команда не уходит повторно, "
-                                           "пока PS не ответил на предыдущую. Сервисные команды PS "
-                                           "выполняет только в сервисном режиме, иначе — отказ. Клик по "
-                                           "строке покажет последний проблемный обмен этой команды."),
-                            this);
-    hint->setWordWrap(true);
-    root->addWidget(hint);
+    root->addWidget(ui::hintLabel(QStringLiteral("Команды идут по кругу; одна и та же команда не уходит повторно, "
+                                                 "пока PS не ответил на предыдущую. Сервисные команды PS "
+                                                 "выполняет только в сервисном режиме, иначе — отказ. Клик по "
+                                                 "строке покажет последний проблемный обмен этой команды."),
+                                  this));
 
     m_summary = new QLabel(QStringLiteral("Стресс-тест не запущен."), this);
     m_summary->setObjectName(QStringLiteral("stressSummary"));
+    m_summary->setProperty("role", QStringLiteral("status"));
     m_summary->setWordWrap(true);
     root->addWidget(m_summary);
 
@@ -93,6 +101,9 @@ StressTestPanel::StressTestPanel(PsSession* session, const QVector<Command>& com
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->setAlternatingRowColors(true);
+    m_table->setShowGrid(false);
+    m_table->setMinimumHeight(180);
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(ColProblem, QHeaderView::Stretch);
     for (int r = 0; r < m_stats.size(); ++r) {
@@ -371,7 +382,7 @@ void StressTestPanel::refresh()
         m_table->item(r, ColAvg)->setText(answered ? QString::number(s.totalMs / answered) : QStringLiteral("·"));
         m_table->item(r, ColMax)->setText(answered ? QString::number(s.maxMs) : QStringLiteral("·"));
         m_table->item(r, ColProblem)->setText(s.lastProblem);
-        m_table->item(r, ColProblem)->setForeground(s.timeout || s.notSent ? QBrush(Qt::red) : QBrush(QColor(200, 130, 0)));
+        m_table->item(r, ColProblem)->setForeground(s.timeout || s.notSent ? QBrush(ui::errorColor()) : QBrush(ui::warnColor()));
     }
     const int answered = ok + refused;
     const int limit = m_total->value();
@@ -396,4 +407,9 @@ void StressTestPanel::refresh()
     } else {
         m_summary->setText(QStringLiteral("Стресс-тест не запущен."));
     }
+    ui::setTone(m_summary, timeout || notSent ? ui::Tone::Error
+                           : refused         ? ui::Tone::Warn
+                           : m_running       ? ui::Tone::Info
+                           : ok > 0          ? ui::Tone::Ok
+                                             : ui::Tone::Neutral);
 }

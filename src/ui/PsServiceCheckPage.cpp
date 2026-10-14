@@ -1,6 +1,7 @@
 #include "PsServiceCheckPage.h"
 
 #include "PsServiceCheckRunner.h"
+#include "UiStyle.h"
 
 #include <QFile>
 #include <QFileDialog>
@@ -31,25 +32,31 @@ PsServiceCheckPage::PsServiceCheckPage(PsLink* link, QWidget* parent)
     , m_runner(new PsServiceCheckRunner(link, this))
 {
     auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(ui::kPageMargin, ui::kPageMargin, ui::kPageMargin, ui::kPageMargin);
+    layout->setSpacing(ui::kGap);
     auto* buttons = new QHBoxLayout;
+    buttons->setSpacing(ui::kInnerGap);
     m_start = new QPushButton(QStringLiteral("Запустить проверку"), this);
     m_start->setObjectName(QStringLiteral("psCheckStart"));
     m_stop = new QPushButton(QStringLiteral("Остановить"), this);
     m_stop->setObjectName(QStringLiteral("psCheckStop"));
     m_save = new QPushButton(QStringLiteral("Сохранить отчёт…"), this);
     m_save->setObjectName(QStringLiteral("psCheckSave"));
+    ui::setButtonRole(m_start, ui::ButtonRole::Primary);
+    ui::setButtonRole(m_stop, ui::ButtonRole::Danger);
+    ui::setButtonRole(m_save, ui::ButtonRole::Secondary);
     buttons->addWidget(m_start);
     buttons->addWidget(m_stop);
     buttons->addStretch(1);
     buttons->addWidget(m_save);
 
-    auto* hint = new QLabel(QStringLiteral(
+    auto* hint = ui::hintLabel(QStringLiteral(
         "Проверка по контракту ps-json-protocol.md: PS переходит IDLE → SERVICE → IDLE, "
         "выполняет все сервисные команды с обратным чтением и отклоняет неверные. "
         "В конце коды решётки — безопасные 63/0. Перед запуском снимите изделие с антенн."), this);
-    hint->setWordWrap(true);
     m_summary = new QLabel(this);
     m_summary->setObjectName(QStringLiteral("psCheckSummary"));
+    m_summary->setProperty("role", QStringLiteral("status"));
     m_summary->setWordWrap(true);
 
     const auto& steps = m_runner->steps();
@@ -62,6 +69,9 @@ PsServiceCheckPage::PsServiceCheckPage(PsLink* link, QWidget* parent)
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->setAlternatingRowColors(true);
+    m_table->setShowGrid(false);
+    m_table->setMinimumHeight(160);
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(ColGot, QHeaderView::Stretch);
     for (int row = 0; row < m_table->rowCount(); ++row) {
@@ -172,7 +182,7 @@ void PsServiceCheckPage::onStepFinished(int index)
     }
     auto* item = m_table->item(index, ColVerdict);
     item->setText(verdict);
-    item->setForeground(o.result.verdict == ps::CheckVerdict::Pass ? QBrush(Qt::darkGreen) : QBrush(Qt::red));
+    item->setForeground(o.result.verdict == ps::CheckVerdict::Pass ? QBrush(ui::okColor()) : QBrush(ui::errorColor()));
     m_table->item(index, ColGot)->setText(o.got);
     m_table->item(index, ColMs)->setText(QString::number(o.ms));
     if (m_table->currentRow() == index) {
@@ -219,6 +229,10 @@ void PsServiceCheckPage::refreshSummary(const QString& tail)
         text += QLatin1Char(' ') + tail + QLatin1Char('.');
     }
     m_summary->setText(text);
+    ui::setTone(m_summary, fail > 0 ? ui::Tone::Error
+                           : m_runner->isRunning() ? ui::Tone::Info
+                           : pass > 0 && pass == static_cast<int>(m_runner->steps().size()) ? ui::Tone::Ok
+                                                                                           : ui::Tone::Neutral);
 }
 
 void PsServiceCheckPage::refreshButtons()

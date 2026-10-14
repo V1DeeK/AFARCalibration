@@ -4,6 +4,7 @@
 
 #include <QElapsedTimer>
 #include <QOpenGLWidget>
+#include <QSurfaceFormat>
 
 class QFocusEvent;
 class QInputMethodEvent;
@@ -13,12 +14,19 @@ class QWheelEvent;
 
 class SpectrumOpenGLWidget final : public QOpenGLWidget {
 public:
+    /// Формат поверхности OpenGL 3.3 Core. Его нужно задать как формат по умолчанию
+    /// (QSurfaceFormat::setDefaultFormat) ДО создания QApplication: на macOS, если
+    /// формат окна и виджета различаются, составной кадр QOpenGLWidget не
+    /// отображается (чёрная вкладка с перевёрнутым содержимым окна).
+    static QSurfaceFormat surfaceFormat();
+
     explicit SpectrumOpenGLWidget(AppState& state, QWidget* parent = nullptr);
     ~SpectrumOpenGLWidget() override;
     bool isRendererInitialized() const noexcept { return rendererInitialized_; }
     void setPage(SpectrumRenderer::Page page) { renderer_.setPage(page); update(); }
     /// Светлая или тёмная тема графиков; применяется на следующем кадре.
     void setLightTheme(bool light) { renderer_.setLightTheme(light); update(); }
+    [[nodiscard]] bool lightTheme() const noexcept { return renderer_.lightTheme(); }
 
 protected:
     void initializeGL() override;

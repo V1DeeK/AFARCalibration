@@ -87,7 +87,12 @@ QHash<QString, QString> MacResolver::parseArpOutput(const QString& output)
     return table;
 }
 
-QHash<QString, QString> MacResolver::readArpTable()
+QHash<QString, QString> MacResolver::readArpTable() const
+{
+    return m_arpReader ? m_arpReader() : readSystemArpTable();
+}
+
+QHash<QString, QString> MacResolver::readSystemArpTable()
 {
     QProcess proc;
     proc.start(QStringLiteral("arp"), {QStringLiteral("-a")});
@@ -118,10 +123,7 @@ QHash<QString, QString> MacResolver::readArpTable()
 
 void MacResolver::resolve(const QString& mac, quint16 probePort)
 {
-    if (m_busy) {
-        emit failed(QStringLiteral("Поиск по MAC уже выполняется"));
-        return;
-    }
+    cancel();
     m_mac = normalizeMac(mac);
     if (m_mac.isEmpty()) {
         emit failed(QStringLiteral("Некорректный MAC-адрес. Формат: AA:BB:CC:DD:EE:FF"));
@@ -143,18 +145,25 @@ void MacResolver::resolve(const QString& mac, quint16 probePort)
 
 void MacResolver::cancel()
 {
-    if (!m_busy) {
-        return;
-    }
+    m_sweepTimeout->stop();
     m_candidates.clear();
     m_nextCandidate = 0;
-    m_sweepTimeout->stop();
-    if (m_activeProbes == 0) {
-        m_busy = false;
+    const QSet<QTcpSocket*> probes = m_probes;
+    m_probes.clear();
+    for (QTcpSocket* socket : probes) {
+        socket->setProperty("done", true);
+        socket->abort();
+        socket->deleteLater();
     }
+    m_busy = false;
 }
 
 QStringList MacResolver::buildCandidates() const
+{
+    return m_candidateProvider ? m_candidateProvider() : systemCandidates();
+}
+
+QStringList MacResolver::systemCandidates()
 {
     QStringList out;
     const auto interfaces = QNetworkInterface::allInterfaces();
@@ -192,7 +201,6 @@ void MacResolver::startSweep()
 {
     m_candidates = buildCandidates();
     m_nextCandidate = 0;
-    m_activeProbes = 0;
     if (m_candidates.isEmpty()) {
         m_busy = false;
         emit failed(QStringLiteral("Не найдено локальных подсетей для поиска. "
@@ -207,7 +215,7 @@ void MacResolver::startSweep()
 
 void MacResolver::launchNextProbes()
 {
-    while (m_activeProbes < kMaxParallelProbes && m_nextCandidate < m_candidates.size()) {
+    while (m_probes.size() < kMaxParallelProbes && m_nextCandidate < m_candidates.size()) {
         const QString ip = m_candidates.at(m_nextCandidate++);
         auto* socket = new QTcpSocket(this);
         socket->setProxy(QNetworkProxy::NoProxy);
@@ -219,11 +227,11 @@ void MacResolver::launchNextProbes()
         connect(socket, &QTcpSocket::errorOccurred, this,
                 [this, socket](QAbstractSocket::SocketError) { finishProbe(socket); });
         connect(timeout, &QTimer::timeout, this, [this, socket] { finishProbe(socket); });
-        ++m_activeProbes;
+        m_probes.insert(socket);
         socket->connectToHost(ip, m_port);
         timeout->start();
     }
-    if (m_activeProbes == 0 && m_nextCandidate >= m_candidates.size()) {
+    if (m_probes.isEmpty() && m_nextCandidate >= m_candidates.size()) {
         finishSweep();
     }
 }
@@ -234,15 +242,15 @@ void MacResolver::finishProbe(QTcpSocket* socket)
         return;
     }
     socket->setProperty("done", true);
+    m_probes.remove(socket);
     socket->abort();
     socket->deleteLater();
-    --m_activeProbes;
     if (!m_busy) {
         return;
     }
     if (m_nextCandidate < m_candidates.size()) {
         launchNextProbes();
-    } else if (m_activeProbes == 0) {
+    } else if (m_probes.isEmpty()) {
         finishSweep();
     }
 }
@@ -252,15 +260,15 @@ void MacResolver::finishSweep()
     if (!m_busy) {
         return;
     }
-    m_sweepTimeout->stop();
-    m_busy = false;
-    const QString ip = readArpTable().value(m_mac);
+    const QString mac = m_mac;
+    cancel();  // останавливает таймер и оставшиеся сокеты, m_busy = false
+    const QString ip = readArpTable().value(mac);
     if (ip.isEmpty()) {
         emit failed(QStringLiteral("Плата с MAC %1 в локальной сети не найдена. "
                                    "Проверьте питание, кабель и что компьютер в той же подсети.")
-                        .arg(formatMac(m_mac)));
+                        .arg(formatMac(mac)));
         return;
     }
     emit progress(QStringLiteral("Плата найдена: %1").arg(ip));
-    emit resolved(ip, formatMac(m_mac));
+    emit resolved(ip, formatMac(mac));
 }

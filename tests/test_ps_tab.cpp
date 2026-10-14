@@ -14,6 +14,7 @@
 #include "StressTestPanel.h"
 #include "TestPsServer.h"
 #include "TestRunTab.h"
+#include "UiStyle.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -22,6 +23,7 @@
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -32,6 +34,7 @@
 #include <QTableWidget>
 #include <QTemporaryDir>
 #include <QUdpSocket>
+#include <QtTest/QtTest>
 
 #include <functional>
 #include <memory>
@@ -75,12 +78,17 @@ T* child(QWidget& w, const char* name)
     return c;
 }
 
+const QHash<QString, QString> kBoardInArp{{QStringLiteral("427ED74E0F77"), QStringLiteral("127.0.0.1")}};
+
 /// Вкладки, которые делят одну связь с PS, — как в главном окне.
 struct Ui {
     Ui()
     {
         QSettings().clear();
         session = std::make_unique<PsSession>();
+        // Тесты не сканируют сеть: поиск по MAC — только по подставленным данным.
+        session->macResolver()->setArpReader([] { return QHash<QString, QString>{}; });
+        session->macResolver()->setCandidateProvider([] { return QStringList{}; });
         connection = std::make_unique<ConnectionTab>(session.get());
         parameters = std::make_unique<ParametersTab>(session.get());
         testRun = std::make_unique<TestRunTab>(session.get());
@@ -101,8 +109,10 @@ struct Ui {
     }
     void show()
     {
+        connection->resize(1300, 800);
         connection->show();
         parameters->show();
+        static_cast<void>(QTest::qWaitForWindowExposed(connection.get()));
     }
 
     std::unique_ptr<PsSession> session;
@@ -112,20 +122,31 @@ struct Ui {
     std::unique_ptr<PsServiceCheckPage> check;
 };
 
+quint16 freeTlmPort()
+{
+    QUdpSocket probe;
+    REQUIRE(probe.bind(QHostAddress::LocalHost, 0));
+    const quint16 port = probe.localPort();
+    probe.close();
+    return port;
+}
+
+/// Заполнить окошко «Подключение к плате» так, как это делает оператор.
+void fillConnection(Ui& ui, const QString& host, quint16 port, const QString& mac = QString())
+{
+    QWidget& c = *ui.connection;
+    child<QLineEdit>(c, "psHost")->setText(host);
+    child<QLineEdit>(c, "psMac")->setText(mac);
+    child<QSpinBox>(c, "psPort")->setValue(port);
+    child<QSpinBox>(c, "psTlmPort")->setValue(freeTlmPort());
+}
+
 /// Подключиться к тестовому серверу так же, как оператор к PS: адрес и порты.
 void connectUi(Ui& ui, TestPsServer& server)
 {
     REQUIRE(server.listen());
-    QUdpSocket probe;
-    REQUIRE(probe.bind(QHostAddress::LocalHost, 0));
-    const quint16 tlmPort = probe.localPort();
-    probe.close();
-    QWidget& c = *ui.connection;
-    child<QLineEdit>(c, "psHost")->setText(QStringLiteral("127.0.0.1"));
-    child<QLineEdit>(c, "psMac")->clear();
-    child<QSpinBox>(c, "psPort")->setValue(server.port());
-    child<QSpinBox>(c, "psTlmPort")->setValue(tlmPort);
-    child<QPushButton>(c, "psConnect")->click();
+    fillConnection(ui, QStringLiteral("127.0.0.1"), server.port());
+    child<QPushButton>(*ui.connection, "psConnect")->click();
     REQUIRE(waitFor([&] { return ui.session->link()->isReady(); }));
 }
 
@@ -139,6 +160,16 @@ int countRows(QTableWidget* t, const QString& channel, const QString& dir, const
         }
     }
     return n;
+}
+
+/// Напечатать текст в поле: клик мышью (фокус), затем клавиши, как на клавиатуре.
+void typeInto(QLineEdit* edit, const QString& text)
+{
+    REQUIRE(edit->isEnabled());
+    QTest::mouseClick(edit, Qt::LeftButton);
+    edit->selectAll();
+    QTest::keyClicks(edit, text);
+    CHECK(edit->text() == text);
 }
 
 }  // namespace
@@ -186,14 +217,12 @@ TEST_CASE("Установка параметров: подключение, се
             CHECK(ex->item(row, 6)->text().contains(QStringLiteral("\"ph\":42")));
         }
     }
-    // Та же связь видна и в журнале «Тестового прогона».
+    // Та же связь видна и в журнале «Тестового прогона», а счётчики журнала на «Подключении» растут.
     auto* journal = child<QTableWidget>(*ui.testRun, "testRunJournal");
     CHECK(countRows(journal, QStringLiteral("TCP"), QStringLiteral("ушло"), QStringLiteral("set_phase_atten")) == 1);
-
-    // Техсостояние из телеметрии.
-    REQUIRE(waitFor([&] {
-        return child<QLabel>(*ui.connection, "psTechValues")->text().contains(QStringLiteral("Работа"));
-    }));
+    CHECK(child<StatTile>(*ui.connection, "psTileTcpOut")->value().toInt() >= 3);
+    CHECK(child<StatTile>(*ui.connection, "psTileTcpIn")->value().toInt() >= 3);
+    REQUIRE(waitFor([&] { return child<StatTile>(*ui.connection, "psTileUdpIn")->value().toInt() >= 2; }));
 
     // Серия, которая пишет коды через PS, занимает связь; после серии — снова на связи.
     ui.session->setSeriesActive(true);
@@ -203,10 +232,14 @@ TEST_CASE("Установка параметров: подключение, се
     ui.session->setSeriesActive(false);
     REQUIRE(waitFor([&] { return writeCodes->isEnabled(); }));
 
-    child<QPushButton>(*ui.connection, "psConnect")->click();
+    // «Отключиться» закрывает связь и сбрасывает автоподключение.
+    auto* connect = child<QPushButton>(*ui.connection, "psConnect");
+    CHECK(connect->text() == QStringLiteral("Отключиться"));
+    connect->click();
     CHECK(ui.session->link()->state() == PsLink::State::Disconnected);
     CHECK_FALSE(writeCodes->isEnabled());
     CHECK_FALSE(ui.session->autoConnect());
+    CHECK(connect->text() == QStringLiteral("Подключиться"));
 }
 
 TEST_CASE("Подключение: без адреса и MAC не подключается, неверный MAC отклоняется", "[ps][ui]")
@@ -219,12 +252,243 @@ TEST_CASE("Подключение: без адреса и MAC не подклю�
     child<QLineEdit>(c, "psMac")->clear();
     child<QPushButton>(c, "psConnect")->click();
     CHECK(ui.session->link()->state() == PsLink::State::Disconnected);
-    CHECK_FALSE(ui.session->searching());
+    CHECK_FALSE(ui.session->busy());
 
     child<QLineEdit>(c, "psMac")->setText(QStringLiteral("12:34"));
     child<QPushButton>(c, "psConnect")->click();
-    CHECK_FALSE(ui.session->searching());
+    CHECK_FALSE(ui.session->busy());
     CHECK(child<QLabel>(c, "psMessage")->text().contains(QStringLiteral("MAC")));
+}
+
+TEST_CASE("Подключение: IP, MAC и порты вводятся с клавиатуры на любом этапе подключения", "[ps][ui][input]")
+{
+    app();
+    TestPsServer server;
+    server.setSilent(true);  // принимает соединение, но не отвечает на hello
+    Ui ui;
+    ui.show();
+    QWidget& c = *ui.connection;
+    auto* host = child<QLineEdit>(c, "psHost");
+    auto* mac = child<QLineEdit>(c, "psMac");
+    auto* port = child<QSpinBox>(c, "psPort");
+    auto* tlm = child<QSpinBox>(c, "psTlmPort");
+    PsLink::Timeouts t;
+    t.commandMs = 1500;  // «PS не ответил на hello» не сразу, чтобы успеть проверить
+    ui.session->link()->setTimeouts(t);
+    const std::initializer_list<QWidget*> fields{host, mac, port, tlm};
+
+    // 1. Покой.
+    host->clear();
+    mac->clear();
+    typeInto(host, QStringLiteral("172.16.226.99"));
+    typeInto(mac, QStringLiteral("42:7E:D7:4E:0F:77"));
+    for (QWidget* w : fields) {
+        CHECK(w->isEnabled());
+    }
+
+    // 2. Идёт подключение (PS принял соединение и молчит): поля остаются доступными.
+    REQUIRE(server.listen());
+    fillConnection(ui, QStringLiteral("127.0.0.1"), server.port());
+    child<QPushButton>(c, "psConnect")->click();
+    REQUIRE(waitFor([&] { return ui.session->link()->state() == PsLink::State::Handshaking; }));
+    for (QWidget* w : fields) {
+        CHECK(w->isEnabled());
+    }
+    typeInto(host, QStringLiteral("10.0.0.5"));
+    typeInto(mac, QStringLiteral("AA:BB:CC:DD:EE:FF"));
+    CHECK(child<QPushButton>(c, "psConnect")->text() == QStringLiteral("Отмена"));
+
+    // 3. Попытка закончилась ошибкой: поля доступны, текст не потерян.
+    REQUIRE(waitFor([&] { return !ui.session->busy(); }, 6000));
+    CHECK(child<QLabel>(c, "psLinkState")->text().startsWith(QStringLiteral("нет связи")));
+    CHECK(host->text() == QStringLiteral("10.0.0.5"));
+    for (QWidget* w : fields) {
+        CHECK(w->isEnabled());
+    }
+    typeInto(host, QStringLiteral("192.168.1.20"));
+
+    // 4. Идёт поиск платы по MAC: сразу после запуска поля доступны и принимают ввод.
+    ui.session->macResolver()->setCandidateProvider([] {
+        return QStringList{QStringLiteral("192.0.2.1"), QStringLiteral("192.0.2.2")};
+    });
+    child<QPushButton>(c, "psFindByMac")->click();
+    CHECK(ui.session->searching());
+    for (QWidget* w : fields) {
+        CHECK(w->isEnabled());
+    }
+    typeInto(host, QStringLiteral("172.16.226.77"));
+    REQUIRE(waitFor([&] { return !ui.session->busy(); }, 8000));
+    CHECK(host->text() == QStringLiteral("172.16.226.77"));
+    CHECK(child<QLabel>(c, "psMessage")->text().contains(QStringLiteral("не найдена")));
+
+    // 5. Порты: цифры с клавиатуры.
+    QTest::mouseClick(port, Qt::LeftButton);
+    port->selectAll();
+    QTest::keyClicks(port, QStringLiteral("49650"));
+    CHECK(port->value() == 49650);
+}
+
+TEST_CASE("Подключение: кнопка меняется на «Отмена» и «Отключиться», Enter подключает", "[ps][ui][input]")
+{
+    app();
+    TestPsServer server;
+    server.setSilent(true);
+    Ui ui;
+    ui.show();
+    QWidget& c = *ui.connection;
+    auto* button = child<QPushButton>(c, "psConnect");
+    auto* host = child<QLineEdit>(c, "psHost");
+    PsLink::Timeouts t;
+    t.commandMs = 4000;
+    ui.session->link()->setTimeouts(t);
+
+    CHECK(button->text() == QStringLiteral("Подключиться"));
+    CHECK(button->property("role").toString() == QStringLiteral("primary"));
+
+    // Enter в поле адреса подключает с тем, что введено.
+    REQUIRE(server.listen());
+    fillConnection(ui, QString(), server.port());
+    typeInto(host, QStringLiteral("127.0.0.1"));
+    QTest::keyClick(host, Qt::Key_Return);
+    REQUIRE(waitFor([&] { return ui.session->busy(); }));
+    CHECK(button->text() == QStringLiteral("Отмена"));
+    CHECK(button->property("role").toString() == QStringLiteral("danger"));
+
+    // «Отмена» останавливает попытку, и больше связь сама не пытается.
+    button->click();
+    CHECK_FALSE(ui.session->busy());
+    CHECK(button->text() == QStringLiteral("Подключиться"));
+    CHECK(button->property("role").toString() == QStringLiteral("primary"));
+    CHECK_FALSE(ui.session->autoConnect());
+
+    // Повторный Enter во время попытки перезапускает её, а не копит соединения.
+    QTest::keyClick(host, Qt::Key_Return);
+    REQUIRE(waitFor([&] { return ui.session->busy(); }));
+    QTest::keyClick(host, Qt::Key_Return);
+    CHECK(ui.session->busy());
+    button->click();
+    CHECK_FALSE(ui.session->busy());
+
+    // Живой PS: «Отключиться», поля заблокированы, после отключения доступны снова.
+    server.setSilent(false);
+    button->click();
+    REQUIRE(waitFor([&] { return ui.session->link()->isReady(); }));
+    CHECK(button->text() == QStringLiteral("Отключиться"));
+    CHECK_FALSE(host->isEnabled());
+    button->click();
+    CHECK(button->text() == QStringLiteral("Подключиться"));
+    CHECK(host->isEnabled());
+}
+
+TEST_CASE("Подключение: плата сменила IP — находится по MAC и подключение идёт к найденному адресу",
+          "[ps][ui][mac]")
+{
+    app();
+    TestPsServer server;
+    server.setTelemetryPeriodMs(100);
+    REQUIRE(server.listen());
+
+    SECTION("адрес есть в таблице ARP")
+    {
+        Ui ui;
+        ui.session->macResolver()->setArpReader([] { return kBoardInArp; });
+        ui.show();
+        // По старому адресу (::1) плата не отвечает: порт закрыт.
+        fillConnection(ui, QStringLiteral("::1"), server.port(), QStringLiteral("42:7e:d7:4e:0f:77"));
+        child<QPushButton>(*ui.connection, "psConnect")->click();
+        REQUIRE(waitFor([&] { return ui.session->link()->isReady(); }, 5000));
+        CHECK(ui.session->link()->host() == QStringLiteral("127.0.0.1"));
+        CHECK(child<QLineEdit>(*ui.connection, "psHost")->text() == QStringLiteral("127.0.0.1"));
+        CHECK(ui.session->host() == QStringLiteral("127.0.0.1"));
+        CHECK(child<QLabel>(*ui.connection, "psLinkState")->text().startsWith(QStringLiteral("на связи")));
+        // Таймеры новой попытки живы: когда PS замолчал, связь это замечает.
+        PsLink::Timeouts t;
+        t.keepAliveIdleMs = 200;
+        t.commandMs = 300;
+        ui.session->link()->setTimeouts(t);
+        server.setSilent(true);
+        REQUIRE(ui.session->link()->sendCommand(afar::ps::msg::GetState) >= 0);
+        CHECK(waitFor([&] { return !ui.session->link()->isReady(); }, 8000));
+    }
+
+    SECTION("адреса нет в ARP, плата появляется после опроса подсети")
+    {
+        Ui ui;
+        int lookups = 0;
+        ui.session->macResolver()->setArpReader([&lookups] {
+            // Первое чтение — до опроса, пусто; после опроса сеть «видит» плату.
+            return ++lookups >= 2 ? kBoardInArp : QHash<QString, QString>{};
+        });
+        ui.session->macResolver()->setCandidateProvider([] { return QStringList{QStringLiteral("127.0.0.1")}; });
+        ui.show();
+        // Адрес не введён — плата ищется по MAC.
+        fillConnection(ui, QString(), server.port(), QStringLiteral("42:7E:D7:4E:0F:77"));
+        child<QPushButton>(*ui.connection, "psConnect")->click();
+        CHECK(ui.session->searching());
+        REQUIRE(waitFor([&] { return ui.session->link()->isReady(); }, 8000));
+        CHECK(lookups >= 2);
+        CHECK(ui.session->link()->host() == QStringLiteral("127.0.0.1"));
+    }
+
+    SECTION("«Найти по MAC», плата не нашлась — понятное сообщение, повторная попытка возможна")
+    {
+        Ui ui;
+        ui.session->macResolver()->setCandidateProvider([] { return QStringList{QStringLiteral("127.0.0.1")}; });
+        ui.show();
+        fillConnection(ui, QString(), server.port(), QStringLiteral("11:22:33:44:55:66"));
+        child<QPushButton>(*ui.connection, "psFindByMac")->click();
+        REQUIRE(waitFor([&] { return !ui.session->busy(); }, 4000));
+        CHECK(child<QLabel>(*ui.connection, "psMessage")->text().contains(QStringLiteral("не найдена")));
+        CHECK(child<QLabel>(*ui.connection, "psLinkState")->text().startsWith(QStringLiteral("нет связи")));
+        CHECK(child<QPushButton>(*ui.connection, "psFindByMac")->isEnabled());
+        CHECK(child<QLineEdit>(*ui.connection, "psHost")->isEnabled());
+        // Оператор вводит адрес вручную и подключается.
+        child<QLineEdit>(*ui.connection, "psHost")->setText(QStringLiteral("127.0.0.1"));
+        child<QPushButton>(*ui.connection, "psConnect")->click();
+        CHECK(waitFor([&] { return ui.session->link()->isReady(); }, 5000));
+    }
+
+    SECTION("пустое поле MAC — плата по MAC не ищется")
+    {
+        Ui ui;
+        bool searched = false;
+        ui.session->macResolver()->setArpReader([&searched] {
+            searched = true;
+            return kBoardInArp;
+        });
+        ui.show();
+        fillConnection(ui, QStringLiteral("::1"), server.port(), QString());
+        child<QPushButton>(*ui.connection, "psConnect")->click();
+        REQUIRE(waitFor([&] { return !ui.session->busy() && !ui.session->link()->lastError().isEmpty(); }, 4000));
+        waitFor([&] { return false; }, 300);
+        CHECK_FALSE(searched);
+        CHECK_FALSE(ui.session->link()->isReady());
+    }
+}
+
+TEST_CASE("Подключение: «Тех. состояние» без телеметрии, «Одна команда» без вкладки «Журнал»", "[ps][ui]")
+{
+    app();
+    Ui ui;
+    ui.show();
+    auto* tech = child<QGroupBox>(*ui.connection, "techBox");
+    for (QTabWidget* tabs : tech->findChildren<QTabWidget*>()) {
+        for (int i = 0; i < tabs->count(); ++i) {
+            CHECK(tabs->tabText(i) != QStringLiteral("Телеметрия PS"));
+            CHECK(tabs->tabText(i) != QStringLiteral("Телеметрия"));
+        }
+    }
+    auto* command = child<QGroupBox>(*ui.connection, "commandBox");
+    CHECK(command->findChildren<QTabWidget*>().isEmpty());
+    // Журнал открывается только справа — отдельной кнопкой, и он один.
+    int openJournalButtons = 0;
+    for (QPushButton* b : ui.connection->findChildren<QPushButton*>()) {
+        // Кнопки самого модального окна журнала — не в счёт, они внутри него.
+        if (b->window() == ui.connection.get() && b->text().contains(QStringLiteral("журнал"), Qt::CaseInsensitive)) {
+            ++openJournalButtons;
+        }
+    }
+    CHECK(openJournalButtons == 1);
 }
 
 TEST_CASE("Поиск платы по MAC: таблица ARP Windows, macOS и Linux", "[ps][mac]")
@@ -372,22 +636,18 @@ TEST_CASE("Одна команда: история, пакеты «Отправ�
     CHECK(static_cast<QSpinBox*>(codes->cellWidget(2, 1))->value() == 21);
 }
 
-TEST_CASE("Журнал: вкладка «Журнал» открывает модальное окно", "[ps][ui]")
+TEST_CASE("Журнал: кнопка «Открыть журнал…» открывает модальное окно с обменом", "[ps][ui]")
 {
     app();
     TestPsServer server;
     Ui ui;
     ui.show();
     connectUi(ui, server);
-    auto* tabs = child<QTabWidget>(*ui.connection, "connectionCommandTabs");
-    REQUIRE(tabs->count() == 2);
-    CHECK(tabs->tabText(0) == QStringLiteral("Одна команда"));
-    CHECK(tabs->tabText(1) == QStringLiteral("Журнал"));
-    tabs->setCurrentIndex(1);
     PsJournalDialog* journal = ui.connection->journal();
+    CHECK_FALSE(journal->isVisible());
+    child<QPushButton>(*ui.connection, "psOpenJournal")->click();
     REQUIRE(waitFor([&] { return journal->isVisible(); }));
     CHECK(journal->isModal());
-    CHECK(tabs->currentIndex() == 0);
     auto* table = journal->findChild<QTableWidget*>(QStringLiteral("psJournalTable"));
     REQUIRE(table != nullptr);
     CHECK(countRows(table, QStringLiteral("TCP"), QStringLiteral("ушло"), QStringLiteral("hello")) == 1);
@@ -533,4 +793,28 @@ TEST_CASE("Модули — гетеродины, смеситель, видео
     REQUIRE(waitFor([&] {
         return child<QLabel>(tab, "psVideoState")->text().contains(QStringLiteral("HW_NOT_READY"));
     }));
+}
+
+TEST_CASE("Единый вид: у каждой кнопки действия на новых вкладках задана роль", "[ps][ui][style]")
+{
+    app();
+    Ui ui;
+    ui.show();
+    ui.check->show();
+    const std::vector<std::pair<QString, QWidget*>> pages{
+        {QStringLiteral("Подключение"), ui.connection.get()},
+        {QStringLiteral("Установка параметров"), ui.parameters.get()},
+        {QStringLiteral("Тестовый прогон"), ui.testRun.get()},
+        {QStringLiteral("Приёмка PS"), ui.check.get()},
+    };
+    const QStringList roles{QStringLiteral("primary"), QStringLiteral("secondary"), QStringLiteral("success"),
+                            QStringLiteral("danger")};
+    for (const auto& [name, page] : pages) {
+        const auto buttons = page->findChildren<QPushButton*>();
+        CHECK_FALSE(buttons.isEmpty());
+        for (QPushButton* b : buttons) {
+            INFO(name.toStdString() << ": кнопка «" << b->text().toStdString() << "»");
+            CHECK(roles.contains(b->property("role").toString()));
+        }
+    }
 }

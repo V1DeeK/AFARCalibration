@@ -6,27 +6,29 @@ class FullScanPanel;
 class PsJournalDialog;
 class PsPacketPage;
 class PsSession;
-class QGridLayout;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
 class QSpinBox;
-class QTabWidget;
+class StatTile;
 
 /// Вкладка «Подключение» по эскизу: слева сверху — подключение к плате (как
-/// окошко «Подключение к PS» РМО: IP, MAC, порты TCP и UDP, статус, кнопки),
-/// рядом — техсостояние мозаикой; справа сверху — журнал обмена мозаикой;
-/// снизу слева — «Одна команда | Журнал» из «Теста обмена» РМО, снизу справа —
-/// полное сканирование. Плата ищется по MAC, если её адрес сменился.
+/// окошко «Подключение к PS» РМО: IP, MAC, порты TCP/UDP, статус, кнопки) и
+/// «Тех. состояние» с параметрами платы; слева снизу — «Одна команда» из «Теста
+/// обмена» РМО. Справа — журнал обмена (мозаика счётчиков, последние пакеты,
+/// кнопка модального «Журнала») и полное сканирование.
+///
+/// IP, MAC и порты можно править всегда, пока нет связи, — и во время попыток
+/// подключения, и во время поиска платы по MAC.
 class ConnectionTab final : public QWidget {
     Q_OBJECT
 
 public:
     explicit ConnectionTab(PsSession* session, QWidget* parent = nullptr);
 
-    /// Дополнительная страница в «Тех. состоянии» (параметры платы libiio).
-    void addTechPage(QWidget* page, const QString& title);
+    /// Содержимое окошка «Тех. состояние» (параметры платы).
+    void setTechPage(QWidget* page);
     [[nodiscard]] PsPacketPage* packetPage() const { return m_packetPage; }
     [[nodiscard]] FullScanPanel* fullScan() const { return m_fullScan; }
     /// Открыть модальное окно «Журнал».
@@ -35,19 +37,15 @@ public:
     /// MAC из поля окна «Подключение» (его же читают «Параметры платы»).
     [[nodiscard]] QString macText() const;
 
-signals:
-    /// Короткий итог для строки состояния главного окна.
-    void summaryChanged(const QString& text, bool ok);
-
 private:
     QWidget* buildConnectionBox();
     QWidget* buildTechBox();
     QWidget* buildJournalBox();
     QWidget* buildCommandBox();
 
-    void onConnectClicked();
+    void connectNow();
+    void onMainButton();
     void refreshConnection();
-    void refreshTech();
     void refreshCounters();
 
     PsSession* m_session;
@@ -60,22 +58,18 @@ private:
     QLabel* m_linkState = nullptr;
     QLabel* m_message = nullptr;
 
-    QTabWidget* m_techTabs = nullptr;
-    QLabel* m_techMode = nullptr;
-    QGridLayout* m_techTiles = nullptr;
-    QLabel* m_techValues = nullptr;
+    QWidget* m_techBody = nullptr;
 
-    QLabel* m_tcpOut = nullptr;
-    QLabel* m_tcpIn = nullptr;
-    QLabel* m_udpIn = nullptr;
-    QLabel* m_udpLost = nullptr;
-    QLabel* m_errors = nullptr;
+    StatTile* m_tcpOut = nullptr;
+    StatTile* m_tcpIn = nullptr;
+    StatTile* m_udpIn = nullptr;
+    StatTile* m_udpLost = nullptr;
+    StatTile* m_errors = nullptr;
     QPlainTextEdit* m_recent = nullptr;
     int m_tcpOutCount = 0;
     int m_tcpInCount = 0;
     int m_errorCount = 0;
 
-    QTabWidget* m_commandTabs = nullptr;
     PsPacketPage* m_packetPage = nullptr;
     FullScanPanel* m_fullScan = nullptr;
     PsJournalDialog* m_journal = nullptr;

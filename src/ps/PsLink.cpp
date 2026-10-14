@@ -53,10 +53,13 @@ void PsLink::connectToPs(const QString& host, quint16 port, quint16 telemetryPor
         m_udp.close();
     }
     m_requestedTelemetryPort = telemetryPort;
-    m_wanted = true;
-    m_lastError.clear();
     m_reconnect.stop();
+    // Закрытие прежнего соединения — наше решение, а не обрыв: ошибки и автопереподключения не нужны.
+    m_wanted = false;
     m_socket.abort();
+    m_wanted = true;
+    m_reachedReady = false;
+    m_lastError.clear();
     startConnect();
 }
 
@@ -144,13 +147,16 @@ void PsLink::dropLink(const QString& reason)
     m_pending.clear();
     m_socket.abort();
     m_splitter.clear();
-    emit errorOccurred(reason);
-    setState(State::Disconnected);
-    if (m_wanted && m_autoReconnect) {
+    // Таймеры настраиваем до сигналов: подписчик в ответ на разрыв может сразу начать
+    // новое подключение (поиск платы по MAC находит адрес в таблице ARP мгновенно),
+    // и мы не должны остановить таймеры этой новой попытки.
+    if (m_wanted && m_autoReconnect && m_reachedReady) {
         m_reconnect.start(m_timeouts.reconnectMs);
     } else {
         m_tick.stop();
     }
+    emit errorOccurred(reason);
+    setState(State::Disconnected);
 }
 
 void PsLink::writeEnvelope(const ps::Envelope& env)
@@ -255,6 +261,7 @@ void PsLink::handleResponse(const ps::Envelope& env)
             dropLink(QStringLiteral("несовместимая версия протокола PS: %1").arg(m_peerVersion));
             return;
         }
+        m_reachedReady = true;
         setState(State::Ready);
     }
     if (env.msg_type == ps::msg::KeepAlive) {

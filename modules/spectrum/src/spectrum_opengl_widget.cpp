@@ -76,15 +76,19 @@ void submitModifiers(ImGuiIO& io, Qt::KeyboardModifiers modifiers) {
 
 } // namespace
 
+QSurfaceFormat SpectrumOpenGLWidget::surfaceFormat() {
+    QSurfaceFormat format;
+    format.setRenderableType(QSurfaceFormat::OpenGL);
+    format.setVersion(3, 3);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    format.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+    format.setSwapInterval(1);
+    return format;
+}
+
 SpectrumOpenGLWidget::SpectrumOpenGLWidget(AppState& state, QWidget* parent)
     : QOpenGLWidget(parent), state_(state), renderer_(state) {
-    QSurfaceFormat surfaceFormat;
-    surfaceFormat.setRenderableType(QSurfaceFormat::OpenGL);
-    surfaceFormat.setVersion(3, 3);
-    surfaceFormat.setProfile(QSurfaceFormat::CoreProfile);
-    surfaceFormat.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
-    surfaceFormat.setSwapInterval(1);
-    setFormat(surfaceFormat);
+    setFormat(surfaceFormat());
 
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
