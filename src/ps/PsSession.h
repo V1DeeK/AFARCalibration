@@ -42,6 +42,11 @@ public:
     [[nodiscard]] quint16 port() const;
     [[nodiscard]] quint16 telemetryPort() const;
     [[nodiscard]] QString mac() const;
+    /// Через сколько мс простоя канала уходит keep_alive (по умолчанию 5000).
+    [[nodiscard]] int keepAliveMs() const;
+    static constexpr int kKeepAliveMinMs = 200;
+    static constexpr int kKeepAliveMaxMs = 60000;
+    static constexpr int kKeepAliveDefaultMs = 5000;
     /// Оператор подключался и не нажимал «Отключиться» — подключаться при запуске.
     [[nodiscard]] bool autoConnect() const;
 
@@ -51,6 +56,8 @@ public:
     /// Найти плату по MAC и подключиться к найденному адресу.
     bool findByMac(const QString& mac, quint16 port, quint16 telemetryPort);
     void disconnectFromPs();
+    /// Период keep_alive; запоминается и сразу применяется к связи.
+    void setKeepAliveMs(int ms);
     /// При запуске программы: подключиться, если оператор не отключался.
     void connectFromSettings();
 

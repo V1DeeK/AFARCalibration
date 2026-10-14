@@ -30,6 +30,11 @@ PsSession::PsSession(QObject* parent)
     , m_resolver(new MacResolver(this))
 {
     qRegisterMetaType<PsSession::LogLine>();
+    {
+        PsLink::Timeouts t = m_link->timeouts();
+        t.keepAliveIdleMs = keepAliveMs();
+        m_link->setTimeouts(t);
+    }
     connect(m_link, &PsLink::stateChanged, this, &PsSession::onLinkState);
     connect(m_link, &PsLink::responseReceived, this, &PsSession::onResponse);
     connect(m_link, &PsLink::eventReceived, this, &PsSession::onEvent);
@@ -104,6 +109,21 @@ QString PsSession::mac() const
         return MacResolver::formatMac(legacy);
     }
     return QString::fromLatin1(kDefaultMac);
+}
+
+int PsSession::keepAliveMs() const
+{
+    const int ms = QSettings().value(kGroup + QStringLiteral("keepalive_ms"), kKeepAliveDefaultMs).toInt();
+    return qBound(kKeepAliveMinMs, ms, kKeepAliveMaxMs);
+}
+
+void PsSession::setKeepAliveMs(int ms)
+{
+    ms = qBound(kKeepAliveMinMs, ms, kKeepAliveMaxMs);
+    QSettings().setValue(kGroup + QStringLiteral("keepalive_ms"), ms);
+    PsLink::Timeouts t = m_link->timeouts();
+    t.keepAliveIdleMs = ms;
+    m_link->setTimeouts(t);
 }
 
 bool PsSession::autoConnect() const

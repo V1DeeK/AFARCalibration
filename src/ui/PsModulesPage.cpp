@@ -197,7 +197,7 @@ QWidget* PsModulesPage::buildModule(Module m, const std::vector<ps::ModuleField>
     grid->setVerticalSpacing(ui::kInnerGap);
     auto& mod = m_ui[m];
     // Широкое окошко: поля идут двумя колонками, каждая — «Передать | Поле | Значение | Прочитано».
-    const int columns = fields.size() > 6 ? 2 : 1;
+    const int columns = 1;
     const int perColumn = (static_cast<int>(fields.size()) + columns - 1) / columns;
     constexpr int kColumnWidth = 5;  // send, поле, значение, прочитано, зазор
     for (int c = 0; c < columns; ++c) {

@@ -40,14 +40,15 @@ ConnectionTab::ConnectionTab(PsSession* session, QWidget* parent)
     root->addWidget(buildConnectionBox(), 0, 0);
     root->addWidget(buildTechBox(), 0, 1);
     root->addWidget(buildCommandBox(), 1, 0, 1, 2);
-    // Справа: журнал обмена и полное сканирование.
-    root->addWidget(buildJournalBox(), 0, 2);
+    // Справа: полное сканирование (сверху) и журнал обмена (во всю остальную высоту).
     auto* scanBox = new QGroupBox(QStringLiteral("Полное сканирование"), this);
+    scanBox->setObjectName(QStringLiteral("scanBox"));
     auto* scanLayout = new QVBoxLayout(scanBox);
     scanLayout->setContentsMargins(0, 0, 0, 0);
     m_fullScan = new FullScanPanel(m_session, scanBox);
     scanLayout->addWidget(m_fullScan);
-    root->addWidget(scanBox, 1, 2);
+    root->addWidget(scanBox, 0, 2);
+    root->addWidget(buildJournalBox(), 1, 2);
 
     root->setColumnStretch(0, 3);
     root->setColumnStretch(1, 4);
@@ -252,10 +253,42 @@ QWidget* ConnectionTab::buildJournalBox()
 
 QWidget* ConnectionTab::buildCommandBox()
 {
-    auto* box = new QGroupBox(QStringLiteral("Одна команда"), this);
+    auto* box = new QGroupBox(QStringLiteral("Обмен сообщениями с PS"), this);
     box->setObjectName(QStringLiteral("commandBox"));
     auto* layout = new QVBoxLayout(box);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(ui::kInnerGap);
+
+    // keep_alive: как часто проверяем связь, пока по каналу ничего не идёт.
+    auto* keepRow = new QHBoxLayout;
+    keepRow->setSpacing(ui::kInnerGap);
+    m_keepAlive = new QSpinBox(box);
+    m_keepAlive->setObjectName(QStringLiteral("psKeepAlive"));
+    m_keepAlive->setRange(PsSession::kKeepAliveMinMs, PsSession::kKeepAliveMaxMs);
+    m_keepAlive->setSingleStep(100);
+    m_keepAlive->setSuffix(QStringLiteral(" мс"));
+    m_keepAlive->setValue(m_session->keepAliveMs());
+    m_keepAlive->setFixedWidth(110);
+    m_keepAlive->setToolTip(QStringLiteral("Если по каналу TCP ничего не идёт, PS проверяется командой keep_alive "
+                                           "с этим интервалом. Не ответил — связь считается потерянной."));
+    m_keepAliveHint = ui::hintLabel(QString(), box);
+    m_keepAliveHint->setObjectName(QStringLiteral("psKeepAliveHint"));
+    keepRow->addWidget(new QLabel(QStringLiteral("keep_alive при простое канала каждые"), box));
+    keepRow->addWidget(m_keepAlive);
+    keepRow->addWidget(m_keepAliveHint, 1);
+    layout->addLayout(keepRow);
+    const auto refreshKeepHint = [this] {
+        const double perSecond = 1000.0 / m_keepAlive->value();
+        m_keepAliveHint->setText(QStringLiteral("≈ %1 раз в секунду, нет ответа — разрыв через %2 с")
+                                     .arg(perSecond, 0, 'f', perSecond < 1.0 ? 2 : 1)
+                                     .arg((m_keepAlive->value() + 3000) / 1000.0, 0, 'f', 1));
+    };
+    refreshKeepHint();
+    connect(m_keepAlive, &QSpinBox::valueChanged, this, [this, refreshKeepHint](int ms) {
+        m_session->setKeepAliveMs(ms);
+        refreshKeepHint();
+    });
+
     m_packetPage = new PsPacketPage(m_session, box);
     layout->addWidget(m_packetPage);
     connect(m_session, &PsSession::controlsChanged, this,

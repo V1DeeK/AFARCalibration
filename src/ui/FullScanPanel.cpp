@@ -137,7 +137,7 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
     m_results->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_results->setAlternatingRowColors(true);
     m_results->setShowGrid(false);
-    m_results->setMinimumHeight(140);
+    m_results->setMinimumHeight(90);
     layout->addWidget(m_results, 1);
 
     connect(m_apply, &QPushButton::clicked, this, [this] { inScanMode([this] { apply(); }); });

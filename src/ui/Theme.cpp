@@ -141,6 +141,7 @@ QTabBar#mainTabBar::tab { padding: 8px 18px; margin: 6px 3px 6px 0px; border: 1p
 QTabBar#mainTabBar::tab:selected { background: @accent@; color: #ffffff; font-weight: 600; border-color: @accent@; }
 QTabBar#mainTabBar::tab:hover:!selected { background: @hoverFill@; color: @text@; }
 QTabWidget#mainTabs::pane { border: none; background: transparent; border-radius: 0px; top: 0px; }
+QTabWidget#mainTabs::tab-bar { left: 12px; }
 
 /* ---------- поля ввода ---------- */
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit {

@@ -70,6 +70,8 @@ private:
     int m_tcpInCount = 0;
     int m_errorCount = 0;
 
+    QSpinBox* m_keepAlive = nullptr;
+    QLabel* m_keepAliveHint = nullptr;
     PsPacketPage* m_packetPage = nullptr;
     FullScanPanel* m_fullScan = nullptr;
     PsJournalDialog* m_journal = nullptr;

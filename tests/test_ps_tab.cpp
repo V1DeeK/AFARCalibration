@@ -818,3 +818,42 @@ TEST_CASE("Единый вид: у каждой кнопки действия н
         }
     }
 }
+
+TEST_CASE("Подключение: период keep_alive задаётся в «Обмене сообщениями с PS» и применяется к связи", "[ps][ui][keepalive]")
+{
+    app();
+    Ui ui;
+    ui.show();
+    auto* box = child<QGroupBox>(*ui.connection, "commandBox");
+    CHECK(box->title() == QStringLiteral("Обмен сообщениями с PS"));
+    auto* spin = child<QSpinBox>(*ui.connection, "psKeepAlive");
+    CHECK(spin->value() == 5000);
+    CHECK(ui.session->link()->timeouts().keepAliveIdleMs == 5000);
+
+    QTest::mouseClick(spin, Qt::LeftButton);
+    spin->selectAll();
+    QTest::keyClicks(spin, QStringLiteral("1500"));
+    QTest::keyClick(spin, Qt::Key_Tab);
+    CHECK(spin->value() == 1500);
+    CHECK(ui.session->link()->timeouts().keepAliveIdleMs == 1500);
+    CHECK(ui.session->keepAliveMs() == 1500);
+    CHECK(child<QLabel>(*ui.connection, "psKeepAliveHint")->text().contains(QStringLiteral("раз в секунду")));
+    // Значение запоминается: новая сессия стартует с ним.
+    PsSession again;
+    CHECK(again.link()->timeouts().keepAliveIdleMs == 1500);
+    // Предел снизу и сверху.
+    ui.session->setKeepAliveMs(5);
+    CHECK(ui.session->keepAliveMs() == PsSession::kKeepAliveMinMs);
+
+    // keep_alive действительно уходит с этим интервалом.
+    TestPsServer server;
+    server.setTelemetryPeriodMs(0);
+    ui.session->setKeepAliveMs(300);
+    REQUIRE(server.listen());
+    fillConnection(ui, QStringLiteral("127.0.0.1"), server.port());
+    child<QPushButton>(*ui.connection, "psConnect")->click();
+    REQUIRE(waitFor([&] { return ui.session->link()->isReady(); }));
+    const int before = server.commandsReceived();
+    waitFor([&] { return false; }, 1500);
+    CHECK(server.commandsReceived() - before >= 3);
+}

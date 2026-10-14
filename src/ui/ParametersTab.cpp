@@ -70,8 +70,12 @@ ParametersTab::ParametersTab(PsSession* session, QWidget* parent)
     m_modulesPage = new PsModulesPage(m_session->link(), modulesBox);
     m_modulesPage->tabs()->addTab(buildCodesPage(), QStringLiteral("Коды решётки"));
     modulesLayout->addWidget(m_modulesPage);
-    root->addWidget(modulesBox, 3);
-    root->addWidget(buildBottomTabs(), 2);
+    // «Модули» вдвое уже, справа от них — обмен с PS и телеметрия; оба тянутся до низа окна.
+    auto* lower = new QHBoxLayout;
+    lower->setSpacing(ui::kGap);
+    lower->addWidget(modulesBox, 1);
+    lower->addWidget(buildBottomTabs(), 1);
+    root->addLayout(lower, 1);
 
     connect(m_session->link(), &PsLink::responseReceived, this, &ParametersTab::onResponse);
     connect(m_session, &PsSession::telemetryChanged, this, &ParametersTab::onTelemetry);
@@ -87,7 +91,7 @@ QWidget* ParametersTab::buildBottomTabs()
 {
     auto* tabs = new QTabWidget(this);
     tabs->setObjectName(QStringLiteral("parametersBottomTabs"));
-    tabs->setMinimumHeight(220);
+    tabs->setMinimumHeight(360);
     auto* exchangePage = new QWidget(tabs);
     auto* exchangeLayout = new QVBoxLayout(exchangePage);
     exchangeLayout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
