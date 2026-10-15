@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iomanip>
+#include <cerrno>
 #include <memory>
 #include <sstream>
 #include <thread>
@@ -324,9 +325,15 @@ BoardParametersResult read_board_parameters(const std::string& ip) {
 
     const std::string uri = "ip:" + ip;
     using ContextPtr = std::unique_ptr<iio_context, decltype(&iio_context_destroy)>;
+    errno = 0;
     ContextPtr context(iio_create_context_from_uri(uri.c_str()), &iio_context_destroy);
     if (!context) {
-        result.status = "libiio не подключился к " + uri + " (служба iiod, порт 30431, на этом адресе не отвечает)";
+        // Причина от libiio/ОС: отказ в соединении означает, что на порту 30431 службы iiod нет, таймаут — адрес недоступен.
+        const int reason = errno != 0 ? errno : 0;
+        result.status = "libiio не подключился к " + uri + " (служба iiod, порт 30431)";
+        if (reason != 0) {
+            result.status += ": " + std::string(std::strerror(reason > 0 ? reason : -reason));
+        }
         return result;
     }
 
