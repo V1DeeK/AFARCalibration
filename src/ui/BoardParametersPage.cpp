@@ -128,6 +128,16 @@ void BoardParametersPage::poll()
                                                       : QStringLiteral("Параметры платы получены"),
                                    2, 2);
             m_busy = false;
+            // Службу libiio нашли — спектр подключается к ней же.
+            if (!parameters.empty() && !ip.empty()) {
+                {
+                    std::lock_guard<std::mutex> lock(state.connection_mutex);
+                    state.pluto_ip = "ip:" + ip;
+                }
+                if (!state.is_connected.load()) {
+                    state.connect_requested.store(true);
+                }
+            }
         }
     }
 }

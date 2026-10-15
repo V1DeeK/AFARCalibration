@@ -326,7 +326,7 @@ BoardParametersResult read_board_parameters(const std::string& ip) {
     using ContextPtr = std::unique_ptr<iio_context, decltype(&iio_context_destroy)>;
     ContextPtr context(iio_create_context_from_uri(uri.c_str()), &iio_context_destroy);
     if (!context) {
-        result.status = "плата найдена, но libiio не подключился к " + uri;
+        result.status = "libiio не подключился к " + uri + " (служба iiod, порт 30431, на этом адресе не отвечает)";
         return result;
     }
 
@@ -456,6 +456,22 @@ void BoardFinderThread::run() {
             }
             parameters = read_board_parameters(res.ip);
             res.status = parameters.status;
+            // Адрес PS не обязан быть адресом libiio: пробуем плату по MAC — там, где служба libiio отвечает.
+            if (!parameters.ok && !knownIp.empty() && !mac.empty()) {
+                const std::string psAddress = res.ip;
+                const BoardFindResult alt = find_board_by_mac(mac);
+                if (alt.found && alt.ip != psAddress) {
+                    BoardParametersResult second = read_board_parameters(alt.ip);
+                    if (second.ok) {
+                        parameters = std::move(second);
+                        res = alt;
+                        res.status = "libiio не отвечает на адресе PS " + psAddress +
+                                     "; плата с MAC " + mac + " найдена по адресу " + alt.ip + ". " + parameters.status;
+                    }
+                } else if (!alt.found) {
+                    res.status += "; плата с MAC " + mac + " по другому адресу не найдена";
+                }
+            }
         }
 
         {

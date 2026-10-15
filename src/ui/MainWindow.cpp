@@ -109,26 +109,17 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     }
 
     m_psSession = new PsSession(this);
-    // Спектр подключается к плате сам: как только на связи PS, — по тому же адресу; разрыв PS закрывает и его.
-    AppState* spectrumState = &spectrumEngine.state();
-    connect(m_psSession->link(), &PsLink::stateChanged, this, [this, spectrumState] {
-        PsLink* link = m_psSession->link();
-        if (link->isReady()) {
-            const std::string uri = "ip:" + link->host().toStdString();
-            {
-                std::lock_guard<std::mutex> lock(spectrumState->connection_mutex);
-                spectrumState->pluto_ip = uri;
-            }
-            spectrumState->connect_requested.store(true);
-            // Параметры платы показываем сразу после подключения, без нажатия кнопки.
-            QTimer::singleShot(500, this, [this] {
-                if (m_boardPage != nullptr && !m_boardPage->busy() && m_psSession->link()->isReady()) {
-                    m_boardPage->requestRead();
-                }
-            });
-        } else if (spectrumState->is_connected.load()) {
-            spectrumState->disconnect_requested.store(true);
+    // Параметры платы запрашиваем сразу после подключения PS; спектр подключится к службе libiio сам,
+    // когда она ответит (см. BoardParametersPage).
+    connect(m_psSession->link(), &PsLink::stateChanged, this, [this] {
+        if (!m_psSession->link()->isReady()) {
+            return;
         }
+        QTimer::singleShot(500, this, [this] {
+            if (m_boardPage != nullptr && !m_boardPage->busy() && m_psSession->link()->isReady()) {
+                m_boardPage->requestRead();
+            }
+        });
     });
 
     m_tabs = new QTabWidget(this);
