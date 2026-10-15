@@ -297,6 +297,9 @@ TEST_CASE("Главное окно: IP платы вводится с клави
     CHECK(status->text().startsWith(QStringLiteral("на связи")));
     CHECK(child<QPushButton>(*w.window, "psConnect")->text() == QStringLiteral("Отключиться"));
     CHECK(child<QWidget>(*w.window, "psTileTcpOut") != nullptr);
+    // После подключения параметры платы запрашиваются сами, без нажатия «Получить параметры».
+    auto* boardStatus = child<QLabel>(*w.window, "boardParametersStatus");
+    CHECK(waitFor([&] { return boardStatus->text() != QStringLiteral("Готово к чтению"); }, 3000));
     CHECK(w.window->statusBar() != nullptr);
     // Строка состояния внизу окна обновляется по таймеру.
     auto* moduleStatus = w.window->findChild<QLabel*>(QStringLiteral("moduleStatusText"));

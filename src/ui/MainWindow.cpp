@@ -120,6 +120,12 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
                 spectrumState->pluto_ip = uri;
             }
             spectrumState->connect_requested.store(true);
+            // Параметры платы показываем сразу после подключения, без нажатия кнопки.
+            QTimer::singleShot(500, this, [this] {
+                if (m_boardPage != nullptr && !m_boardPage->busy() && m_psSession->link()->isReady()) {
+                    m_boardPage->requestRead();
+                }
+            });
         } else if (spectrumState->is_connected.load()) {
             spectrumState->disconnect_requested.store(true);
         }
