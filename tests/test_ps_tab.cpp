@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "ConnectionTab.h"
+#include "BoardParametersPage.h"
 #include "FullScanPanel.h"
 #include "MacResolver.h"
 #include "ParametersTab.h"
@@ -856,6 +857,34 @@ TEST_CASE("UDP: телеметрия реальной PS без режима с�
     auto* tile = ui.connection->findChild<StatTile*>(QStringLiteral("psTileUdpIn"));
     REQUIRE(tile != nullptr);
     CHECK(waitFor([&] { return tile->value() != QStringLiteral("0"); }));
+}
+
+TEST_CASE("Параметры платы по PS: вне сервисного режима и в нём", "[ps][ui][board]")
+{
+    app();
+    TestPsServer server;
+    Ui ui;
+    ui.show();
+    connectUi(ui, server);
+    BoardParametersPage page(ui.session.get());
+    auto* output = page.findChild<QPlainTextEdit*>(QStringLiteral("boardParametersOutput"));
+    REQUIRE(output != nullptr);
+
+    page.requestRead();
+    REQUIRE(waitFor([&] { return !page.busy(); }, 4000));
+    CHECK(output->toPlainText().contains(QStringLiteral("Связь: 127.0.0.1")));
+    CHECK(output->toPlainText().contains(QStringLiteral("только в сервисном режиме")));
+    CHECK_FALSE(output->toPlainText().contains(QStringLiteral("\nАЦП\n")));
+
+    child<QPushButton>(*ui.parameters, "psToService")->click();
+    REQUIRE(waitFor([&] { return ui.session->mode() == afar::ps::Mode::Service; }));
+    page.requestRead();
+    REQUIRE(waitFor([&] { return !page.busy(); }, 4000));
+    const QString text = output->toPlainText();
+    CHECK(text.contains(QStringLiteral("\nАЦП\n")));
+    CHECK(text.contains(QStringLiteral("Луч")));
+    CHECK(text.contains(QStringLiteral("Видеоприёмник")));
+    CHECK_FALSE(text.contains(QStringLiteral("только в сервисном режиме")));
 }
 
 TEST_CASE("Модули — гетеродины, смеситель, видеоприёмник по JSON", "[ps][ui][modules]")

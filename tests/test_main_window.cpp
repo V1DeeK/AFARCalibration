@@ -247,19 +247,9 @@ TEST_CASE("Главное окно: «Тех. состояние» — толь�
     auto* command = child<QGroupBox>(*w.window, "commandBox");
     CHECK(command->findChildren<QTabWidget*>().isEmpty());
 
-    // «Получить параметры» запускает поиск платы по MAC из окошка «Подключение».
-    auto* mac = child<QLineEdit>(*w.window, "psMac");
-    mac->setText(QStringLiteral("42:7e:d7:4e:0f:77"));
+    // Без связи с PS «Получить параметры» ничего не шлёт и говорит об этом.
     child<QPushButton>(*w.window, "readBoardParameters")->click();
-    auto& state = w.engine->state();
-    CHECK(state.board_find_requested.load());
-    CHECK(state.board_read_parameters_requested.load());
-    {
-        std::lock_guard<std::mutex> lock(state.board_mutex);
-        CHECK(state.board_mac == "42:7E:D7:4E:0F:77");
-    }
-    state.board_find_requested.store(false);
-    state.board_read_parameters_requested.store(false);
+    CHECK(child<QLabel>(*w.window, "boardParametersStatus")->text().contains(QStringLiteral("Нет связи")));
 }
 
 TEST_CASE("Главное окно: IP платы вводится с клавиатуры, подключение, ответы и журнал на разных вкладках",
@@ -299,7 +289,12 @@ TEST_CASE("Главное окно: IP платы вводится с клави
     CHECK(child<QWidget>(*w.window, "psTileTcpOut") != nullptr);
     // После подключения параметры платы запрашиваются сами, без нажатия «Получить параметры».
     auto* boardStatus = child<QLabel>(*w.window, "boardParametersStatus");
-    CHECK(waitFor([&] { return boardStatus->text() != QStringLiteral("Готово к чтению"); }, 3000));
+    CHECK(waitFor([&] { return boardStatus->text() == QStringLiteral("Параметры платы получены"); }, 4000));
+    auto* boardMain = child<QPlainTextEdit>(*w.window, "boardParametersOutput");
+    CHECK(boardMain->toPlainText().contains(QStringLiteral("Связь: 127.0.0.1")));
+    CHECK(boardMain->toPlainText().contains(QStringLiteral("Режим:")));
+    auto* boardDetails = child<QPlainTextEdit>(*w.window, "boardParametersDetails");
+    CHECK(boardDetails->toPlainText().contains(QStringLiteral("Состояние изделия")));
     CHECK(w.window->statusBar() != nullptr);
     // Строка состояния внизу окна обновляется по таймеру.
     auto* moduleStatus = w.window->findChild<QLabel*>(QStringLiteral("moduleStatusText"));
