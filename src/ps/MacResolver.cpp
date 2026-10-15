@@ -121,6 +121,17 @@ QHash<QString, QString> MacResolver::readSystemArpTable()
     return table;
 }
 
+QString MacResolver::macForIp(const QString& ip) const
+{
+    const QHash<QString, QString> table = readArpTable();
+    for (auto it = table.cbegin(); it != table.cend(); ++it) {
+        if (it.value() == ip) {
+            return formatMac(it.key());
+        }
+    }
+    return {};
+}
+
 void MacResolver::resolve(const QString& mac, quint16 probePort)
 {
     cancel();
@@ -201,6 +212,7 @@ void MacResolver::startSweep()
 {
     m_candidates = buildCandidates();
     m_nextCandidate = 0;
+    m_openHosts.clear();
     if (m_candidates.isEmpty()) {
         m_busy = false;
         emit failed(QStringLiteral("Не найдено локальных подсетей для поиска. "
@@ -223,7 +235,10 @@ void MacResolver::launchNextProbes()
         timeout->setSingleShot(true);
         timeout->setInterval(kProbeTimeoutMs);
         // Любой ответ узла (принял или отказал) наполняет таблицу ARP — этого достаточно.
-        connect(socket, &QTcpSocket::connected, this, [this, socket] { finishProbe(socket); });
+        connect(socket, &QTcpSocket::connected, this, [this, socket, ip] {
+            m_openHosts.append(ip);
+            finishProbe(socket);
+        });
         connect(socket, &QTcpSocket::errorOccurred, this,
                 [this, socket](QAbstractSocket::SocketError) { finishProbe(socket); });
         connect(timeout, &QTimer::timeout, this, [this, socket] { finishProbe(socket); });
@@ -264,9 +279,33 @@ void MacResolver::finishSweep()
     cancel();  // останавливает таймер и оставшиеся сокеты, m_busy = false
     const QString ip = readArpTable().value(mac);
     if (ip.isEmpty()) {
-        emit failed(QStringLiteral("Плата с MAC %1 в локальной сети не найдена. "
-                                   "Проверьте питание, кабель и что компьютер в той же подсети.")
-                        .arg(formatMac(mac)));
+        // Что реально есть в сети: узлы с открытым портом платы и их настоящие MAC.
+        QVector<QPair<QString, QString>> open;
+        QStringList described;
+        const QHash<QString, QString> table = readArpTable();
+        for (const QString& host : std::as_const(m_openHosts)) {
+            QString hostMac;
+            for (auto it = table.cbegin(); it != table.cend(); ++it) {
+                if (it.value() == host) {
+                    hostMac = formatMac(it.key());
+                    break;
+                }
+            }
+            open.append({host, hostMac});
+            described << (hostMac.isEmpty() ? host : QStringLiteral("%1 (MAC %2)").arg(host, hostMac));
+        }
+        QString reason = QStringLiteral("Плата с MAC %1 в локальной сети не найдена. ").arg(formatMac(mac));
+        if (!open.isEmpty()) {
+            reason += QStringLiteral("Но порт %1 принимает подключения у: %2. Скорее всего, MAC платы указан неверно.")
+                          .arg(m_port)
+                          .arg(described.join(QStringLiteral(", ")));
+        } else {
+            reason += QStringLiteral("Ни один узел подсети не принял подключение на порт %1: плата выключена, "
+                                     "не в этой подсети или программе закрыт доступ к локальной сети.")
+                          .arg(m_port);
+        }
+        emit failed(reason);
+        emit portOpenHosts(open);
         return;
     }
     emit progress(QStringLiteral("Плата найдена: %1").arg(ip));

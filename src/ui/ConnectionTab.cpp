@@ -59,6 +59,22 @@ ConnectionTab::ConnectionTab(PsSession* session, QWidget* parent)
             m_host->setText(ip);
         }
     });
+    connect(m_session, &PsSession::boardMacDetected, this, [this](const QString& mac) {
+        if (!m_mac->hasFocus()) {
+            m_mac->setText(mac);
+        }
+        m_message->setText(QStringLiteral("MAC платы определён по таблице ARP и подставлен: %1").arg(mac));
+    });
+    connect(m_session, &PsSession::boardCandidate, this, [this](const QString& ip, const QString& mac) {
+        if (!m_host->hasFocus()) {
+            m_host->setText(ip);
+        }
+        if (!mac.isEmpty() && !m_mac->hasFocus()) {
+            m_mac->setText(mac);
+        }
+        m_message->setText(m_message->text() + QStringLiteral(" Адрес %1%2 подставлен — нажмите «Подключиться».")
+                                                   .arg(ip, mac.isEmpty() ? QString() : QStringLiteral(" и MAC %1").arg(mac)));
+    });
     connect(m_session, &PsSession::message, this, [this](const QString& text) {
         m_message->setText(text);
         ++m_errorCount;

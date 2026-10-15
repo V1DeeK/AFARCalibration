@@ -3,6 +3,7 @@
 #include "MacResolver.h"
 
 #include <QSettings>
+#include <QTimer>
 
 namespace ps = afar::ps;
 using nlohmann::json;
@@ -46,6 +47,12 @@ PsSession::PsSession(QObject* parent)
         emit message(QStringLiteral("Нет ответа PS на %1 №%2").arg(type).arg(count));
     });
 
+    connect(m_resolver, &MacResolver::portOpenHosts, this,
+            [this](const QVector<QPair<QString, QString>>& hosts) {
+                if (hosts.size() == 1) {
+                    emit boardCandidate(hosts.first().first, hosts.first().second);
+                }
+            });
     connect(m_resolver, &MacResolver::progress, this, [this](const QString& text) {
         m_searchText = text;
         emit statusChanged();
@@ -302,6 +309,20 @@ void PsSession::onLinkState(PsLink::State state)
         m_macSearchDone = false;
         m_lastError.clear();
         m_link->sendCommand(ps::msg::GetState);
+        // Адрес платы уже в таблице ARP: берём её настоящий MAC, чтобы поиск по MAC не искал чужой.
+        QTimer::singleShot(300, this, [this] {
+            if (!m_link->isReady()) {
+                return;
+            }
+            const QString real = m_resolver->macForIp(m_link->host());
+            if (real.isEmpty() || MacResolver::normalizeMac(real) == MacResolver::normalizeMac(mac())) {
+                return;
+            }
+            QSettings s;
+            s.setValue(kGroup + QStringLiteral("mac"), real);
+            s.setValue(QStringLiteral("board/mac"), real);
+            emit boardMacDetected(real);
+        });
         break;
     case PsLink::State::Connecting:
     case PsLink::State::Handshaking:

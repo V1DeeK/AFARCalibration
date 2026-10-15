@@ -2,8 +2,10 @@
 
 #include <QHash>
 #include <QObject>
+#include <QPair>
 #include <QSet>
 #include <QStringList>
+#include <QVector>
 
 #include <functional>
 
@@ -35,6 +37,9 @@ public:
     /// Прерывает поиск сразу и без сигналов resolved/failed.
     void cancel();
 
+    /// MAC узла с этим IP по таблице ARP или пусто (в формате AA:BB:CC:DD:EE:FF).
+    [[nodiscard]] QString macForIp(const QString& ip) const;
+
     /// 12 шестнадцатеричных цифр прописными или пусто, если MAC неверный.
     static QString normalizeMac(const QString& mac);
     /// AA:BB:CC:DD:EE:FF; неверный MAC возвращается как есть.
@@ -47,6 +52,9 @@ signals:
     void resolved(const QString& ip, const QString& mac);
     void failed(const QString& reason);
     void progress(const QString& text);
+    /// После неудачного поиска: узлы, у которых открыт опрашиваемый порт (это и есть плата PS),
+    /// как пары «IP, MAC»; MAC пуст, если узла нет в таблице ARP.
+    void portOpenHosts(const QVector<QPair<QString, QString>>& hosts);
 
 private:
     static QHash<QString, QString> readSystemArpTable();
@@ -63,6 +71,7 @@ private:
     quint16 m_port = 0;
     QStringList m_candidates;
     int m_nextCandidate = 0;
+    QStringList m_openHosts;      ///< узлы, принявшие подключение на порт опроса
     QSet<QTcpSocket*> m_probes;  ///< сокеты опроса, ещё не завершившие попытку
     QTimer* m_sweepTimeout = nullptr;
     ArpReader m_arpReader;

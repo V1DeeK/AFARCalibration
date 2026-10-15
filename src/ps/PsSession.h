@@ -116,6 +116,10 @@ signals:
     void sffChanged();
     /// Плата найдена по MAC по новому адресу.
     void hostResolved(const QString& ip);
+    /// MAC платы, с которой установлена связь, определён по таблице ARP и отличался от сохранённого.
+    void boardMacDetected(const QString& mac);
+    /// Поиск по MAC не нашёл плату, но порт PS открыт ровно у одного узла: вероятно, это она.
+    void boardCandidate(const QString& ip, const QString& mac);
 
 private:
     void saveSettings(const QString& host, quint16 port, quint16 telemetryPort, const QString& mac);

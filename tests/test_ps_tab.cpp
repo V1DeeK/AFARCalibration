@@ -450,6 +450,37 @@ TEST_CASE("Подключение: плата сменила IP — находи
         CHECK(waitFor([&] { return ui.session->link()->isReady(); }, 5000));
     }
 
+    SECTION("MAC неверный, но порт открыт у одного узла — подсказка и подстановка адреса")
+    {
+        Ui ui;
+        ui.session->macResolver()->setCandidateProvider([] { return QStringList{QStringLiteral("127.0.0.1")}; });
+        ui.session->macResolver()->setArpReader([] { return kBoardInArp; });
+        ui.show();
+        // Старый MAC в поле не совпадает с настоящим (в ARP у платы 42:7E:D7:4E:0F:77).
+        // ARP-таблица содержит плату, поэтому MAC из ARP не найдёт «чужой» и опрос сети дойдёт до порта.
+        fillConnection(ui, QString(), server.port(), QStringLiteral("11:22:33:44:55:66"));
+        child<QPushButton>(*ui.connection, "psFindByMac")->click();
+        REQUIRE(waitFor([&] { return !ui.session->busy(); }, 4000));
+        const QString text = child<QLabel>(*ui.connection, "psMessage")->text();
+        CHECK(text.contains(QStringLiteral("принимает подключения")));
+        CHECK(text.contains(QStringLiteral("127.0.0.1 (MAC 42:7E:D7:4E:0F:77)")));
+        CHECK(child<QLineEdit>(*ui.connection, "psMac")->text() == QStringLiteral("42:7E:D7:4E:0F:77"));
+    }
+
+    SECTION("после подключения MAC платы берётся из ARP")
+    {
+        Ui ui;
+        ui.session->macResolver()->setArpReader([] { return kBoardInArp; });
+        ui.show();
+        fillConnection(ui, QStringLiteral("127.0.0.1"), server.port(), QStringLiteral("11:22:33:44:55:66"));
+        child<QPushButton>(*ui.connection, "psConnect")->click();
+        REQUIRE(waitFor([&] { return ui.session->link()->isReady(); }, 5000));
+        REQUIRE(waitFor([&] {
+            return child<QLineEdit>(*ui.connection, "psMac")->text() == QStringLiteral("42:7E:D7:4E:0F:77");
+        }, 3000));
+        CHECK(ui.session->mac() == QStringLiteral("42:7E:D7:4E:0F:77"));
+    }
+
     SECTION("пустое поле MAC — плата по MAC не ищется")
     {
         Ui ui;
