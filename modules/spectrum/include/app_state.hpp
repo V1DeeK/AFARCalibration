@@ -58,6 +58,7 @@ struct AppState {
     std::atomic<bool>     is_scanning       { false };
 
     std::atomic<bool>     connect_requested{ false };
+    std::atomic<bool>     connect_in_progress{ false };
     // Разрыв связи по кнопке. Одноразовый флаг: UI ставит, CaptureThread
     // закрывает контекст libiio и сбрасывает обратно.
     std::atomic<bool>     disconnect_requested{ false };

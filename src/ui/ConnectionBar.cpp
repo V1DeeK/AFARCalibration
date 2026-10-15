@@ -13,11 +13,12 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
+#include <QSizePolicy>
 #include <QSpinBox>
 #include <QStandardItem>
 #include <QStandardItemModel>
+#include <QTabBar>
 #include <QTabWidget>
-#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace {
@@ -57,16 +58,50 @@ QString formatScpiErrorLine(const QString& raw)
     return text.isEmpty() ? line : text;
 }
 
+class SharedPanelTabs final : public QTabWidget {
+public:
+    explicit SharedPanelTabs(QWidget* parent)
+        : QTabWidget(parent)
+    {
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+        connect(tabBar(), &QTabBar::tabBarClicked, this, [this](int index) {
+            if (m_expanded && index == m_openIndex) {
+                m_expanded = false;
+                setMaximumHeight(tabBar()->sizeHint().height() + 2);
+            } else {
+                m_openIndex = index;
+                setCurrentIndex(index);
+                m_expanded = true;
+                setMaximumHeight(QWIDGETSIZE_MAX);
+            }
+            updateGeometry();
+        });
+        connect(this, &QTabWidget::currentChanged, this, [this]() { updateGeometry(); });
+    }
+
+    QSize sizeHint() const override
+    {
+        QSize preferred = QTabWidget::sizeHint();
+        const int tabsHeight = tabBar()->sizeHint().height();
+        if (!m_expanded) {
+            preferred.setHeight(tabsHeight + 2);
+        } else if (currentWidget()) {
+            preferred.setHeight(tabsHeight + currentWidget()->sizeHint().height()
+                                + 2 * ui::kInnerGap);
+        }
+        return preferred;
+    }
+
+private:
+    int m_openIndex{0};
+    bool m_expanded{true};
+};
+
 }  // namespace
 
 void ConnectionBar::setMiddleWidget(QWidget* widget)
 {
-    m_cards->insertWidget(1, widget, 8);
-}
-
-void ConnectionBar::setRightWidget(QWidget* widget)
-{
-    m_cards->addWidget(widget, 0);
+    m_panels->addTab(widget, QStringLiteral("Калибровка ВАЦ"));
 }
 
 ConnectionBar::ConnectionBar(QWidget* parent)
@@ -172,7 +207,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     vnaLayout->addWidget(m_probe);
     vnaLayout->addStretch(1);
 
-    // --- Контроллер изделия и состояние: одна карточка справа ---
+    // --- Контроллер изделия и состояние: вторая страница общей области ---
     auto* stateBox = new QWidget(this);
     stateBox->setObjectName(QStringLiteral("stateBox"));
     auto* stateLayout = new QVBoxLayout(stateBox);
@@ -209,19 +244,13 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     stateLayout->addWidget(m_status);
     stateLayout->addStretch(1);
 
-    // Посередине MainWindow ставит карточку «Калибровка ВАЦ» (setMiddleWidget).
-    m_cards = new QHBoxLayout;
-    m_cards->setSpacing(ui::kGap);
-    // Слева две вкладки: подключение к прибору и (после подключения) контроллер и состояние.
-    m_leftTabs = new QTabWidget(this);
-    m_leftTabs->setObjectName(QStringLiteral("vnaTabs"));
-    m_leftTabs->setUsesScrollButtons(false);
-    m_leftTabs->addTab(vnaBox, QStringLiteral("Подключение"));
-    m_leftTabs->addTab(stateBox, QStringLiteral("Контроллер"));
-    m_leftTabs->setTabEnabled(1, false);
-    m_leftTabs->setTabToolTip(1, QStringLiteral("Доступно после подключения к прибору"));
-    m_cards->addWidget(m_leftTabs, 3);
-    root->addLayout(m_cards);
+    // Разделы используют одно общее пространство и меняются только выбором вкладки.
+    m_panels = new SharedPanelTabs(this);
+    m_panels->setObjectName(QStringLiteral("connectionTabs"));
+    m_panels->setUsesScrollButtons(false);
+    m_panels->addTab(vnaBox, QStringLiteral("Подключение"));
+    m_panels->addTab(stateBox, QStringLiteral("Контроллер"));
+    root->addWidget(m_panels);
     disableCombatControllerItem();
 
     m_diagnostic = new QLabel(vnaBox);
@@ -540,11 +569,6 @@ void ConnectionBar::setVnaInfo(const QString& model,
     }
     if (!firmware.isEmpty()) {
         detail += QStringLiteral(" · v%1").arg(firmware);
-    }
-    // Контроллер и состояние доступны только при подключённом приборе.
-    m_leftTabs->setTabEnabled(1, connected);
-    if (!connected && m_leftTabs->currentIndex() == 1) {
-        m_leftTabs->setCurrentIndex(0);
     }
     if (connected) {
         m_vna->setText(QStringLiteral("C2220: %1 @ %2").arg(detail, address));

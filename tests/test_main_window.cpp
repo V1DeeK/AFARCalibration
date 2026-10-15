@@ -224,6 +224,20 @@ TEST_CASE("Главное окно: шесть вкладок в порядке 
     CHECK(w.window->minimumSizeHint().height() <= 580);
 }
 
+TEST_CASE("Измерение S-параметров: управление находится справа в одной области с графиками",
+          "[ui][window][measurement]")
+{
+    app();
+    Window w;
+    w.openTab(2);
+
+    auto* plot = child<QWidget>(*w.window, "graphPlot0");
+    auto* controls = child<QScrollArea>(*w.window, "graphControlsScroll");
+    auto* connections = child<QWidget>(*w.window, "ConnectionBar");
+    CHECK_FALSE(connections->isAncestorOf(controls));
+    CHECK(controls->mapTo(w.window.get(), QPoint()).x() > plot->mapTo(w.window.get(), QPoint()).x());
+}
+
 TEST_CASE("Главное окно: «Тех. состояние» — только параметры платы, «Одна команда» без «Журнала»", "[ui][window]")
 {
     app();
@@ -328,6 +342,35 @@ TEST_CASE("Главное окно: IP платы вводится с клави
     CHECK_FALSE(w.session->link()->isReady());
     CHECK_FALSE(child<QPushButton>(*w.window, "psWriteCodes")->isEnabled());
     CHECK(host->isEnabled());
+}
+
+TEST_CASE("Спектр запрашивает SERVICE и адрес PS после открытия вкладки", "[ui][window][spectrum]")
+{
+    app();
+    TestPsServer server;
+    REQUIRE(server.listen());
+    Window w;
+    w.openTab(0);
+    child<QLineEdit>(*w.window, "psHost")->setText(QStringLiteral("127.0.0.1"));
+    child<QLineEdit>(*w.window, "psMac")->clear();
+    child<QSpinBox>(*w.window, "psPort")->setValue(server.port());
+    child<QSpinBox>(*w.window, "psTlmPort")->setValue(freeTlmPort());
+    child<QPushButton>(*w.window, "psConnect")->click();
+    REQUIRE(waitFor([&] { return w.session->link()->isReady() && w.session->modeKnown(); }));
+    CHECK(server.mode() == afar::ps::Mode::Idle);
+
+    w.openTab(3);
+    REQUIRE(waitFor([&] { return server.mode() == afar::ps::Mode::Service; }));
+    REQUIRE(waitFor([&] { return w.engine->state().connect_requested.load(); }));
+    {
+        std::lock_guard<std::mutex> lock(w.engine->state().connection_mutex);
+        CHECK(w.engine->state().pluto_ip == "ip:127.0.0.1");
+    }
+
+    w.openTab(1);
+    child<QPushButton>(*w.window, "psToIdle")->click();
+    REQUIRE(waitFor([&] { return server.mode() == afar::ps::Mode::Idle; }));
+    CHECK(w.engine->state().disconnect_requested.load());
 }
 
 TEST_CASE("Главное окно: кнопка справа от вкладок переключает светлую и тёмную тему", "[ui][window][theme]")

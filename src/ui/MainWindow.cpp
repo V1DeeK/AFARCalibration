@@ -167,13 +167,13 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_matrix = new CodeMatrixTab(root);
     m_matrix->hide();
 
-    // Карточка посередине верхнего ряда: калибровка ВАЦ и подготовка серии вкладками.
-    auto* calBox = new QGroupBox(QStringLiteral("Калибровка ВАЦ"), root);
+    // Третья страница общей области рядом с подключением и контроллером.
+    auto* calBox = new QWidget(root);
     calBox->setObjectName(QStringLiteral("calibrationBox"));
     auto* calLayout = new QVBoxLayout(calBox);
+    calLayout->setContentsMargins(0, 0, 0, 0);
     calLayout->addWidget(m_measure->calibrationPanel());
     m_connections->setMiddleWidget(calBox);
-    m_connections->setRightWidget(m_measure->sidePanel());
     // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Подключение».
     m_connectionTab->addTechSection(m_connections->scpiPanel());
 
@@ -224,6 +224,12 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_tabs->setCurrentIndex(qBound(0, QSettings().value(tabKey, 0).toInt(), m_tabs->count() - 1));
     connect(m_tabs, &QTabWidget::currentChanged, this,
             [tabKey](int index) { QSettings().setValue(tabKey, index); });
+    m_spectrumConnectTimer = new QTimer(this);
+    m_spectrumConnectTimer->setInterval(3000);
+    connect(m_spectrumConnectTimer, &QTimer::timeout, this, &MainWindow::updateSpectrumFromPs);
+    connect(m_tabs, &QTabWidget::currentChanged, this, &MainWindow::updateSpectrumFromPs);
+    connect(m_psSession, &PsSession::modeChanged, this, &MainWindow::updateSpectrumFromPs);
+    connect(m_psSession->link(), &PsLink::stateChanged, this, &MainWindow::updateSpectrumFromPs);
 
     m_operationText = new QLabel(QStringLiteral("Готово"), this);
     m_operationText->setObjectName(QStringLiteral("operationStatusText"));
@@ -347,6 +353,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     }
     // Автоподключение: оператор подключался и не нажимал «Отключиться».
     m_psSession->connectFromSettings();
+    updateSpectrumFromPs();
     onApplyVnaSettings();
     onApplyControllerSettings();
 
@@ -361,6 +368,64 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     QSettings().setValue(QStringLiteral("ui/window_geometry_v1"), saveGeometry());
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::updateSpectrumFromPs()
+{
+    const bool ready = m_psSession->link()->isReady();
+    const bool spectrumTab = m_tabs->currentIndex() == 3;
+    if (m_spectrumConnectedFromPs
+        && (!ready || (m_psSession->modeKnown()
+                       && m_psSession->mode() != afar::ps::Mode::Service))) {
+        m_spectrumEngine->state().disconnect_requested.store(true);
+        m_spectrumConnectedFromPs = false;
+    }
+    if (!ready || !spectrumTab || m_psSession->seriesActive() || m_psSession->checkRunning()) {
+        m_spectrumConnectTimer->stop();
+        if (!ready || !spectrumTab) {
+            m_spectrumServiceRequested = false;
+        }
+        return;
+    }
+    if (!m_psSession->modeKnown()) {
+        return;
+    }
+    if (m_psSession->mode() == afar::ps::Mode::Idle) {
+        if (!m_spectrumServiceRequested && m_psSession->state() == QStringLiteral("READY")) {
+            m_spectrumServiceRequested = true;
+            if (m_psSession->send(afar::ps::msg::SetMode, {{"mode", "SERVICE"}}) >= 0) {
+                statusBar()->showMessage(QStringLiteral("Спектр: перевод платы в сервисный режим…"));
+            }
+        }
+        return;
+    }
+    if (m_psSession->mode() != afar::ps::Mode::Service) {
+        return;
+    }
+    auto& spectrum = m_spectrumEngine->state();
+    const std::string uri = "ip:" + m_psSession->link()->host().toStdString();
+    {
+        std::lock_guard<std::mutex> lock(spectrum.connection_mutex);
+        if (spectrum.pluto_ip != uri) {
+            spectrum.pluto_ip = uri;
+            if (spectrum.is_connected.load()) {
+                spectrum.connect_requested.store(true);
+            }
+        }
+    }
+    if (!spectrum.is_connected.load() && !spectrum.connect_requested.load()
+        && !spectrum.connect_in_progress.load()) {
+        spectrum.connect_requested.store(true);
+        m_spectrumConnectedFromPs = true;
+        statusBar()->showMessage(QStringLiteral("Спектр: подключение к %1…")
+                                     .arg(m_psSession->link()->host()));
+    }
+    if (!m_spectrumConnectTimer->isActive()) {
+        m_spectrumConnectTimer->start();
+    }
+    if (spectrum.is_connected.load()) {
+        m_spectrumConnectTimer->stop();
+    }
 }
 
 MainWindow::~MainWindow()

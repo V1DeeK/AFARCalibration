@@ -132,6 +132,7 @@ void PlutoCaptureThread::run() {
 
         if (state_.connect_requested.load()) {
             state_.connect_requested.store(false);
+            state_.connect_in_progress.store(true);
             state_.is_connected.store(false);
 
             close_device();
@@ -160,6 +161,7 @@ void PlutoCaptureThread::run() {
                 close_device();
                 cerr << "[pluto] connection failed\n";
             }
+            state_.connect_in_progress.store(false);
         }
 
         

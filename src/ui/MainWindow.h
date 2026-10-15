@@ -22,6 +22,7 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 class QThread;
+class QTimer;
 class SpectrumEngine;
 
 class MainWindow final : public QMainWindow {
@@ -123,6 +124,7 @@ private:
     void beginVnaProbe(bool measureAfterSuccess);
     void setOperationProgress(const QString& text, qint64 completed, qint64 total);
     void updateModuleStatus();
+    void updateSpectrumFromPs();
     [[nodiscard]] QString defaultDataRoot() const;
 
     SpectrumEngine* m_spectrumEngine = nullptr;
@@ -138,6 +140,9 @@ private:
     BoardParametersPage* m_boardPage = nullptr;
     ParametersTab* m_parametersTab = nullptr;
     SpectrumOpenGLWidget* m_spectrum = nullptr;
+    QTimer* m_spectrumConnectTimer = nullptr;
+    bool m_spectrumServiceRequested = false;
+    bool m_spectrumConnectedFromPs = false;
     TestRunTab* m_testRun = nullptr;
     PsServiceCheckPage* m_psCheck = nullptr;
     QLabel* m_operationText = nullptr;

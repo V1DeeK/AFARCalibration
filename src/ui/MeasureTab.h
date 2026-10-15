@@ -104,11 +104,8 @@ public:
     [[nodiscard]] int ifbwHz() const;
     [[nodiscard]] double powerDbm() const;
     [[nodiscard]] int averages() const;
-    /// Вкладки «Калибровка ВАЦ», «Линейность», «Перебор кодов», LUT и «Валидация»:
-    /// MainWindow ставит их в карточку над графиками.
+    /// Вкладки «Калибровка ВАЦ», «Линейность», «Перебор кодов», LUT и «Валидация».
     [[nodiscard]] QTabWidget* calibrationPanel() const { return m_calTabs; }
-    /// Измерение, формат отображения, графики, маркеры и калькулятор: ставится справа в верхнем ряду.
-    [[nodiscard]] QWidget* sidePanel() const { return m_sidePanel; }
     [[nodiscard]] QString reportDeviceName() const;
     [[nodiscard]] QString reportDeviceSerial() const;
     [[nodiscard]] QString reportOperatorName() const;
@@ -233,7 +230,6 @@ private:
     QLabel* m_lutPlotCaption = nullptr;
 
     QTabWidget* m_calTabs = nullptr;
-    QWidget* m_sidePanel = nullptr;
 
     std::array<QVector<double>, 6> m_graphFreqGhz;
     std::array<QVector<double>, 6> m_graphMag;

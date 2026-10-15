@@ -27,6 +27,7 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStandardItemModel>
+#include <QTabBar>
 #include <QTemporaryDir>
 #include <QToolButton>
 #include <QGroupBox>
@@ -136,33 +137,63 @@ TEST_CASE("VNA timeouts have no UI and keep their defaults", "[ui]")
     REQUIRE(bar.vnaSweepTimeoutMs() == 30000);
 }
 
-TEST_CASE("connection cards are always visible", "[ui]")
+TEST_CASE("connection, controller and calibration share one tab area", "[ui]")
 {
-    (void)application();
+    auto& app = application();
     ConnectionBar bar;
+    auto* calibration = new QWidget(&bar);
+    calibration->setObjectName(QStringLiteral("calibrationBox"));
+    bar.setMiddleWidget(calibration);
     bar.show();
-    REQUIRE(bar.findChild<QToolButton*>(QStringLiteral("connectionSettingsToggle")) == nullptr);
-    auto* host = bar.findChild<QLineEdit*>(QStringLiteral("vnaHost"));
-    REQUIRE(host != nullptr);
-    REQUIRE(host->isVisible());
-    REQUIRE(bar.findChild<QWidget*>(QStringLiteral("vnaConnectionBox")) != nullptr);
-}
+    app.processEvents();
 
-TEST_CASE("controller tab opens only after the instrument is connected", "[ui]")
-{
-    (void)application();
-    ConnectionBar bar;
-    auto* tabs = bar.findChild<QTabWidget*>(QStringLiteral("vnaTabs"));
+    auto* tabs = bar.findChild<QTabWidget*>(QStringLiteral("connectionTabs"));
+    auto* connection = bar.findChild<QWidget*>(QStringLiteral("vnaConnectionBox"));
+    auto* controller = bar.findChild<QWidget*>(QStringLiteral("stateBox"));
     REQUIRE(tabs != nullptr);
-    REQUIRE(tabs->count() == 2);
+    REQUIRE(tabs->count() == 3);
     CHECK(tabs->tabText(0) == QStringLiteral("Подключение"));
-    CHECK_FALSE(tabs->isTabEnabled(1));
+    CHECK(tabs->tabText(1) == QStringLiteral("Контроллер"));
+    CHECK(tabs->tabText(2) == QStringLiteral("Калибровка ВАЦ"));
+    REQUIRE(connection != nullptr);
+    REQUIRE(controller != nullptr);
+    CHECK(connection->isVisible());
+    CHECK_FALSE(controller->isVisible());
+    CHECK_FALSE(calibration->isVisible());
+
+    auto* tabBar = tabs->findChild<QTabBar*>();
+    REQUIRE(tabBar != nullptr);
+    QMetaObject::invokeMethod(tabBar, "tabBarClicked", Qt::DirectConnection, Q_ARG(int, 0));
+    app.processEvents();
+    CHECK(tabs->maximumHeight() <= tabBar->sizeHint().height() + 2);
+    QMetaObject::invokeMethod(tabBar, "tabBarClicked", Qt::DirectConnection, Q_ARG(int, 1));
+    app.processEvents();
+    CHECK(tabs->currentIndex() == 1);
+    CHECK(tabs->maximumHeight() == QWIDGETSIZE_MAX);
+
     bar.setVnaInfo(QStringLiteral("PLANAR C2220"), QStringLiteral("127.0.0.1:5025"), true);
-    CHECK(tabs->isTabEnabled(1));
+    app.processEvents();
+    CHECK(tabs->currentIndex() == 1);
+    CHECK_FALSE(connection->isVisible());
+    CHECK(controller->isVisible());
+    CHECK_FALSE(calibration->isVisible());
+
     tabs->setCurrentIndex(1);
+    app.processEvents();
+    CHECK(controller->isVisible());
+    CHECK_FALSE(connection->isVisible());
+    CHECK_FALSE(calibration->isVisible());
+
+    tabs->setCurrentIndex(2);
+    app.processEvents();
+    CHECK(calibration->isVisible());
+    CHECK_FALSE(connection->isVisible());
+    CHECK_FALSE(controller->isVisible());
+
     bar.setVnaInfo(QStringLiteral("PLANAR C2220"), QStringLiteral("127.0.0.1:5025"), false);
-    CHECK_FALSE(tabs->isTabEnabled(1));
-    CHECK(tabs->currentIndex() == 0);
+    app.processEvents();
+    CHECK(tabs->currentIndex() == 2);
+    CHECK(calibration->isVisible());
 }
 
 TEST_CASE("S2VNA demo is a distinct local socket backend", "[ui][settings][demo]")

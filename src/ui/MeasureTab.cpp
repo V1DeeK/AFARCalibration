@@ -83,7 +83,7 @@ MeasureTab::MeasureTab(QWidget* parent)
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
 
-    // Калибровка и подготовка серии — вкладки карточки сверху (её ставит MainWindow через calibrationPanel()).
+    // Калибровка и подготовка серии — третья страница верхней области.
     m_calTabs = new QTabWidget(this);
     m_calTabs->setObjectName(QStringLiteral("calibrationTabs"));
     // Все шесть вкладок всегда видны: тесной рамке уступает ширина карточки (страница прокручивается), а не кнопки вкладок.
@@ -644,10 +644,9 @@ QWidget* MeasureTab::makeGraphsPage()
     sideScroll->setMaximumWidth(420);
     sideScroll->setWidget(side);
 
-    // Сама вкладка держит панель справа от графиков; MainWindow переносит её в верхний ряд (sidePanel()).
+    // Панель управления всегда остаётся справа от графиков в одной рабочей области.
     root->addWidget(plotHost, 1);
     root->addWidget(sideScroll);
-    m_sidePanel = sideScroll;
     refreshGraphsPage();
     return page;
 }
