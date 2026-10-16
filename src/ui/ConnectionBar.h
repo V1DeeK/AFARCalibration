@@ -42,6 +42,7 @@ public:
 
     /// После подготовки серии настройки VNA неизменяемы до терминального состояния.
     void setVnaSettingsLocked(bool locked);
+    void setVnaConnectionActive(bool active);
 
     void loadSettings();
     void saveSettings() const;
@@ -49,7 +50,6 @@ public:
     [[nodiscard]] int vnaBackend() const;
     [[nodiscard]] QString vnaHost() const;
     [[nodiscard]] int vnaPort() const;
-    [[nodiscard]] QString vnaComPort() const;
     [[nodiscard]] bool allowDirectAccess() const;
     [[nodiscard]] int vnaConnectTimeoutMs() const;
     [[nodiscard]] int vnaSweepTimeoutMs() const;
@@ -65,7 +65,7 @@ signals:
     void themeToggleRequested();
     void vnaSettingsChanged();
     void controllerSettingsChanged();
-    void probeVnaRequested();
+    void vnaConnectionToggleRequested(bool enable);
     void simulateScpiErrorRequested();
 
 private slots:
@@ -90,7 +90,6 @@ private:
     QComboBox* m_backend = nullptr;
     QLineEdit* m_host = nullptr;
     QSpinBox* m_port = nullptr;
-    QLineEdit* m_com = nullptr;
     QPushButton* m_probe = nullptr;
 
     QComboBox* m_ctrlBackend = nullptr;
@@ -109,4 +108,5 @@ private:
     QSpinBox* m_sweepMs = nullptr;
     QSpinBox* m_retries = nullptr;
     bool m_timeoutsLocked = false;
+    bool m_vnaConnectionActive = false;
 };

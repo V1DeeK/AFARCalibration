@@ -1,5 +1,8 @@
 #pragma once
 
+#include "S2VnaRuntime.h"
+
+#include <QElapsedTimer>
 #include <QMainWindow>
 #include <QString>
 #include <QVector>
@@ -73,8 +76,9 @@ private slots:
     void onToggleTheme();
     void onApplyVnaSettings();
     void onApplyControllerSettings();
-    void onProbeVna();
+    void onToggleVnaConnection(bool enable);
     void onProbeFinished(bool ok, const QString& idnOrError);
+    void onVnaDisconnected();
     void refreshDataSourceBadge(bool probeOk = false, const QString& idnOrError = {});
     void onEtaChanged(const QString& text);
     void onSweepPreview(const QVector<double>& freqGhz,
@@ -153,5 +157,11 @@ private:
     MeasureWorker* m_worker = nullptr;
     int m_state = 0;
     bool m_vnaConnected = false;
+    bool m_connectionRequested = false;
+    bool m_disconnectPending = false;
     bool m_measureAfterProbe = false;
+    bool m_autoProbePending = false;
+    bool m_reusedExternalS2Vna = false;
+    QElapsedTimer m_autoProbeTimer;
+    S2VnaRuntime m_s2vnaRuntime;
 };

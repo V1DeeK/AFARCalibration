@@ -150,33 +150,17 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     vnaLayout->setSpacing(ui::kInnerGap);
     m_backend = new QComboBox(this);
     m_backend->setObjectName(QStringLiteral("vnaBackend"));
-    m_backend->addItem(QStringLiteral("Связанный демостенд (VNA + DUT)"), 0);
-    // QSettings vna/backend = 0/1/2/3 (userData); подписи меняются, ключи нет.
-    // Alias «S2VNA …» в UserRole+1 — для поиска/подсказок операторам со старым именем.
-    m_backend->addItem(QStringLiteral("C2220 Socket (SCPI)"), 1);
-    m_backend->setItemData(1, QStringLiteral("S2VNA Socket"), Qt::UserRole + 1);
+    m_backend->addItem(QStringLiteral("Демостенд"), 0);
+    m_backend->setItemData(0, QStringLiteral("Имитатор VNA + DUT без оборудования"), Qt::ToolTipRole);
+    m_backend->addItem(QStringLiteral("C2220 через S2VNA"), 1);
     m_backend->setItemData(
         1,
         QStringLiteral(
-            "Живой C1220/C2220 по TCP. Запустите S2VNA и включите Socket Server вручную."),
-        Qt::ToolTipRole);
-    m_backend->addItem(QStringLiteral("C2220 COM (SCPI)"), 2);
-    m_backend->setItemData(2, QStringLiteral("S2VNA COM"), Qt::UserRole + 1);
-    m_backend->setItemData(
-        2,
-        QStringLiteral(
-            "Живой C2220 по COM. Нужен запущенный SCPI-сервер S2VNA (удалённый COM)."),
-        Qt::ToolTipRole);
-    m_backend->addItem(QStringLiteral("S2VNA Demo C2220 (Socket)"), 3);
-    m_backend->setItemData(3, QStringLiteral("S2VNA Demo Mode"), Qt::UserRole + 1);
-    m_backend->setItemData(
-        3,
-        QStringLiteral(
-            "Запустите S2VNA в Demo Mode и включите Socket Server вручную. "
-            "Графики и отчёты не являются метрологией."),
+            "Живой C1220/C2220 по TCP. При проверке связи S2VNA запускается скрыто, "
+            "если она ещё не запущена."),
         Qt::ToolTipRole);
     m_backend->setToolTip(
-        QStringLiteral("S2VNA = SCPI-сервер; калибровка и измерения — из AFAR."));
+        QStringLiteral("Реальный C2220 подключается через S2VNA; Демостенд работает локально."));
     m_host = new QLineEdit(QStringLiteral("127.0.0.1"), this);
     m_host->setObjectName(QStringLiteral("vnaHost"));
     m_port = new QSpinBox(this);
@@ -184,9 +168,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_port->setRange(1, 65535);
     m_port->setValue(5025);
     m_port->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    m_com = new QLineEdit(QStringLiteral("COM3"), this);
-    m_com->setObjectName(QStringLiteral("vnaComPort"));
-    m_probe = new QPushButton(QStringLiteral("Проверить связь"), this);
+    m_probe = new QPushButton(QStringLiteral("Вкл"), this);
     m_probe->setObjectName(QStringLiteral("btnPrimary"));
     ui::setButtonRole(m_probe, ui::ButtonRole::Primary);
     auto* vnaFields = new QGridLayout;
@@ -200,8 +182,6 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     vnaLayout->addWidget(caption(QStringLiteral("Тип подключения")));
     vnaLayout->addWidget(m_backend);
     vnaLayout->addLayout(vnaFields);
-    vnaLayout->addWidget(caption(QStringLiteral("COM-порт")));
-    vnaLayout->addWidget(m_com);
     vnaLayout->addWidget(m_vna);
     vnaLayout->addWidget(m_filterReady);
     vnaLayout->addWidget(m_probe);
@@ -301,18 +281,13 @@ ConnectionBar::ConnectionBar(QWidget* parent)
             &ConnectionBar::onBackendChanged);
     connect(m_probe, &QPushButton::clicked, this, [this]() {
         saveSettings();
-        emit vnaSettingsChanged();
-        emit probeVnaRequested();
+        emit vnaConnectionToggleRequested(!m_vnaConnectionActive);
     });
     connect(m_host, &QLineEdit::editingFinished, this, [this]() {
         saveSettings();
         emit vnaSettingsChanged();
     });
     connect(m_port, &QSpinBox::editingFinished, this, [this]() {
-        saveSettings();
-        emit vnaSettingsChanged();
-    });
-    connect(m_com, &QLineEdit::editingFinished, this, [this]() {
         saveSettings();
         emit vnaSettingsChanged();
     });
@@ -390,12 +365,11 @@ void ConnectionBar::updateDutEndpointEnabled()
 void ConnectionBar::updateFieldsEnabled()
 {
     const int b = vnaBackend();
-    const bool settingsEnabled = !m_timeoutsLocked;
+    const bool settingsEnabled = !m_timeoutsLocked && !m_vnaConnectionActive;
     m_backend->setEnabled(settingsEnabled);
-    m_host->setEnabled(settingsEnabled && (b == 1 || b == 3));
-    m_port->setEnabled(settingsEnabled && (b == 1 || b == 3));
-    m_com->setEnabled(settingsEnabled && b == 2);
-    m_probe->setEnabled(settingsEnabled);
+    m_host->setEnabled(settingsEnabled && b == 1);
+    m_port->setEnabled(settingsEnabled && b == 1);
+    m_probe->setEnabled(!m_timeoutsLocked);
     if (m_scpiSimulate) {
         m_scpiSimulate->setVisible(b == 0);
     }
@@ -418,12 +392,12 @@ void ConnectionBar::emitTimeoutsChanged()
 void ConnectionBar::loadSettings()
 {
     QSettings s;
-    const int backend = s.value(QStringLiteral("vna/backend"), 1).toInt();
+    const int savedBackend = s.value(QStringLiteral("vna/backend"), 1).toInt();
+    const int backend = savedBackend == 3 ? 0 : savedBackend == 2 ? 1 : savedBackend;
     const int backendIndex = m_backend->findData(backend);
     m_backend->setCurrentIndex(backendIndex >= 0 ? backendIndex : m_backend->findData(1));
     m_host->setText(s.value(QStringLiteral("vna/host"), QStringLiteral("127.0.0.1")).toString());
     m_port->setValue(s.value(QStringLiteral("vna/port"), 5025).toInt());
-    m_com->setText(s.value(QStringLiteral("vna/com"), QStringLiteral("COM3")).toString());
     m_connectMs->blockSignals(true);
     m_sweepMs->blockSignals(true);
     m_retries->blockSignals(true);
@@ -455,7 +429,6 @@ void ConnectionBar::saveSettings() const
     s.setValue(QStringLiteral("vna/backend"), vnaBackend());
     s.setValue(QStringLiteral("vna/host"), vnaHost());
     s.setValue(QStringLiteral("vna/port"), vnaPort());
-    s.setValue(QStringLiteral("vna/com"), vnaComPort());
     s.setValue(QStringLiteral("vna/connect_ms"), vnaConnectTimeoutMs());
     s.setValue(QStringLiteral("vna/sweep_ms"), vnaSweepTimeoutMs());
     s.setValue(QStringLiteral("vna/retries"), vnaMeasureRetries());
@@ -478,11 +451,6 @@ QString ConnectionBar::vnaHost() const
 int ConnectionBar::vnaPort() const
 {
     return m_port->value();
-}
-
-QString ConnectionBar::vnaComPort() const
-{
-    return m_com->text().trimmed();
 }
 
 bool ConnectionBar::allowDirectAccess() const
@@ -528,6 +496,13 @@ QString ConnectionBar::dutComPort() const
 void ConnectionBar::setVnaSettingsLocked(bool locked)
 {
     m_timeoutsLocked = locked;
+    updateFieldsEnabled();
+}
+
+void ConnectionBar::setVnaConnectionActive(bool active)
+{
+    m_vnaConnectionActive = active;
+    m_probe->setText(active ? QStringLiteral("Выкл") : QStringLiteral("Вкл"));
     updateFieldsEnabled();
 }
 

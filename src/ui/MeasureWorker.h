@@ -19,7 +19,6 @@ class C2220Vna;
 class IScpiTransport;
 class IVna;
 class QTimer;
-class ScpiComTransport;
 class ScpiSocketTransport;
 
 /// Worker измерения в QThread: prepare/start/pause/stop + stepOnce без блокировки GUI.
@@ -27,12 +26,10 @@ class MeasureWorker final : public QObject {
     Q_OBJECT
 
 public:
-    /// 0 = имитатор, 1 = TCP Socket, 2 = COM, 3 = S2VNA Demo C2220 по Socket.
+    /// 0 = программный демостенд, 1 = C2220 через Socket-сервер S2VNA.
     enum VnaBackend : int {
         BackendSimulator = 0,
         BackendSocket = 1,
-        BackendCom = 2,
-        BackendS2VnaDemo = 3,
     };
     /// 0 = DutSimulator (серия), 1 = Stub (диагностика т.14), 2 = боевой (не реализован).
     enum CtrlBackend : int { CtrlSimulator = 0, CtrlStub = 1, CtrlCombat = 2, CtrlPs = 3 };
@@ -46,7 +43,6 @@ public slots:
     void configureVna(int backend,
                       const QString& host,
                       int port,
-                      const QString& comPort,
                       bool allowDirectAccess,
                       int connectTimeoutMs = 3000,
                       int sweepTimeoutMs = 30000,
@@ -58,6 +54,7 @@ public slots:
                              const QString& comPort);
     /// connect + *IDN? через оркестратор (Idle), не напрямую IVna.
     void probeVna();
+    void disconnectVna();
     /// UI-ERR-001: имитатор — push_instrument_error + drain в GUI-очередь.
     void simulateScpiError();
     /// GAP-WIZ-001: короткий пробный съём кодов через оркестратор (Idle).
@@ -116,6 +113,7 @@ signals:
     void stateChanged(int state, const QString& russianText, const QString& colorName);
     void prepareFinished(bool ok, const QString& diagnostics);
     void probeFinished(bool ok, const QString& idnOrError);
+    void vnaDisconnected();
     void vnaCalibrationDetected(const QString& calibrationId, bool correctionEnabled);
     void probeCodesFinished(bool ok, const QString& message);
     void measureNowFinished(bool ok, const QString& message);
@@ -228,12 +226,10 @@ private:
     int m_backend{BackendSimulator};
     QString m_host{QStringLiteral("127.0.0.1")};
     int m_port{5025};
-    QString m_comPort{QStringLiteral("COM3")};
     bool m_allowDirect{false};
     int m_connectTimeoutMs{3000};
     int m_sweepTimeoutMs{30000};
     int m_measureRetries{2};
-    bool m_demoVerified{false};
 
     int m_ctrlBackend{CtrlSimulator};
     QString m_dutHost{QStringLiteral("192.168.0.10")};
@@ -246,7 +242,6 @@ private:
     std::unique_ptr<VnaSimulator> m_simVna;
     mutable std::mutex m_transportMutex;
     std::unique_ptr<ScpiSocketTransport> m_socket;
-    std::unique_ptr<ScpiComTransport> m_com;
     std::unique_ptr<C2220Vna> m_c2220;
     IVna* m_vna{nullptr};
 

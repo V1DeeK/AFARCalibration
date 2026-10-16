@@ -3,7 +3,6 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "C2220Vna.h"
-#include "ScpiComTransport.h"
 #include "ScpiSocketTransport.h"
 
 #include <atomic>
@@ -664,16 +663,4 @@ TEST_CASE("C2220Vna calibrate_one_port SOLT1 sequence against stub", "[c2220]")
                       std::runtime_error);
     REQUIRE_THROWS_AS(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 3),
                       std::runtime_error);
-}
-
-TEST_CASE("ScpiComTransport compiles and rejects missing port", "[c2220][com]")
-{
-#ifdef _WIN32
-    ScpiComTransport com("COM9");
-    // Без петли/адаптера порт обычно отсутствует — ожидаем ошибку CreateFile, не краш.
-    REQUIRE_THROWS_AS(com.connect(), std::runtime_error);
-#else
-    ScpiComTransport com("COM9");
-    REQUIRE_THROWS_AS(com.connect(), std::runtime_error);
-#endif
 }

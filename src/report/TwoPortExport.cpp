@@ -607,7 +607,7 @@ bool writeTouchstoneS2p(const std::filesystem::path& path,
          << "! measured_utc=" << measurement.measured_utc << "\n"
          << "! vna_idn=" << measurement.vna_idn << "\n"
          << "! source_mode="
-         << (measurement.demo_mode ? "S2VNA_DEMO_NON_METROLOGICAL" : "LIVE_VNA") << "\n"
+         << (measurement.demo_mode ? "DEMO_STAND_NON_METROLOGICAL" : "LIVE_VNA") << "\n"
          << "! device_name=" << touchstoneComment(measurement.device_name) << "\n"
          << "! device_serial=" << touchstoneComment(measurement.device_serial) << "\n"
          << "! operator=" << touchstoneComment(measurement.operator_name) << "\n"
@@ -718,7 +718,7 @@ bool writeTwoPortReportPdf(const std::filesystem::path& path,
                      QStringLiteral("Анализатор цепей: %1")
                          .arg(instrumentName.isEmpty() ? QStringLiteral("не указан") : instrumentName),
                      measurement.demo_mode
-                         ? QStringLiteral("Источник: S2VNA DEMO — имитация, не метрология")
+                         ? QStringLiteral("Источник: Демостенд — имитация, не метрология")
                          : QStringLiteral("Источник: анализатор цепей векторный ПЛАНАР C2220"),
                       QStringLiteral("Серийный номер: %1; версия S2VNA/прибора: %2")
                          .arg(instrument.serial.isEmpty() ? QStringLiteral("не указан") : instrument.serial,

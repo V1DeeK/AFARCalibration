@@ -228,7 +228,7 @@ void StartWizard::buildPages()
             QStringLiteral("Идентификатор комплекта мер ВАЦ (автоматически из S2VNA):"), page));
         m_vnaCalId = new QLineEdit(page);
         m_vnaCalId->setPlaceholderText(
-            QStringLiteral("Нажмите «Проверить связь»; при необходимости можно исправить вручную"));
+            QStringLiteral("Нажмите «Вкл» для связи с VNA; при необходимости можно исправить вручную"));
         {
             QSettings settings;
             m_vnaCalId->setText(

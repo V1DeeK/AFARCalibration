@@ -618,7 +618,7 @@ bool writeRunReportPdf(const std::filesystem::path& path,
             painter.setPen(QColor(160, 55, 35));
             drawWrappedLine(
                 painter, page, y,
-                QStringLiteral("Источник: S2VNA DEMO — имитация, не метрология."));
+                QStringLiteral("Источник: Демостенд — имитация, не метрология."));
             painter.setPen(Qt::black);
         }
         drawWrappedLine(
