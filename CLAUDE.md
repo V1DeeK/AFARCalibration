@@ -35,14 +35,19 @@ ctest --test-dir build -R c2220_driver --output-on-failure   # один тест
 `hdf5_store`, `probe_run`, `pause_resume`, `crash_recovery`, `faults`,
 `export_manifest`, `two_port_export`, `c2220_driver`, `full_sim_run`,
 `lut_perf`, `at12_soak`, `verify_series_tool` (только при PowerShell),
-`ui_interactions`. Подробности и типовые ошибки — скилл `build-and-test`.
+`ui_interactions`, `s2vna_launcher`. Подробности и типовые ошибки — скилл
+`build-and-test`.
 
 ## Жёсткие ограничения
 
 - ПЛАНАР C2220 управляется только так: программа → SCPI по TCP Socket →
   S2VNA → прибор. Прямой USB/Ethernet-драйвер и угадывание внутреннего
-  протокола ПЛАНАРа запрещены. S2VNA запускает и настраивает оператор;
-  программа его не запускает, не закрывает и не перенастраивает.
+  протокола ПЛАНАРа запрещены (лицензия ПЛАНАР, п. 1.5 и 5.2). S2VNA на
+  этом ПК программа может запустить сама и скрыто, только документированными
+  ключами (`/visible:off /SocketServer:on /SocketPort:N`, для Demo
+  `/simulate:on`), и закрывает только свою копию (`SYST:TERM`). Уже
+  запущенную оператором S2VNA не закрывает; файлы настроек S2VNA не правит
+  (решение пользователя от 2026-10-16, `src/ui/S2VnaLauncher`).
 - Набор SCPI закрыт контрактом `docs/contracts/vna-c2220-scpi.md`. Новая
   команда — сначала в контракт, потом в код. `SYSTem:RECeiver:DIRect:ACCess`
   программа сама не включает.

@@ -7,8 +7,10 @@
 #include <vector>
 
 class FullScanPanel;
+class PsDiagnosticsPage;
 class PsExchangeView;
 class PsModulesPage;
+class PsOsdPage;
 class PsSession;
 class QDoubleSpinBox;
 class QLabel;
@@ -39,6 +41,13 @@ public:
     bool saveCodes(const QString& path, QString* error = nullptr) const;
     bool loadCodes(const QString& path, QString* error = nullptr);
 
+    [[nodiscard]] PsDiagnosticsPage* diagnosticsPage() const { return m_diagnostics; }
+    [[nodiscard]] PsOsdPage* osdPage() const { return m_osd; }
+    /// set_start_test, как по кнопке «Запустить самопроверку».
+    void startSelfTest();
+    /// set_reset без вопроса оператору; кнопка «Перезапустить изделие…» сначала спрашивает.
+    void resetBoard();
+
 private:
     QWidget* buildModeBox();
     QWidget* buildBeamBox();
@@ -60,6 +69,8 @@ private:
     QPushButton* m_toService = nullptr;
     QPushButton* m_toIdle = nullptr;
     QPushButton* m_getState = nullptr;
+    QPushButton* m_selfTest = nullptr;
+    QPushButton* m_reset = nullptr;
 
     QLabel* m_tlmCounters = nullptr;
     QTableWidget* m_tlmTable = nullptr;
@@ -79,6 +90,8 @@ private:
     QPlainTextEdit* m_log = nullptr;
     FullScanPanel* m_fullScan = nullptr;
     PsModulesPage* m_modulesPage = nullptr;
+    PsDiagnosticsPage* m_diagnostics = nullptr;
+    PsOsdPage* m_osd = nullptr;
 
     std::vector<QWidget*> m_serviceControls;
 };

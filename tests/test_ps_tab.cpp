@@ -7,7 +7,9 @@
 #include "MacResolver.h"
 #include "ParametersTab.h"
 #include "PsJournalDialog.h"
+#include "PsDiagnosticsPage.h"
 #include "PsModulesPage.h"
+#include "PsOsdPage.h"
 #include "PsPacketPage.h"
 #include "PsServiceCheckPage.h"
 #include "PsServiceCheckRunner.h"
@@ -244,6 +246,91 @@ TEST_CASE("Установка параметров: подключение, се
     CHECK_FALSE(writeCodes->isEnabled());
     CHECK_FALSE(ui.session->autoConnect());
     CHECK(connect->text() == QStringLiteral("Подключиться"));
+}
+
+TEST_CASE("Установка параметров v8: своя кнопка на каждую новую команду", "[ps][ui][v8]")
+{
+    app();
+    TestPsServer server;
+    Ui ui;
+    ui.show();
+    QWidget& p = *ui.parameters;
+
+    auto* selfTest = child<QPushButton>(p, "psStartTest");
+    auto* reset = child<QPushButton>(p, "psReset");
+    auto* setOsd = child<QPushButton>(p, "psSetOsd");
+    auto* getOsd = child<QPushButton>(p, "psGetOsd");
+    auto* setText = child<QPushButton>(p, "psSetOsdText");
+    auto* clearText = child<QPushButton>(p, "psClearOsdText");
+    auto* trx = child<QPushButton>(p, "psGetTrxStatus");
+    auto* pl = child<QPushButton>(p, "psGetPlStatus");
+    auto* rfm = child<QPushButton>(p, "psGetRfmTelemetry");
+    for (QPushButton* b : {selfTest, reset, setOsd, getOsd, setText, clearText, trx, pl, rfm}) {
+        CHECK_FALSE(b->isEnabled());
+    }
+
+    connectUi(ui, server);
+    // Ожидание: самопроверка, перезапуск и OSD доступны, сервисные команды — нет.
+    REQUIRE(waitFor([&] { return selfTest->isEnabled(); }));
+    CHECK(reset->isEnabled());
+    CHECK(setOsd->isEnabled());
+    CHECK(getOsd->isEnabled());
+    CHECK_FALSE(setText->isEnabled());
+    CHECK_FALSE(trx->isEnabled());
+
+    selfTest->click();
+    REQUIRE(waitFor([&] { return server.selfTests() == 1; }));
+
+    // set_osd уходит с формы целиком, ответ PS возвращается на форму вместе с los.
+    child<QComboBox>(p, "psOsdSrc")->setCurrentIndex(1);
+    child<QSpinBox>(p, "psOsdHos")->setValue(-5);
+    child<QCheckBox>(p, "psOsdField_snr")->setChecked(false);
+    setOsd->click();
+    REQUIRE(waitFor([&] { return server.osd().value("src", "") == "TEXT"; }));
+    CHECK(server.osd()["hos"] == -5);
+    CHECK(server.osd()["fields"].size() == 4);
+    REQUIRE(waitFor([&] { return child<QLabel>(p, "psOsdLos")->text() == QStringLiteral("видеосигнал есть"); }));
+    child<QSpinBox>(p, "psOsdHos")->setValue(0);
+    getOsd->click();
+    REQUIRE(waitFor([&] { return child<QSpinBox>(p, "psOsdHos")->value() == -5; }));
+
+    child<QPushButton>(p, "psToService")->click();
+    REQUIRE(waitFor([&] { return setText->isEnabled(); }));
+    CHECK_FALSE(selfTest->isEnabled());
+    CHECK_FALSE(reset->isEnabled());
+
+    child<QSpinBox>(p, "psOsdRow")->setValue(2);
+    child<QSpinBox>(p, "psOsdCol")->setValue(1);
+    child<QLineEdit>(p, "psOsdText")->setText(QStringLiteral("TEST LO 5800 MHZ"));
+    setText->click();
+    REQUIRE(waitFor([&] { return server.osdText().value("text", "") == "TEST LO 5800 MHZ"; }));
+    CHECK(server.osdText()["row"] == 2);
+    // Текст за 30-й столбец PS отклонил бы — программа его не отправляет.
+    child<QSpinBox>(p, "psOsdCol")->setValue(20);
+    const int before = server.commandsReceived();
+    CHECK_FALSE(ui.parameters->osdPage()->writeText());
+    CHECK(child<QLabel>(p, "psOsdResult")->text().contains(QStringLiteral("больше 30")));
+    CHECK(server.commandsReceived() == before);
+    clearText->click();
+    REQUIRE(waitFor([&] { return server.osdText().empty(); }));
+
+    auto* table = ui.parameters->diagnosticsPage()->table();
+    trx->click();
+    REQUIRE(waitFor([&] { return table->rowCount() == 9; }));
+    pl->click();
+    REQUIRE(waitFor([&] { return table->rowCount() == 12; }));
+    rfm->click();
+    REQUIRE(waitFor([&] { return table->rowCount() == 16; }));
+    CHECK(table->item(15, 2)->text() == QStringLiteral("37.4 °C"));
+    CHECK(table->item(0, 2)->text().contains(QStringLiteral("обмен есть")));
+
+    // Перезапуск: PS отвечает, закрывает TCP, программа подключается снова.
+    child<QPushButton>(p, "psToIdle")->click();
+    REQUIRE(waitFor([&] { return reset->isEnabled(); }));
+    ui.parameters->resetBoard();
+    REQUIRE(waitFor([&] { return server.resets() == 1; }));
+    REQUIRE(waitFor([&] { return !ui.session->link()->isReady(); }));
+    REQUIRE(waitFor([&] { return ui.session->link()->isReady(); }, 8000));
 }
 
 TEST_CASE("Подключение: без адреса и MAC не подключается, неверный MAC отклоняется", "[ps][ui]")
@@ -746,7 +833,7 @@ TEST_CASE("Тестовый прогон: стресс-тест TCP и пров�
     const QString summary = ui.testRun->stress()->summary();
     INFO(summary.toStdString());
     CHECK(summary.contains(QStringLiteral("отправлено 30 из 30")));
-    CHECK(summary.contains(QStringLiteral("OK 3")));  // число зависит от набора отмеченных команд
+    CHECK(summary.contains(QStringLiteral("OK 5")));  // число зависит от набора отмеченных команд (get_state, get_osd)
     CHECK(summary.contains(QStringLiteral("нет ответа 0")));
 
     ui.testRun->startUdpCheck(2);

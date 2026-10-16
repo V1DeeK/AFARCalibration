@@ -42,6 +42,10 @@ public:
     std::string select_calibration_kit(int index);
     /// Включена ли коррекция на активном канале S2VNA.
     bool correction_enabled();
+    /// Показать (`SYST:SHOW`) или убрать с рабочего стола (`SYST:HIDE`) окно S2VNA.
+    void set_window_visible(bool visible);
+    /// `SYST:TERM`: завершить S2VNA. Только для копии, запущенной этой программой.
+    void terminate_software();
     void calibrate_one_port(OnePortCalibrationStep step, int port) override;
     void calibrate_two_port(TwoPortCalibrationStep step) override;
     std::vector<std::string> drain_errors() override;

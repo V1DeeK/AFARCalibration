@@ -46,6 +46,11 @@ public:
     [[nodiscard]] const nlohmann::json& moduleState(int addr) const;
     [[nodiscard]] const nlohmann::json& mixerState() const { return m_mixer; }
     [[nodiscard]] const afar::ps::SffParams& sffParams() const { return m_sff; }
+    /// Параметры OSD (таблица 13) и последний отладочный текст set_osd_text; пусто после clear_osd_text.
+    [[nodiscard]] const nlohmann::json& osd() const { return m_osd; }
+    [[nodiscard]] const nlohmann::json& osdText() const { return m_osdText; }
+    [[nodiscard]] int selfTests() const { return m_selfTests; }
+    [[nodiscard]] int resets() const { return m_resets; }
     /// Модуль не отвечает по RS-485 — HW_NOT_READY на команды §4.5.
     void setModulesSilent(bool silent) { m_modulesSilent = silent; }
 
@@ -86,6 +91,11 @@ private:
     nlohmann::json m_video;
     nlohmann::json m_mixer;  ///< {"ch":[4 канала], "temp"}
     bool m_modulesSilent = false;
+    nlohmann::json m_osd = {{"en", 1}, {"std", "PAL"}, {"src", "AUTO"},
+                            {"fields", {"state", "freq", "az", "cls", "snr"}}, {"hos", 0}, {"vos", 0}};
+    nlohmann::json m_osdText = nlohmann::json::object();
+    int m_selfTests = 0;
+    int m_resets = 0;
     afar::ps::SffParams m_sff;
     quint8 m_eventCount = 0;
 };

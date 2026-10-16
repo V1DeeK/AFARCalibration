@@ -5,7 +5,9 @@
 #include "UiStyle.h"
 
 #include "FullScanPanel.h"
+#include "PsDiagnosticsPage.h"
 #include "PsModulesPage.h"
+#include "PsOsdPage.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -20,8 +22,10 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -64,6 +68,10 @@ ParametersTab::ParametersTab(PsSession* session, QWidget* parent)
     modulesLayout->setContentsMargins(0, 0, 0, 0);
     m_modulesPage = new PsModulesPage(m_session->link(), modulesBox);
     m_modulesPage->tabs()->addTab(buildCodesPage(), QStringLiteral("Коды решётки"));
+    m_diagnostics = new PsDiagnosticsPage(m_session, m_modulesPage->tabs());
+    m_modulesPage->tabs()->addTab(m_diagnostics, QStringLiteral("Состояние"));
+    m_osd = new PsOsdPage(m_session, m_modulesPage->tabs());
+    m_modulesPage->tabs()->addTab(ui::scrollPage(m_osd, m_modulesPage->tabs()), QStringLiteral("OSD"));
     modulesLayout->addWidget(m_modulesPage);
     // Слева «Модули» (невысокие) и под ними «Полное сканирование»; справа — обмен с PS и телеметрия.
     // Обе колонки тянутся до низа окна.
@@ -161,10 +169,24 @@ QWidget* ParametersTab::buildModeBox()
     ui::setButtonRole(m_toService, ui::ButtonRole::Primary);
     ui::setButtonRole(m_toIdle, ui::ButtonRole::Secondary);
     ui::setButtonRole(m_getState, ui::ButtonRole::Secondary);
+    m_selfTest = new QPushButton(QStringLiteral("Запустить самопроверку"), box);
+    m_selfTest->setObjectName(QStringLiteral("psStartTest"));
+    m_selfTest->setToolTip(QStringLiteral("set_start_test: ответ придёт после самопроверки, "
+                                          "результаты — в техническом состоянии (биты 72–79)"));
+    m_reset = new QPushButton(QStringLiteral("Перезапустить изделие…"), box);
+    m_reset->setObjectName(QStringLiteral("psReset"));
+    m_reset->setToolTip(QStringLiteral("set_reset: изделие ответит, закроет TCP и перезапустится"));
+    ui::setButtonRole(m_selfTest, ui::ButtonRole::Secondary);
+    ui::setButtonRole(m_reset, ui::ButtonRole::Danger);
     layout->addWidget(m_modeLabel);
     layout->addWidget(m_toService);
     layout->addWidget(m_toIdle);
     layout->addWidget(m_getState);
+    auto* idleRow = new QHBoxLayout;
+    idleRow->setSpacing(ui::kInnerGap);
+    idleRow->addWidget(m_selfTest);
+    idleRow->addWidget(m_reset);
+    layout->addLayout(idleRow);
     layout->addWidget(ui::hintLabel(
         QStringLiteral("В сервисный режим PS переходит только из ожидания (READY). "
                        "При выходе из него PS сам восстанавливает рабочую конфигурацию."),
@@ -176,6 +198,17 @@ QWidget* ParametersTab::buildModeBox()
     connect(m_toIdle, &QPushButton::clicked, this,
             [this] { send(ps::msg::SetMode, json{{"mode", "IDLE"}}); });
     connect(m_getState, &QPushButton::clicked, this, [this] { send(ps::msg::GetState); });
+    connect(m_selfTest, &QPushButton::clicked, this, &ParametersTab::startSelfTest);
+    connect(m_reset, &QPushButton::clicked, this, [this] {
+        const auto answer = QMessageBox::question(
+            this, QStringLiteral("Перезапуск изделия"),
+            QStringLiteral("Изделие перезапустится: связь с PS прервётся, после перезапуска "
+                           "пройдут инициализация и самопроверка. Перезапустить?"),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (answer == QMessageBox::Yes) {
+            resetBoard();
+        }
+    });
     return box;
 }
 
@@ -335,6 +368,20 @@ QWidget* ParametersTab::buildBeamBox()
     return box;
 }
 
+void ParametersTab::startSelfTest()
+{
+    if (m_session->send(ps::msg::SetStartTest, json::object()) >= 0) {
+        log(QStringLiteral("Самопроверка запущена, ждём ответа PS"));
+    }
+}
+
+void ParametersTab::resetBoard()
+{
+    if (m_session->send(ps::msg::SetReset, json::object()) >= 0) {
+        log(QStringLiteral("Команда перезапуска отправлена"));
+    }
+}
+
 void ParametersTab::send(std::string_view msgType, const json& payload)
 {
     m_session->send(msgType, payload);
@@ -446,7 +493,12 @@ void ParametersTab::onResponse(const ps::Envelope& r, ps::Status status)
         return;  // отказ PS уже в журнале сообщений сессии
     }
     std::string error;
-    if (r.msg_type == ps::msg::SetPhaseAtten || r.msg_type == ps::msg::GetPhaseAtten) {
+    if (r.msg_type == ps::msg::SetStartTest) {
+        log(QStringLiteral("Самопроверка завершена. Результаты проверок — в техническом состоянии изделия"));
+        send(ps::msg::GetState);
+    } else if (r.msg_type == ps::msg::SetReset) {
+        log(QStringLiteral("Изделие перезапускается. Программа переподключится сама, когда PS снова будет доступна"));
+    } else if (r.msg_type == ps::msg::SetPhaseAtten || r.msg_type == ps::msg::GetPhaseAtten) {
         std::vector<ps::ChannelCodes> codes;
         if (ps::channelsFromJson(r.payload, codes, &error)) {
             showCodes(codes);
@@ -541,6 +593,14 @@ void ParametersTab::refreshEnabled()
     const ps::Mode mode = m_session->mode();
     const bool service = ready && known && mode == ps::Mode::Service;
     m_modulesPage->setAllowed(service);
+    m_diagnostics->setAllowed(service);
+    m_osd->setAllowed(ready, service);
+    // set_start_test и set_reset — только в IDLE/READY (v8 п. 3.2).
+    const QString state = m_session->state().toUpper();
+    const bool idleReady = ready && known && mode == ps::Mode::Idle && state != QStringLiteral("INIT") &&
+                           state != QStringLiteral("SELF_TEST");
+    m_selfTest->setEnabled(idleReady);
+    m_reset->setEnabled(idleReady);
     m_toService->setEnabled(ready && (!known || mode == ps::Mode::Idle));
     m_toIdle->setEnabled(ready && known && mode != ps::Mode::Idle);
     m_getState->setEnabled(ready);

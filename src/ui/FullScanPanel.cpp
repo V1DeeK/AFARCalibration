@@ -98,13 +98,18 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
     buttons->setSpacing(ui::kInnerGap);
     m_apply = new QPushButton(QStringLiteral("Применить параметры"), this);
     m_apply->setObjectName(QStringLiteral("sffApply"));
+    m_read = new QPushButton(QStringLiteral("Прочитать параметры"), this);
+    m_read->setObjectName(QStringLiteral("sffRead"));
+    m_read->setToolTip(QStringLiteral("get_sff_parameters"));
     m_start = new QPushButton(QStringLiteral("Старт"), this);
     m_start->setObjectName(QStringLiteral("sffStart"));
     m_stop = new QPushButton(QStringLiteral("Стоп"), this);
     m_stop->setObjectName(QStringLiteral("sffStop"));
     ui::setButtonRole(m_apply, ui::ButtonRole::Secondary);
+    ui::setButtonRole(m_read, ui::ButtonRole::Secondary);
     ui::setButtonRole(m_start, ui::ButtonRole::Success);
     ui::setButtonRole(m_stop, ui::ButtonRole::Danger);
+    buttons->addWidget(m_read);
     buttons->addWidget(m_apply);
     buttons->addWidget(m_start);
     buttons->addWidget(m_stop);
@@ -132,6 +137,13 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
     layout->addWidget(m_results, 1);
 
     connect(m_apply, &QPushButton::clicked, this, [this] { inScanMode([this] { apply(); }); });
+    connect(m_read, &QPushButton::clicked, this, [this] {
+        inScanMode([this] {
+            if (m_session->send(ps::msg::GetSffParameters) >= 0) {
+                m_state->setText(QStringLiteral("Запрошены параметры обзора"));
+            }
+        });
+    });
     connect(m_start, &QPushButton::clicked, this, [this] { inScanMode([this] { start(); }); });
     connect(m_stop, &QPushButton::clicked, this, &FullScanPanel::stop);
     connect(m_session, &PsSession::controlsChanged, this, &FullScanPanel::refreshControls);
@@ -228,6 +240,7 @@ void FullScanPanel::refreshControls()
 {
     const bool allowed = m_session->manualAllowed();
     m_apply->setEnabled(allowed);
+    m_read->setEnabled(allowed);
     m_start->setEnabled(allowed);
     m_stop->setEnabled(allowed && m_session->modeKnown() && m_session->mode() == ps::Mode::FullScanFreq);
     if (!m_session->link()->isReady()) {

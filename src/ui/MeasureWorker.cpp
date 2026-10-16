@@ -790,6 +790,38 @@ void MeasureWorker::selectCalibrationKit(int index)
     }
 }
 
+void MeasureWorker::setVnaWindowVisible(bool visible)
+{
+    if (!m_c2220 || !m_c2220->connected()) {
+        emit diagnostic(QStringLiteral(
+            "Окно S2VNA не переключено: сначала нажмите «Проверить связь»"));
+        return;
+    }
+    try {
+        m_c2220->set_window_visible(visible);
+        emit diagnostic(visible ? QStringLiteral("Окно S2VNA показано")
+                                : QStringLiteral("Окно S2VNA скрыто"));
+    } catch (const std::exception& ex) {
+        emit diagnostic(QStringLiteral("Окно S2VNA не переключено: %1")
+                            .arg(QString::fromUtf8(ex.what())));
+    }
+}
+
+void MeasureWorker::terminateVnaSoftware()
+{
+    if (!m_c2220 || !m_c2220->connected()) {
+        return;
+    }
+    try {
+        m_c2220->terminate_software();
+    } catch (const std::exception& ex) {
+        emit diagnostic(QStringLiteral("S2VNA не приняла SYST:TERM: %1")
+                            .arg(QString::fromUtf8(ex.what())));
+    }
+    m_lastIdn.clear();
+    emitConnection();
+}
+
 QString MeasureWorker::stateToRussian(afar::RunState state)
 {
     using afar::RunState;

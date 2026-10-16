@@ -822,6 +822,173 @@ std::string selfTestRu(std::string_view id)
     return it == names.end() ? std::string(id) : std::string(it->second);
 }
 
+// -------------------------------------------------------------------- OSD
+
+const std::vector<std::string_view>& osdFieldIds()
+{
+    static const std::vector<std::string_view> ids{"state", "freq", "az", "cls", "snr"};
+    return ids;
+}
+
+std::string osdFieldRu(std::string_view id)
+{
+    static const std::map<std::string_view, std::string_view> names = {
+        {"state", "состояние"},
+        {"freq", "частота видеоприёмника"},
+        {"az", "азимут пеленга"},
+        {"cls", "классификация"},
+        {"snr", "сигнал/шум"},
+    };
+    const auto it = names.find(id);
+    return it == names.end() ? std::string(id) : std::string(it->second);
+}
+
+bool OsdParams::validate(std::string* error) const
+{
+    if (!en && !standard && !src && !fields && !hos && !vos) {
+        setError(error, "OSD: не задан ни один параметр");
+        return false;
+    }
+    if (en && *en != 0 && *en != 1) {
+        setError(error, "OSD: en — 0 или 1");
+        return false;
+    }
+    if (standard && *standard != "PAL" && *standard != "NTSC") {
+        setError(error, "OSD: std — PAL или NTSC");
+        return false;
+    }
+    if (src && *src != "AUTO" && *src != "TEXT") {
+        setError(error, "OSD: src — AUTO или TEXT");
+        return false;
+    }
+    if (fields) {
+        const auto& known = osdFieldIds();
+        std::set<std::string> seen;
+        for (const auto& f : *fields) {
+            if (std::find(known.begin(), known.end(), f) == known.end()) {
+                setError(error, "OSD: неизвестное поле «" + f + "»");
+                return false;
+            }
+            if (!seen.insert(f).second) {
+                setError(error, "OSD: поле «" + f + "» повторяется");
+                return false;
+            }
+        }
+    }
+    for (const auto& [value, name] : {std::pair{hos, "hos"}, std::pair{vos, "vos"}}) {
+        if (value && (*value < kOsdOffsetMin || *value > kOsdOffsetMax)) {
+            setError(error, std::string("OSD: ") + name + " — от −32 до +31");
+            return false;
+        }
+    }
+    return true;
+}
+
+nlohmann::json OsdParams::toJson() const
+{
+    json p = json::object();
+    if (en) p["en"] = *en;
+    if (standard) p["std"] = *standard;
+    if (src) p["src"] = *src;
+    if (fields) p["fields"] = *fields;
+    if (hos) p["hos"] = *hos;
+    if (vos) p["vos"] = *vos;
+    return p;
+}
+
+bool OsdParams::fromJson(const nlohmann::json& o, OsdParams& out, std::string* error)
+{
+    if (!o.is_object()) {
+        setError(error, "OSD: payload не объект");
+        return false;
+    }
+    OsdParams p;
+    const auto readOptInt = [&o](std::string_view key, std::optional<int>& dst) {
+        if (o.find(key) == o.end()) {
+            return true;
+        }
+        std::int64_t v = 0;
+        if (!readInt(o, key, v) || v < -1000 || v > 1000) {
+            return false;
+        }
+        dst = static_cast<int>(v);
+        return true;
+    };
+    const auto readOptString = [&o](std::string_view key, std::optional<std::string>& dst) {
+        if (o.find(key) == o.end()) {
+            return true;
+        }
+        std::string v;
+        if (!readString(o, key, v)) {
+            return false;
+        }
+        dst = std::move(v);
+        return true;
+    };
+    if (!readOptInt("en", p.en) || !readOptInt("hos", p.hos) || !readOptInt("vos", p.vos) ||
+        !readOptInt("los", p.los) || !readOptString("std", p.standard) ||
+        !readOptString("src", p.src)) {
+        setError(error, "OSD: неверный тип параметра");
+        return false;
+    }
+    if (const auto f = o.find("fields"); f != o.end()) {
+        if (!f->is_array()) {
+            setError(error, "OSD: fields — массив");
+            return false;
+        }
+        std::vector<std::string> ids;
+        for (const auto& v : *f) {
+            if (!v.is_string()) {
+                setError(error, "OSD: fields — массив строк");
+                return false;
+            }
+            ids.push_back(v.get<std::string>());
+        }
+        p.fields = std::move(ids);
+    }
+    if (p.los && *p.los != 0 && *p.los != 1) {
+        setError(error, "OSD: los — 0 или 1");
+        return false;
+    }
+    if (!p.validate(error)) {
+        return false;
+    }
+    out = std::move(p);
+    return true;
+}
+
+bool osdTextPayload(int row, int col, std::string_view text, bool ntsc, nlohmann::json& payload,
+                    std::string* error)
+{
+    const int rows = ntsc ? kOsdRowsNtsc : kOsdRowsPal;
+    if (row < 0 || row >= rows) {
+        setError(error, "текст OSD: строка от 0 до " + std::to_string(rows - 1) +
+                            (ntsc ? " (NTSC)" : " (PAL)"));
+        return false;
+    }
+    if (col < 0 || col >= kOsdColumns) {
+        setError(error, "текст OSD: столбец от 0 до 29");
+        return false;
+    }
+    if (text.empty()) {
+        setError(error, "текст OSD: пустая строка");
+        return false;
+    }
+    if (static_cast<int>(text.size()) + col > kOsdColumns) {
+        setError(error, "текст OSD: столбец + длина текста больше 30");
+        return false;
+    }
+    for (const char c : text) {
+        const auto u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u > 0x7E) {
+            setError(error, "текст OSD: только латиница, цифры и знаки ASCII 0x20–0x7E");
+            return false;
+        }
+    }
+    payload = json{{"row", row}, {"col", col}, {"text", std::string(text)}};
+    return true;
+}
+
 // ---------------------------------------------------- полное сканирование
 
 bool SffParams::validate(std::string* error) const

@@ -140,6 +140,7 @@ void BoardParametersPage::requestRead()
         }
     };
     ask(ps::msg::GetState, json::object(), QStringLiteral("Состояние изделия"));
+    ask(ps::msg::GetOsd, json::object(), QStringLiteral("OSD видеоприёмника"));
     // Состояние трансивера, луч и модули PS отдаёт только в SERVICE.
     if (m_session->mode() == ps::Mode::Service) {
         ask(ps::msg::GetTrxStatus, json::object(), QStringLiteral("Трансивер"));
