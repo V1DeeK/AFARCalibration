@@ -61,7 +61,7 @@ public:
         s.kind = CheckKind::TelemetryMode;
         s.expectMode = mode;
         s.phase = phase;
-        s.title = "UDP: телеметрия в режиме " + std::string(toString(mode));
+        s.title = "UDP: получен 10-байтный пакет технического состояния";
         s.msgType = std::string(msg::Telemetry);
         s.section = "5";
         s.proposal = true;
@@ -111,7 +111,6 @@ std::string show(const json& v)
 std::vector<CheckStep> serviceCheckSteps()
 {
     Builder b;
-    const AdcParams adc{5'799'936'000, 20'000'000, 30'720'000, 40.0};
     const auto ramp = rampChannels();
     const auto safe = allChannels(0, kCodeMax);
 
@@ -122,7 +121,8 @@ std::vector<CheckStep> serviceCheckSteps()
     b.telemetry(Mode::Idle);
     b.add("коды вне SERVICE — отказ", msg::SetPhaseAtten, Status::NotSupported, "4, 6",
           codesPayload(safe));
-    b.add("АЦП вне SERVICE — отказ", msg::GetAdc, Status::NotSupported, "4, 6");
+    b.add("состояние трансивера вне SERVICE — отказ", msg::GetTrxStatus,
+          Status::NotSupported, "3.6");
     b.add("гетеродин вне SERVICE — отказ", msg::GetLo, Status::NotSupported, "4.5, 6",
           loGetPayload(kLoMixer));
 
@@ -135,23 +135,22 @@ std::vector<CheckStep> serviceCheckSteps()
     b.telemetry(Mode::Service);
 
     b.phase = "Приёмный тракт";
-    b.add("чтение АЦП", msg::GetAdc, Status::Ok, "4.2");
-    b.add("настройка АЦП", msg::SetAdc, Status::Ok, "4.2", adc.toJson());
-    // lo может сдвинуться на шаг сетки синтезатора (§4.2), его не сравниваем.
-    b.add("АЦП прочитан тем же", msg::GetAdc, Status::Ok, "4.2").expectFields =
-        json{{"bw", adc.bw}, {"fs", adc.fs}, {"gain", adc.gain}};
-    b.add("lo = 0 — отказ", msg::SetAdc, Status::InvalidArgument, "4.2",
-          json{{"lo", 0}, {"bw", adc.bw}, {"fs", adc.fs}, {"gain", adc.gain}});
+    b.add("состояние трансивера", msg::GetTrxStatus, Status::Ok, "3.6.1.16")
+        .expectKeys = {"spi_ok", "temp"};
+    b.add("состояние ПЛИС", msg::GetPlStatus, Status::Ok, "3.6.1.17")
+        .expectKeys = {"adc_overrun", "fft0_error", "fft1_error"};
+    b.add("температуры РЧ-модулей", msg::GetRfmTelemetry, Status::Ok, "3.6.1.4")
+        .expectKeys = {"temp"};
 
     b.phase = "Луч";
     b.add("азимут луча", msg::SetBeamAzimuth, Status::Ok, "4.3", json{{"az", 12.5}});
     b.add("луч задан азимутом", msg::GetBeam, Status::Ok, "4.3").expectFields =
-        json{{"src", "azimuth"}, {"az", 12.5}};
+        json{{"src", "AZIMUTH"}, {"az", 12.5}};
     b.add("азимут вне ±30° — отказ", msg::SetBeamAzimuth, Status::InvalidArgument, "4.3",
           json{{"az", 45.0}});
     b.add("луч из таблицы", msg::SetBeam, Status::Ok, "4.3", json{{"beam", 7}});
     b.add("луч задан таблицей", msg::GetBeam, Status::Ok, "4.3").expectFields =
-        json{{"src", "table"}, {"beam", 7}};
+        json{{"src", "TABLE"}, {"beam", 7}};
 
     b.phase = "Коды решётки";
     b.add("чтение кодов из микросхем", msg::GetPhaseAtten, Status::Ok, "4.1");
@@ -159,7 +158,7 @@ std::vector<CheckStep> serviceCheckSteps()
           codesPayload(ramp))
         .expectCodes = ramp;
     b.add("коды прочитаны те же", msg::GetPhaseAtten, Status::Ok, "4.1").expectCodes = ramp;
-    b.add("луч задан кодами", msg::GetBeam, Status::Ok, "4.3").expectFields = json{{"src", "codes"}};
+    b.add("луч задан кодами", msg::GetBeam, Status::Ok, "4.3").expectFields = json{{"src", "CODES"}};
     {
         json bad = codesPayload(safe);
         bad["ch"].erase(bad["ch"].size() - 1);
@@ -248,7 +247,7 @@ std::vector<CheckStep> serviceCheckSteps()
         CheckStep s;
         s.kind = CheckKind::TelemetryClean;
         s.phase = b.phase;
-        s.title = "UDP: без потерь и битых датаграмм за проверку";
+        s.title = "UDP: без битых датаграмм за проверку";
         s.msgType = std::string(msg::Telemetry);
         s.section = "5";
         s.proposal = true;
@@ -324,9 +323,8 @@ CheckResult evaluate(const CheckStep& step, Status status, const json& payload)
 
 CheckResult evaluateTelemetry(const CheckStep& step, const Telemetry& t)
 {
-    if (t.mode != step.expectMode) {
-        return {CheckVerdict::Fail, "в телеметрии режим " + std::string(toString(t.mode)) + ", ожидали " +
-                                        std::string(toString(step.expectMode))};
+    if (step.kind != CheckKind::TelemetryMode || t.devices.empty()) {
+        return {CheckVerdict::Fail, "нет 10-байтного пакета состояния"};
     }
     return {CheckVerdict::Pass, {}};
 }
@@ -345,10 +343,10 @@ std::string verdictRu(CheckVerdict v)
 std::string expectedText(const CheckStep& step)
 {
     if (step.kind == CheckKind::TelemetryMode) {
-        return "датаграмма, mode=" + std::string(toString(step.expectMode));
+        return "10-байтная датаграмма";
     }
     if (step.kind == CheckKind::TelemetryClean) {
-        return "потеряно 0, отброшено 0";
+        return "отброшено 0";
     }
     std::string s(toString(step.expectStatus));
     for (const auto& [key, want] : step.expectFields.items()) {

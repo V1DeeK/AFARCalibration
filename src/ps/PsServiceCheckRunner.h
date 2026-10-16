@@ -61,7 +61,6 @@ private:
     QDateTime m_startedAt;
     QDateTime m_finishedAt;
     QString m_finishReason;
-    quint64 m_lostAtStart = 0;
     quint64 m_rejectedAtStart = 0;
     bool m_waitTelemetry = false;
     QString m_lastTelemetry;

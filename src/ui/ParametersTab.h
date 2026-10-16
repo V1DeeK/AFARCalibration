@@ -41,7 +41,6 @@ public:
 
 private:
     QWidget* buildModeBox();
-    QWidget* buildAdcBox();
     QWidget* buildBeamBox();
     QWidget* buildCodesPage();
     QWidget* buildBottomTabs();
@@ -50,7 +49,6 @@ private:
     void onTelemetry();
     void send(std::string_view msgType, const nlohmann::json& payload = nlohmann::json::object());
     void writeCodes();
-    void applyAdc();
     void showCodes(const std::vector<afar::ps::ChannelCodes>& codes);
     void refreshMode();
     void refreshEnabled();
@@ -72,11 +70,6 @@ private:
     QSpinBox* m_fillPh = nullptr;
     QSpinBox* m_fillAtt = nullptr;
 
-    QDoubleSpinBox* m_adcLoMhz = nullptr;
-    QDoubleSpinBox* m_adcBwMhz = nullptr;
-    QDoubleSpinBox* m_adcFsMhz = nullptr;
-    QDoubleSpinBox* m_adcGain = nullptr;
-    QLabel* m_adcActual = nullptr;
 
     QDoubleSpinBox* m_beamAz = nullptr;
     QSpinBox* m_beamId = nullptr;

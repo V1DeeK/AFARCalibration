@@ -168,7 +168,9 @@ void PlutoCaptureThread::run() {
 
         if (state_.is_connected.load() && rx_buf_) {
             uint64_t new_freq = state_.center_freq_hz.load();
-            if (new_freq != current_freq_) {
+            if (state_.ps_iio_read_only.load()) {
+                state_.center_freq_hz.store(current_freq_);
+            } else if (new_freq != current_freq_) {
                 struct iio_channel* lo_chan = iio_device_find_channel(phy_dev_, "altvoltage0", true);
                 if (lo_chan) {
                     iio_channel_attr_write_longlong(lo_chan, "frequency", new_freq);
@@ -179,7 +181,7 @@ void PlutoCaptureThread::run() {
             // Усиление, в отличие от частоты дискретизации и полосы, меняется на
             // ходу: буфер пересоздавать не нужно, поэтому и переподключения по
             // нему нет — ползунок действует сразу.
-            apply_gain(false);
+            if (!state_.ps_iio_read_only.load()) apply_gain(false);
             poll_gain_readback();
 
             ssize_t n_bytes = iio_buffer_refill(rx_buf_);
@@ -255,13 +257,42 @@ bool PlutoCaptureThread::configure_device() {
 
     // Первым делом: инверсия Rx2 требует переинициализации чипа и снесла бы
     // всё, что записано ниже.
-    apply_phase_inversion();
+    const bool read_only = state_.ps_iio_read_only.load();
+    if (!read_only) apply_phase_inversion();
 
     // Каналы ищем сразу после инверсии и до первой записи: указатели живут в
     // контексте libiio и переинициализацию чипа переживают, а вот всё, что
     // настраивается ниже, без них — тихий no-op.
     phy_chn0_ = iio_device_find_channel(phy_dev_, "voltage0", false);
     phy_chn1_ = iio_device_find_channel(phy_dev_, "voltage1", false);
+
+    if (read_only) {
+        long long actual_fs = 0;
+        if ((!phy_chn0_ || iio_channel_attr_read_longlong(phy_chn0_, "sampling_frequency", &actual_fs) < 0) &&
+            iio_device_attr_read_longlong(rx_dev_, "sampling_frequency", &actual_fs) < 0) {
+            cerr << "[pluto] read-only IQ: sampling_frequency unavailable\n";
+            return false;
+        }
+        if (actual_fs <= 0 || actual_fs > UINT32_MAX) return false;
+        fs = static_cast<uint32_t>(actual_fs);
+        current_sample_rate_ = fs;
+        state_.sample_rate_hz.store(fs);
+        if (phy_chn0_) {
+            long long actual_bw = 0;
+            if (iio_channel_attr_read_longlong(phy_chn0_, "rf_bandwidth", &actual_bw) == 0 &&
+                actual_bw > 0 && actual_bw <= UINT32_MAX) {
+                state_.bandwidth_hz.store(static_cast<uint32_t>(actual_bw));
+            }
+        }
+        auto* lo = iio_device_find_channel(phy_dev_, "altvoltage0", true);
+        long long actual_lo = 0;
+        if (!lo || iio_channel_attr_read_longlong(lo, "frequency", &actual_lo) < 0 || actual_lo <= 0) {
+            cerr << "[pluto] read-only IQ: receiver frequency unavailable\n";
+            return false;
+        }
+        current_freq_ = static_cast<uint64_t>(actual_lo);
+        state_.center_freq_hz.store(current_freq_);
+    } else {
 
     // Двухканальный режим — это сравнение трактов между собой (пеленг, кросс-фаза),
     // а АРУ ведёт каналы независимо и разводит их по индексам таблицы усиления.
@@ -310,6 +341,7 @@ bool PlutoCaptureThread::configure_device() {
     // усиления и пороги АРУ чип пересчитывает под текущую конфигурацию тракта,
     // а сама таблица у AD9361 своя на каждый диапазон LO.
     apply_gain(true);
+    }
 
     // --- Изменение: ad9361_set_bb_rate больше не требуется, ---
     // --- так как sampling_frequency уже записана в каналы выше ---

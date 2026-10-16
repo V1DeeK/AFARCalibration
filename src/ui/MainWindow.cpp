@@ -421,6 +421,7 @@ void MainWindow::updateSpectrumFromPs()
         return;
     }
     auto& spectrum = m_spectrumEngine->state();
+    spectrum.ps_iio_read_only.store(true);
     const std::string uri = "ip:" + m_psSession->link()->host().toStdString();
     {
         std::lock_guard<std::mutex> lock(spectrum.connection_mutex);

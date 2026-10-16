@@ -78,7 +78,6 @@ private:
 
     afar::ps::Mode m_mode = afar::ps::Mode::Idle;
     std::array<afar::ps::ChannelCodes, afar::ps::kChannels> m_codes{};
-    afar::ps::AdcParams m_adc{5'800'000'000LL, 20'000'000, 30'720'000, 40.0};
     std::string m_beamSrc = "none";
     double m_beamAz = 0.0;
     int m_beam = 0;

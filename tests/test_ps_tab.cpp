@@ -201,20 +201,21 @@ TEST_CASE("Установка параметров: подключение, се
     static_cast<QSpinBox*>(codes->cellWidget(4, 1))->setValue(42);
     static_cast<QSpinBox*>(codes->cellWidget(4, 2))->setValue(18);
     writeCodes->click();
-    REQUIRE(waitFor([&] { return codes->item(4, 3)->text() == QStringLiteral("42"); }));
-    CHECK(codes->item(4, 4)->text() == QStringLiteral("18"));
+    REQUIRE(waitFor([&] { return codes->item(4, 4)->text() == QStringLiteral("42"); }));
+    CHECK(codes->item(4, 5)->text() == QStringLiteral("18"));
+    CHECK(codes->item(4, 6)->text() == QStringLiteral("1"));
 
     // В таблице обмена видно и отправленное, и пришедшее — по TCP и по UDP.
     auto* ex = ui.parameters->exchangeTable();
     waitFor([&] { return false; }, 250);  // таблица обновляется пачкой раз в 100 мс
-    CHECK(countRows(ex, QStringLiteral("TCP"), QStringLiteral("ушло"), QStringLiteral("set_phase_atten")) == 1);
-    CHECK(countRows(ex, QStringLiteral("TCP"), QStringLiteral("пришло"), QStringLiteral("set_phase_atten")) == 1);
+    CHECK(countRows(ex, QStringLiteral("TCP"), QStringLiteral("ушло"), QStringLiteral("set_rfm_params")) == 1);
+    CHECK(countRows(ex, QStringLiteral("TCP"), QStringLiteral("пришло"), QStringLiteral("set_rfm_params")) == 1);
     CHECK(countRows(ex, QStringLiteral("TCP"), QStringLiteral("ушло"), QStringLiteral("hello")) == 1);
     REQUIRE(waitFor([&] {
-        return countRows(ex, QStringLiteral("UDP"), QStringLiteral("пришло"), QStringLiteral("telemetry")) >= 2;
+        return countRows(ex, QStringLiteral("UDP"), QStringLiteral("пришло"), QStringLiteral("UDP")) >= 2;
     }));
     for (int row = 0; row < ex->rowCount(); ++row) {
-        if (ex->item(row, 3)->text() == QStringLiteral("set_phase_atten") &&
+        if (ex->item(row, 3)->text() == QStringLiteral("set_rfm_params") &&
             ex->item(row, 2)->text().contains(QStringLiteral("пришло"))) {
             CHECK(ex->item(row, 5)->text() == QStringLiteral("OK"));
             CHECK(ex->item(row, 6)->text().contains(QStringLiteral("\"ph\":42")));
@@ -222,7 +223,7 @@ TEST_CASE("Установка параметров: подключение, се
     }
     // Та же связь видна и в журнале «Тестового прогона», а счётчики журнала на «Подключении» растут.
     auto* journal = child<QTableWidget>(*ui.testRun, "testRunJournal");
-    CHECK(countRows(journal, QStringLiteral("TCP"), QStringLiteral("ушло"), QStringLiteral("set_phase_atten")) == 1);
+    CHECK(countRows(journal, QStringLiteral("TCP"), QStringLiteral("ушло"), QStringLiteral("set_rfm_params")) == 1);
     CHECK(child<StatTile>(*ui.connection, "psTileTcpOut")->value().toInt() >= 3);
     CHECK(child<StatTile>(*ui.connection, "psTileTcpIn")->value().toInt() >= 3);
     REQUIRE(waitFor([&] { return child<StatTile>(*ui.connection, "psTileUdpIn")->value().toInt() >= 2; }));
@@ -593,7 +594,7 @@ TEST_CASE("Приёмка PS проверяет TCP и UDP и проходит �
     REQUIRE(f.open(QIODevice::ReadOnly));
     const QString md = QString::fromUtf8(f.readAll());
     CHECK(md.contains(QStringLiteral("пройдено %1 из %1").arg(runner->steps().size())));
-    CHECK(md.contains(QStringLiteral("UDP: телеметрия в режиме SERVICE")));
+    CHECK(md.contains(QStringLiteral("UDP: получен 10-байтный пакет технического состояния")));
     CHECK(child<QPushButton>(*ui.connection, "psPacketSend")->isEnabled());
 }
 
@@ -745,7 +746,7 @@ TEST_CASE("Тестовый прогон: стресс-тест TCP и пров�
     const QString summary = ui.testRun->stress()->summary();
     INFO(summary.toStdString());
     CHECK(summary.contains(QStringLiteral("отправлено 30 из 30")));
-    CHECK(summary.contains(QStringLiteral("OK 4")));  // get_state и get_sff_parameters вне режима — отказы
+    CHECK(summary.contains(QStringLiteral("OK 3")));  // число зависит от набора отмеченных команд
     CHECK(summary.contains(QStringLiteral("нет ответа 0")));
 
     ui.testRun->startUdpCheck(2);
@@ -835,7 +836,7 @@ TEST_CASE("Журнал обмена: выбранное сообщение ви
     CHECK(detail->toPlainText().contains(QStringLiteral("\"msg_type\": \"hello\"")));
 }
 
-TEST_CASE("UDP: телеметрия реальной PS без режима считается принятой", "[ps][ui][udp]")
+TEST_CASE("UDP: 10-байтное техническое состояние принимается", "[ps][ui][udp]")
 {
     app();
     TestPsServer server;
@@ -845,12 +846,9 @@ TEST_CASE("UDP: телеметрия реальной PS без режима с�
     connectUi(ui, server);
     const quint64 before = ui.session->link()->telemetryPackets();
     QUdpSocket sender;
-    const std::string dg =
-        R"({"msg_type":"telemetry","msg_class":"event","msg_count":10,"payload":{"cpu_cores":[87.0,1.0],"cpu_load":44.0,"temp":63.6,"voltages":{"vccaux":1.797}}})";
+    const QByteArray packet(10, char(0xff));
     for (int i = 0; i < 3; ++i) {
-        const std::string one = dg + "\n";
-        sender.writeDatagram(one.data(), static_cast<qint64>(one.size()), QHostAddress::LocalHost,
-                             ui.session->link()->telemetryPort());
+        sender.writeDatagram(packet, QHostAddress::LocalHost, ui.session->link()->telemetryPort());
     }
     REQUIRE(waitFor([&] { return ui.session->link()->telemetryPackets() >= before + 1; }));
     // Плитка «UDP принято» обновляется вместе с пакетами.
@@ -874,14 +872,14 @@ TEST_CASE("Параметры платы по PS: вне сервисного р
     REQUIRE(waitFor([&] { return !page.busy(); }, 4000));
     CHECK(output->toPlainText().contains(QStringLiteral("Связь: 127.0.0.1")));
     CHECK(output->toPlainText().contains(QStringLiteral("только в сервисном режиме")));
-    CHECK_FALSE(output->toPlainText().contains(QStringLiteral("\nАЦП\n")));
+    CHECK_FALSE(output->toPlainText().contains(QStringLiteral("\nТрансивер\n")));
 
     child<QPushButton>(*ui.parameters, "psToService")->click();
     REQUIRE(waitFor([&] { return ui.session->mode() == afar::ps::Mode::Service; }));
     page.requestRead();
     REQUIRE(waitFor([&] { return !page.busy(); }, 4000));
     const QString text = output->toPlainText();
-    CHECK(text.contains(QStringLiteral("\nАЦП\n")));
+    CHECK(text.contains(QStringLiteral("\nТрансивер\n")));
     CHECK(text.contains(QStringLiteral("Луч")));
     CHECK(text.contains(QStringLiteral("Видеоприёмник")));
     CHECK_FALSE(text.contains(QStringLiteral("только в сервисном режиме")));
@@ -926,7 +924,7 @@ TEST_CASE("Модули — гетеродины, смеситель, видео
     waitFor([&] { return false; }, 250);
     bool sentPartial = false;
     for (int row = 0; row < ex->rowCount(); ++row) {
-        if (ex->item(row, 3)->text() == QStringLiteral("set_lo") &&
+        if (ex->item(row, 3)->text() == QStringLiteral("set_lo_params") &&
             ex->item(row, 2)->text().contains(QStringLiteral("ушло"))) {
             const QString j = ex->item(row, 6)->text();
             sentPartial = j.contains(QStringLiteral("\"freq\":5500000000")) &&

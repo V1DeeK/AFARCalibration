@@ -150,7 +150,8 @@ void PsExchangeView::append(const PsSession::LogLine& line)
     }
     ps::Envelope env;
     std::string error;
-    const bool parsed = ps::decodeLine(line.line.toStdString(), env, &error);
+    const bool rawStatus = line.channel == QLatin1String("UDP");
+    const bool parsed = !rawStatus && ps::decodeLine(line.line.toStdString(), env, &error);
     QString status;
     if (parsed) {
         const auto it = env.payload.find("status");
@@ -168,12 +169,14 @@ void PsExchangeView::append(const PsSession::LogLine& line)
         line.time.toString(QStringLiteral("HH:mm:ss.zzz")),
         line.channel,
         line.outgoing ? QStringLiteral("→ ушло") : QStringLiteral("← пришло"),
-        parsed ? QString::fromStdString(env.msg_type) : QStringLiteral("не разобрано"),
+        rawStatus ? QStringLiteral("UDP") :
+                    (parsed ? QString::fromStdString(env.msg_type) : QStringLiteral("не разобрано")),
         parsed ? QString::number(env.msg_count) : QString(),
-        parsed ? status : QString::fromStdString(error),
+        rawStatus ? QStringLiteral("10 байт") :
+                    (parsed ? status : QString::fromStdString(error)),
         line.line,
     };
-    const bool bad = !parsed || (!status.isEmpty() && status != QLatin1String("OK"));
+    const bool bad = (!rawStatus && !parsed) || (!status.isEmpty() && status != QLatin1String("OK"));
     for (int col = 0; col < ColCount; ++col) {
         auto* item = new QTableWidgetItem(cells[col]);
         if (col == ColJson) {

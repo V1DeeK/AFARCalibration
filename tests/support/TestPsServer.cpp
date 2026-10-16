@@ -94,7 +94,7 @@ void TestPsServer::resetService()
     for (int i = 0; i < ps::kChannels; ++i) {
         m_codes[static_cast<std::size_t>(i)] = {i + 1, 0, 0};
     }
-    m_beamSrc = "none";
+    m_beamSrc = "NONE";
 }
 
 void TestPsServer::onNewConnection()
@@ -286,11 +286,12 @@ void TestPsServer::handle(const ps::Envelope& cmd)
     }
 
     const bool serviceCommand =
-        t == ps::msg::SetPhaseAtten || t == ps::msg::GetPhaseAtten || t == ps::msg::SetAdc ||
-        t == ps::msg::GetAdc || t == ps::msg::SetBeamAzimuth || t == ps::msg::SetBeam ||
+        t == ps::msg::SetPhaseAtten || t == ps::msg::GetPhaseAtten ||
+        t == ps::msg::SetBeamAzimuth || t == ps::msg::SetBeam ||
         t == ps::msg::GetBeam || t == ps::msg::Rs485Send || t == ps::msg::SetLo ||
         t == ps::msg::GetLo || t == ps::msg::SetMixer || t == ps::msg::GetMixer ||
-        t == ps::msg::SetVideo || t == ps::msg::GetVideo;
+        t == ps::msg::SetVideo || t == ps::msg::GetVideo || t == ps::msg::GetRfmTelemetry ||
+        t == ps::msg::GetTrxStatus || t == ps::msg::GetPlStatus;
     if (!serviceCommand) {
         reply(cmd, ps::Status::NotSupported);
         return;
@@ -309,29 +310,25 @@ void TestPsServer::handle(const ps::Envelope& cmd)
         for (const auto& c : ch) {
             m_codes[static_cast<std::size_t>(c.n - 1)] = c;
         }
-        m_beamSrc = "codes";
+        m_beamSrc = "CODES";
         reply(cmd, ps::Status::Ok, channelsJson());
     } else if (t == ps::msg::GetPhaseAtten) {
         reply(cmd, ps::Status::Ok, channelsJson());
-    } else if (t == ps::msg::SetAdc) {
-        ps::AdcParams adc;
-        if (!ps::AdcParams::fromJson(in, adc)) {
-            reply(cmd, ps::Status::InvalidArgument);
-            return;
-        }
-        // Сетка синтезатора 1024 Гц: фактическая lo может отличаться от заданной.
-        adc.lo = adc.lo / 1024 * 1024;
-        m_adc = adc;
-        reply(cmd, ps::Status::Ok, m_adc.toJson());
-    } else if (t == ps::msg::GetAdc) {
-        reply(cmd, ps::Status::Ok, m_adc.toJson());
+    } else if (t == ps::msg::GetRfmTelemetry) {
+        reply(cmd, ps::Status::Ok, json{{"temp", json::array({34.1, 35.2, 36.3, 37.4})}});
+    } else if (t == ps::msg::GetTrxStatus) {
+        reply(cmd, ps::Status::Ok, json{{"spi_ok", 1}, {"bbpll_lock", 1}, {"rx_lo_lock", 1},
+                                         {"cal_done", 1}, {"if_ok", 1}, {"pn_err", 0},
+                                         {"adc_ovr", 0}, {"dma_ovf", 0}, {"temp", 41.5}});
+    } else if (t == ps::msg::GetPlStatus) {
+        reply(cmd, ps::Status::Ok, json{{"adc_overrun", 0}, {"fft0_error", 0}, {"fft1_error", 0}});
     } else if (t == ps::msg::SetBeamAzimuth) {
         const auto az = in.find("az");
         if (az == in.end() || !az->is_number() || std::fabs(az->get<double>()) > ps::kAzimuthLimitDeg) {
             reply(cmd, ps::Status::InvalidArgument);
             return;
         }
-        m_beamSrc = "azimuth";
+        m_beamSrc = "AZIMUTH";
         m_beamAz = az->get<double>();
         reply(cmd, ps::Status::Ok, json{{"az", m_beamAz}});
     } else if (t == ps::msg::SetBeam) {
@@ -341,14 +338,14 @@ void TestPsServer::handle(const ps::Envelope& cmd)
             reply(cmd, ps::Status::InvalidArgument);
             return;
         }
-        m_beamSrc = "table";
+        m_beamSrc = "TABLE";
         m_beam = beam->get<int>();
         reply(cmd, ps::Status::Ok, json{{"beam", m_beam}});
     } else if (t == ps::msg::GetBeam) {
         json p{{"src", m_beamSrc}};
-        if (m_beamSrc == "azimuth") {
+        if (m_beamSrc == "AZIMUTH") {
             p["az"] = m_beamAz;
-        } else if (m_beamSrc == "table") {
+        } else if (m_beamSrc == "TABLE") {
             p["beam"] = m_beam;
         }
         reply(cmd, ps::Status::Ok, p);
@@ -483,25 +480,9 @@ void TestPsServer::sendTelemetry()
     if (!m_helloDone || m_tlmPort == 0 || m_tlmOff) {
         return;
     }
-    ps::Envelope e;
-    e.msg_type = std::string(ps::msg::Telemetry);
-    e.msg_class = ps::MsgClass::Event;
-    e.msg_count = m_tlmCount++;
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const std::string state =
-        m_mode == ps::Mode::Idle ? (m_fault ? "FAULT" : "READY") : std::string();
-    e.payload = json{
-        {"time", now},
-        {"uptime", (now - m_startMs) / 1000},
-        {"mode", std::string(ps::toString(m_mode))},
-        {"state", state},
-        {"devices",
-         json{{"power", "OK"}, {"temperature", "OK"}, {"pl", "OK"}, {"synth", "OK"},
-              {"adc", "OK"}, {"beamformer", m_fault ? "FAIL" : "OK"}, {"calibration", "NOT_CHECKED"},
-              {"rs485", "OK"}}},
-        {"temperature", json{{"pl", 48.5}, {"rf", 36.0}}},
-        {"power", json{{"v12", 12.02}, {"v5", 5.01}}},
-    };
-    const std::string dg = ps::encodeDatagram(e);
-    m_udp.writeDatagram(dg.data(), static_cast<qint64>(dg.size()), QHostAddress(m_tlmHost), m_tlmPort);
+    QByteArray packet(10, char(0xff));
+    if (m_fault) {
+        packet[9] = char(0x7f); // бит 79: самопроверка калибровочных таблиц
+    }
+    m_udp.writeDatagram(packet, QHostAddress(m_tlmHost), m_tlmPort);
 }

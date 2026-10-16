@@ -65,7 +65,6 @@ public:
     [[nodiscard]] int pendingCount() const { return static_cast<int>(m_pending.size()); }
 
     [[nodiscard]] quint64 telemetryPackets() const { return m_tlmReceived; }
-    [[nodiscard]] quint64 telemetryLost() const { return m_tlmLost; }
     [[nodiscard]] quint64 telemetryRejected() const { return m_tlmRejected; }
 
 signals:
@@ -131,8 +130,6 @@ private:
     qint64 m_lastRxMs = 0;
     qint64 m_lastTxMs = 0;
     qint64 m_connectStartMs = 0;
-    int m_lastTlmCount = -1;
     quint64 m_tlmReceived = 0;
-    quint64 m_tlmLost = 0;
     quint64 m_tlmRejected = 0;
 };

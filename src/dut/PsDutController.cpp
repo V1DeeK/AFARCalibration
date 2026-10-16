@@ -2,10 +2,11 @@
 
 #include <QDeadlineTimer>
 #include <QHostAddress>
-#include <QNetworkDatagram>
 #include <QTcpSocket>
 #include <QUdpSocket>
 
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace ps = afar::ps;
@@ -182,7 +183,7 @@ void PsDutController::apply(const DutState& state)
     requireOk(reply);
     std::vector<ps::ChannelCodes> got;
     if (!ps::channelsFromJson(reply.payload, got, &error)) {
-        fail("set_phase_atten: " + error);
+        fail("set_rfm_params: " + error);
     }
     readback_ = got;
     active_channel_ = state.channel;
@@ -202,7 +203,7 @@ DutState PsDutController::readback()
         requireOk(reply);
         std::string error;
         if (!ps::channelsFromJson(reply.payload, readback_, &error)) {
-            fail("get_phase_atten: " + error);
+            fail("get_rfm_params: " + error);
         }
     }
     const auto& c = readback_.at(static_cast<std::size_t>(active_channel_ - 1));
@@ -213,49 +214,22 @@ DutState PsDutController::readback()
     return out;
 }
 
-std::optional<double> PsDutController::drainTelemetry()
-{
-    std::optional<double> found;
-    while (udp_ && udp_->hasPendingDatagrams()) {
-        const QNetworkDatagram dg = udp_->receiveDatagram(static_cast<qint64>(ps::kMaxDatagramBytes) + 1);
-        const QByteArray data = dg.data();
-        ps::Envelope env;
-        ps::Telemetry t;
-        if (data.size() > static_cast<qsizetype>(ps::kMaxDatagramBytes) ||
-            !ps::decodeLine(std::string_view(data.constData(), static_cast<std::size_t>(data.size())), env) ||
-            env.msg_type != ps::msg::Telemetry || !ps::Telemetry::fromJson(env.payload, t)) {
-            continue;
-        }
-        for (const auto& [key, value] : t.temperature) {
-            if (options_.temperature_key.empty() || key == options_.temperature_key) {
-                found = value;
-                break;
-            }
-        }
-    }
-    return found;
-}
-
 double PsDutController::temperature_c()
 {
-    if (!udp_) {
-        fail("нет связи");
+    const auto reply = request(ps::msg::GetRfmTelemetry, json::object());
+    requireOk(reply);
+    const auto it = reply.payload.find("temp");
+    if (it == reply.payload.end() || !it->is_array() || it->size() != 4) {
+        fail("get_rfm_telemetry: нужен массив из 4 температур");
     }
-    if (auto t = drainTelemetry()) {
-        last_temperature_ = t;
-        return *t;
-    }
-    // Телеметрия идёт раз в секунду: ждём одну датаграмму не дольше тайм-аута.
-    if (udp_->waitForReadyRead(options_.timeout_ms)) {
-        if (auto t = drainTelemetry()) {
-            last_temperature_ = t;
-            return *t;
+    double hottest = -273.15;
+    for (const auto& value : *it) {
+        if (!value.is_number() || !std::isfinite(value.get<double>())) {
+            fail("get_rfm_telemetry: недопустимая температура");
         }
+        hottest = std::max(hottest, value.get<double>());
     }
-    if (last_temperature_) {
-        return *last_temperature_;
-    }
-    fail("в телеметрии нет температуры");
+    return hottest;
 }
 
 void PsDutController::set_safe_state() noexcept
