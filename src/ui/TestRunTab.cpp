@@ -78,6 +78,7 @@ QWidget* TestRunTab::buildStressPage()
         get(ps::msg::GetLo, ps::loGetPayload(ps::kLoCalibration)),
         get(ps::msg::GetMixer),
         get(ps::msg::GetVideo),
+        get(ps::msg::GetOsd),
         set(ps::msg::SetMode),
         set(ps::msg::Rs485Send),
         set(ps::msg::SetPhaseAtten),
@@ -89,6 +90,9 @@ QWidget* TestRunTab::buildStressPage()
         set(ps::msg::SetSffParameters),
         set(ps::msg::SetSffStart),
         set(ps::msg::SetSffStop),
+        set(ps::msg::SetOsd),
+        set(ps::msg::SetOsdText),
+        set(ps::msg::ClearOsdText),
     };
     auto* split = new QSplitter(Qt::Vertical, this);
     split->setChildrenCollapsible(false);

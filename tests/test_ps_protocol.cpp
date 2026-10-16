@@ -254,6 +254,76 @@ TEST_CASE("PS v8: 10 байт технического состояния, мл�
     CHECK_FALSE(ps::Telemetry::fromStatusBytes(packet.substr(0, 9), t));
 }
 
+TEST_CASE("PS v8: set_osd и get_osd по таблице 13", "[ps][protocol][osd]")
+{
+    ps::OsdParams p;
+    std::string error;
+    CHECK_FALSE(p.validate(&error));
+
+    p.en = 1;
+    p.standard = "PAL";
+    p.src = "AUTO";
+    p.fields = std::vector<std::string>{"state", "freq", "az", "cls", "snr"};
+    p.hos = 0;
+    p.vos = 0;
+    REQUIRE(p.validate(&error));
+    CHECK(p.toJson() == json::parse(R"({"en":1,"std":"PAL","src":"AUTO",
+        "fields":["state","freq","az","cls","snr"],"hos":0,"vos":0})"));
+
+    ps::OsdParams only;
+    only.src = "TEXT";
+    CHECK(only.toJson() == json{{"src", "TEXT"}});
+
+    ps::OsdParams bad = p;
+    bad.hos = 32;
+    CHECK_FALSE(bad.validate(&error));
+    bad = p;
+    bad.vos = -33;
+    CHECK_FALSE(bad.validate(&error));
+    bad = p;
+    bad.standard = "SECAM";
+    CHECK_FALSE(bad.validate(&error));
+    bad = p;
+    bad.fields = std::vector<std::string>{"state", "state"};
+    CHECK_FALSE(bad.validate(&error));
+    bad = p;
+    bad.fields = std::vector<std::string>{"rssi"};
+    CHECK_FALSE(bad.validate(&error));
+
+    // Пример ответа из v8 п. 3.3.1.1.
+    const json reply = json::parse(R"({"status":"OK","en":1,"std":"PAL","src":"AUTO",
+        "fields":["state","freq","az","cls","snr"],"hos":0,"vos":0,"los":0})");
+    ps::OsdParams got;
+    REQUIRE(ps::OsdParams::fromJson(reply, got, &error));
+    CHECK(got.los == 0);
+    CHECK(got.fields->size() == 5);
+    CHECK_FALSE(ps::OsdParams::fromJson(json{{"en", 1}, {"los", 2}}, got));
+    CHECK_FALSE(ps::OsdParams::fromJson(json{{"fields", "state"}}, got));
+}
+
+TEST_CASE("PS v8: set_osd_text по таблице 34", "[ps][protocol][osd]")
+{
+    json payload;
+    std::string error;
+    REQUIRE(ps::osdTextPayload(2, 1, "TEST LO 5800 MHZ", false, payload, &error));
+    CHECK(payload == json{{"row", 2}, {"col", 1}, {"text", "TEST LO 5800 MHZ"}});
+
+    CHECK(ps::osdTextPayload(15, 0, "A", false, payload));
+    CHECK_FALSE(ps::osdTextPayload(15, 0, "A", true, payload, &error));
+    CHECK_THAT(error, ContainsSubstring("NTSC"));
+    CHECK(ps::osdTextPayload(12, 0, "A", true, payload));
+    CHECK_FALSE(ps::osdTextPayload(-1, 0, "A", false, payload));
+    CHECK_FALSE(ps::osdTextPayload(0, 30, "A", false, payload));
+    CHECK(ps::osdTextPayload(0, 29, "A", false, payload));
+    CHECK_FALSE(ps::osdTextPayload(0, 29, "AB", false, payload));
+    CHECK(ps::osdTextPayload(0, 0, std::string(30, 'X'), false, payload));
+    CHECK_FALSE(ps::osdTextPayload(0, 0, std::string(31, 'X'), false, payload));
+    CHECK_FALSE(ps::osdTextPayload(0, 0, "", false, payload));
+    CHECK_FALSE(ps::osdTextPayload(0, 0, "Тест", false, payload));
+    CHECK_FALSE(ps::osdTextPayload(0, 0, "A\tB", false, payload));
+    CHECK(ps::osdTextPayload(0, 0, " !~", false, payload));
+}
+
 TEST_CASE("PS: совместимость версий", "[ps][protocol]")
 {
     CHECK(ps::versionsCompatible("1.0", "1.3"));

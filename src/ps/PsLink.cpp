@@ -94,7 +94,8 @@ int PsLink::queueCommand(std::string_view msgType, const nlohmann::json& payload
     Pending p;
     p.msgType = qs(msgType);
     p.msgCount = count;
-    p.deadlineMs = m_clock.elapsed() + m_timeouts.commandMs;
+    p.deadlineMs = m_clock.elapsed()
+                   + (msgType == ps::msg::SetStartTest ? m_timeouts.selfTestMs : m_timeouts.commandMs);
     m_pending.insert(pendingKey(p.msgType, count), p);
     writeEnvelope(ps::makeCommand(msgType, count, payload));
     return count;

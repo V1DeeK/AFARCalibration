@@ -276,6 +276,10 @@ add_library(afar_app_ui STATIC
     ui/TestRunTab.h
     ui/PsModulesPage.cpp
     ui/PsModulesPage.h
+    ui/PsDiagnosticsPage.cpp
+    ui/PsDiagnosticsPage.h
+    ui/PsOsdPage.cpp
+    ui/PsOsdPage.h
     ui/PsPacketPage.cpp
     ui/PsPacketPage.h
     ui/PsServiceCheckPage.cpp

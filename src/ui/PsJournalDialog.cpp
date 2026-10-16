@@ -41,7 +41,8 @@ PsJournalDialog::PsJournalDialog(PsSession* session, QWidget* parent)
                                ps::msg::SetSffParameters, ps::msg::SetSffStart, ps::msg::SetSffStop,
                                ps::msg::GetPhaseAtten, ps::msg::GetRfmTelemetry,
                                ps::msg::GetTrxStatus, ps::msg::GetPlStatus, ps::msg::GetBeam,
-                               ps::msg::GetLo, ps::msg::GetMixer, ps::msg::GetVideo}) {
+                               ps::msg::GetLo, ps::msg::GetMixer, ps::msg::GetVideo,
+                               ps::msg::GetOsd}) {
         m_type->addItem(QString::fromUtf8(t.data(), static_cast<qsizetype>(t.size())));
     }
     m_payload = new QLineEdit(page);

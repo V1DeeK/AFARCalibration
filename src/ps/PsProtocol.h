@@ -48,6 +48,12 @@ inline constexpr std::string_view SetVideo = "set_video_params";
 inline constexpr std::string_view GetVideo = "get_video_params";
 inline constexpr std::string_view GetTrxStatus = "get_trx_status";
 inline constexpr std::string_view GetPlStatus = "get_pl_status";
+inline constexpr std::string_view SetOsd = "set_osd";
+inline constexpr std::string_view GetOsd = "get_osd";
+inline constexpr std::string_view SetOsdText = "set_osd_text";
+inline constexpr std::string_view ClearOsdText = "clear_osd_text";
+inline constexpr std::string_view SetStartTest = "set_start_test";
+inline constexpr std::string_view SetReset = "set_reset";
 inline constexpr std::string_view SetSffParameters = "set_sff_parameters";
 inline constexpr std::string_view GetSffParameters = "get_sff_parameters";
 inline constexpr std::string_view SetSffStart = "set_sff_start";
@@ -229,6 +235,42 @@ struct MixerState {
 
     static bool fromJson(const nlohmann::json& o, MixerState& out, std::string* error = nullptr);
 };
+
+// ------------------------------------------------------- OSD (v8 п. 3.3, 3.6.1.14)
+
+inline constexpr int kOsdColumns = 30;
+inline constexpr int kOsdRowsPal = 16;
+inline constexpr int kOsdRowsNtsc = 13;
+inline constexpr int kOsdOffsetMin = -32;
+inline constexpr int kOsdOffsetMax = 31;
+
+/// Поля автоматического OSD (таблица 12) в порядке документа.
+const std::vector<std::string_view>& osdFieldIds();
+std::string osdFieldRu(std::string_view id);
+
+/// Параметры set_osd / ответ get_osd (таблица 13). В set_osd уходят только
+/// заданные параметры, остальные PS не меняет.
+struct OsdParams {
+    std::optional<int> en;
+    std::optional<std::string> standard;  ///< поле "std": "PAL" или "NTSC"
+    std::optional<std::string> src;  ///< "AUTO" или "TEXT"
+    std::optional<std::vector<std::string>> fields;
+    std::optional<int> hos;
+    std::optional<int> vos;
+    std::optional<int> los;  ///< только в ответе: 1 — нет видеосигнала
+
+    /// Хотя бы один параметр, значения в пределах таблицы 13.
+    [[nodiscard]] bool validate(std::string* error = nullptr) const;
+    /// Только заданные параметры, без los.
+    [[nodiscard]] nlohmann::json toJson() const;
+    /// Неизвестные ключи пропускаются; заданные проверяются по таблице 13.
+    static bool fromJson(const nlohmann::json& o, OsdParams& out, std::string* error = nullptr);
+};
+
+/// set_osd_text (таблица 34): строка от 0 до 15 (PAL) или 12 (NTSC), столбец 0…29,
+/// ASCII 0x20–0x7E, col + длина ≤ 30.
+bool osdTextPayload(int row, int col, std::string_view text, bool ntsc, nlohmann::json& payload,
+                    std::string* error = nullptr);
 
 // ------------------------------------------------------------- телеметрия
 
