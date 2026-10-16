@@ -15,6 +15,7 @@ class ConnectionTab;
 class ParametersTab;
 class PsServiceCheckPage;
 class PsSession;
+class S2VnaLauncher;
 class SpectrumOpenGLWidget;
 class TestRunTab;
 class QTabWidget;
@@ -122,6 +123,9 @@ private:
     void loadExampleDefaults();
     void refreshThemeButton();
     void beginVnaProbe(bool measureAfterSuccess);
+    void onS2VnaLaunchFinished(bool ok, const QString& message);
+    /// SYST:TERM своей копии S2VNA и ожидание выхода (чужую S2VNA не трогаем).
+    void stopOwnedS2Vna(bool sendTerminate);
     void setOperationProgress(const QString& text, qint64 completed, qint64 total);
     void updateModuleStatus();
     void updateSpectrumFromPs();
@@ -151,6 +155,7 @@ private:
 
     QThread* m_thread = nullptr;
     MeasureWorker* m_worker = nullptr;
+    S2VnaLauncher* m_s2vna = nullptr;
     int m_state = 0;
     bool m_vnaConnected = false;
     bool m_measureAfterProbe = false;

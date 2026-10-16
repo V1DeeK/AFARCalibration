@@ -215,6 +215,19 @@ target_include_directories(afar_test_ps_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(afar_test_ps_server PUBLIC afar_ps_protocol Qt6::Network)
 afar_enable_warnings(afar_test_ps_server)
 
+# Скрытый запуск S2VNA: вместо S2VNA — тестовая подмена с теми же ключами.
+add_executable(afar_fake_s2vna support/FakeS2Vna.cpp)
+target_link_libraries(afar_fake_s2vna PRIVATE Qt6::Network)
+afar_enable_warnings(afar_fake_s2vna)
+add_executable(test_s2vna_launcher test_s2vna_launcher.cpp)
+target_link_libraries(test_s2vna_launcher PRIVATE Catch2::Catch2WithMain afar_app_ui)
+target_compile_definitions(test_s2vna_launcher PRIVATE
+    "AFAR_FAKE_S2VNA=\"$<TARGET_FILE:afar_fake_s2vna>\"")
+add_dependencies(test_s2vna_launcher afar_fake_s2vna)
+afar_enable_warnings(test_s2vna_launcher)
+add_test(NAME s2vna_launcher COMMAND test_s2vna_launcher)
+set_tests_properties(s2vna_launcher PROPERTIES TIMEOUT 120)
+
 add_executable(test_ps_protocol test_ps_protocol.cpp)
 target_link_libraries(test_ps_protocol PRIVATE Catch2::Catch2WithMain afar_ps_protocol)
 afar_enable_warnings(test_ps_protocol)

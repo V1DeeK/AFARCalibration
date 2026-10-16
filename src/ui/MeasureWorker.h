@@ -101,6 +101,10 @@ public slots:
     void calibrateOnePort(int step, int port);
     /// Выбор подтверждённого документацией комплекта мер S2VNA 1..64.
     void selectCalibrationKit(int index);
+    /// Показать/убрать окно S2VNA (SYST:SHOW / SYST:HIDE), например на время калибровки.
+    void setVnaWindowVisible(bool visible);
+    /// SYST:TERM для копии S2VNA, запущенной программой; вызывается перед выходом.
+    void terminateVnaSoftware();
     void shutdown();
 
 signals:

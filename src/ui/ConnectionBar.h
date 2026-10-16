@@ -3,6 +3,7 @@
 #include <QFrame>
 #include <QStringList>
 
+class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
@@ -54,6 +55,11 @@ public:
     [[nodiscard]] int vnaConnectTimeoutMs() const;
     [[nodiscard]] int vnaSweepTimeoutMs() const;
     [[nodiscard]] int vnaMeasureRetries() const;
+    /// Запускать S2VNA скрыто самой программой (Socket/Demo на этом ПК).
+    [[nodiscard]] bool s2vnaAutoStart() const;
+    [[nodiscard]] QString s2vnaPath() const;
+    /// Кнопка «Показать окно S2VNA» доступна только при живой связи.
+    void setS2VnaWindowControlEnabled(bool enabled);
 
     /// DUT-UI-001: 0=DutSimulator, 1=Stub (т.14), 2=боевой (disabled до т.14).
     [[nodiscard]] int controllerBackend() const;
@@ -66,6 +72,7 @@ signals:
     void vnaSettingsChanged();
     void controllerSettingsChanged();
     void probeVnaRequested();
+    void s2vnaWindowVisibilityRequested(bool visible);
     void simulateScpiErrorRequested();
 
 private slots:
@@ -92,6 +99,11 @@ private:
     QSpinBox* m_port = nullptr;
     QLineEdit* m_com = nullptr;
     QPushButton* m_probe = nullptr;
+    QCheckBox* m_s2vnaAutoStart = nullptr;
+    QLineEdit* m_s2vnaPath = nullptr;
+    QPushButton* m_s2vnaBrowse = nullptr;
+    QPushButton* m_s2vnaWindow = nullptr;
+    bool m_s2vnaWindowShown = false;
 
     QComboBox* m_ctrlBackend = nullptr;
     QLineEdit* m_dutHost = nullptr;

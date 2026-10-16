@@ -75,7 +75,7 @@ int main(int argc, char* argv[])
     if (autoExitValid && autoExitMs > 0)
         QTimer::singleShot(autoExitMs, &app, &QCoreApplication::quit);
 
-    // S2VNA всегда запускает и настраивает оператор; приложение — только SCPI-клиент.
+    // S2VNA на этом ПК запускает скрыто MainWindow (S2VnaLauncher); приложение — SCPI-клиент.
     int result = 0;
     {
         SpectrumEngine spectrumEngine;

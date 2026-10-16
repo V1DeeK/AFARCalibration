@@ -242,6 +242,8 @@ add_library(afar_app_ui STATIC
     ui/MainWindow.h
     ui/ConnectionBar.cpp
     ui/ConnectionBar.h
+    ui/S2VnaLauncher.cpp
+    ui/S2VnaLauncher.h
     ui/MeasureTab.cpp
     ui/MeasureTab.h
     ui/S21PlotWidget.cpp
