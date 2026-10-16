@@ -112,7 +112,7 @@ TEST_CASE("PS-контроллер: SERVICE, коды активного кан�
     CHECK(rb.phase_code == 42);
 
     const double t = dut.temperature_c();
-    CHECK(t > 0.0);
+    CHECK(t == 37.4); // максимум из четырёх РЧ-модулей, безопасный для контроля нагрева
 
     dut.set_safe_state();
     const auto safe = sim.call([](TestPsServer& s) { return s.codes(); });

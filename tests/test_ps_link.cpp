@@ -141,7 +141,7 @@ TEST_CASE("PS-связь: коды решётки записываются и ч
     CHECK(sim.codes()[0].ph == codes[0].ph);
 }
 
-TEST_CASE("PS-связь: АЦП и rs485_send", "[ps][link]")
+TEST_CASE("PS-связь v8: состояние трансивера и rs485_send", "[ps][link]")
 {
     app();
     TestPsServer sim;
@@ -150,13 +150,9 @@ TEST_CASE("PS-связь: АЦП и rs485_send", "[ps][link]")
     connectToSim(link, sim);
     REQUIRE(await(r, link.sendCommand(ps::msg::SetMode, json{{"mode", "SERVICE"}})));
 
-    ps::AdcParams adc{5'800'000'000LL, 20'000'000, 30'720'000, 40.0};
-    const auto* adcReply = await(r, link.sendCommand(ps::msg::SetAdc, adc.toJson()));
-    REQUIRE(adcReply);
-    ps::AdcParams actual;
-    REQUIRE(ps::AdcParams::fromJson(adcReply->first.payload, actual));
-    CHECK(actual.lo <= adc.lo);
-    CHECK(adc.lo - actual.lo < 1024);
+    const auto* trx = await(r, link.sendCommand(ps::msg::GetTrxStatus));
+    REQUIRE(trx);
+    CHECK(trx->first.payload.value("spi_ok", 0) == 1);
 
     // rs485_send из v2: PS подтверждает передачу байт в линию.
     const auto* sent = await(r, link.sendCommand(ps::msg::Rs485Send, json{{"data", "01A3FF"}}));

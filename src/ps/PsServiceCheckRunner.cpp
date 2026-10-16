@@ -63,7 +63,6 @@ bool PsServiceCheckRunner::start()
     m_startedAt = QDateTime::currentDateTime();
     m_finishedAt = {};
     m_finishReason.clear();
-    m_lostAtStart = m_link->telemetryLost();
     m_rejectedAtStart = m_link->telemetryRejected();
     m_index = 0;
     sendCurrent();
@@ -100,14 +99,12 @@ void PsServiceCheckRunner::sendCurrent()
     }
     if (step.kind == ps::CheckKind::TelemetryClean) {
         out.request = QStringLiteral("счётчики телеметрии");
-        const quint64 lost = m_link->telemetryLost() - m_lostAtStart;
         const quint64 rejected = m_link->telemetryRejected() - m_rejectedAtStart;
-        const QString got = QStringLiteral("принято %1, потеряно %2, отброшено %3")
+        const QString got = QStringLiteral("принято %1, отброшено %2; потери без счётчика неизвестны")
                                 .arg(m_link->telemetryPackets())
-                                .arg(lost)
                                 .arg(rejected);
         ps::CheckResult r{ps::CheckVerdict::Pass, {}};
-        if (lost != 0 || rejected != 0) {
+        if (rejected != 0) {
             r = {ps::CheckVerdict::Fail, got.toStdString()};
         }
         // Результат готов сразу, но следующий шаг — из цикла событий.
@@ -174,10 +171,7 @@ void PsServiceCheckRunner::onTelemetry(const ps::Telemetry& t)
         return;
     }
     const auto& step = m_steps[static_cast<std::size_t>(m_index)];
-    m_lastTelemetry = QStringLiteral("mode=%1, state=%2, принято %3")
-                          .arg(qs(std::string(ps::toString(t.mode))), qs(t.state))
-                          .arg(m_link->telemetryPackets());
-    // Сразу после set_mode может прийти датаграмма со старым режимом — ждём следующую.
+    m_lastTelemetry = QStringLiteral("10 байт, принято %1").arg(m_link->telemetryPackets());
     if (ps::evaluateTelemetry(step, t).verdict != ps::CheckVerdict::Pass) {
         return;
     }
@@ -238,7 +232,7 @@ QString PsServiceCheckRunner::reportMarkdown() const
               .arg(m_steps.size())
               .arg(fail)
               .arg(run);
-    md += QStringLiteral("Контракт: docs/contracts/ps-json-protocol.md. «предл.» — шаг проверяет "
+    md += QStringLiteral("Контракт: docs/contracts/ps-ethernet-v8.md. «предл.» — шаг проверяет "
                          "предложение контракта, ещё не согласованное с разработчиком PS.\n\n");
     md += QStringLiteral("| № | Этап | Проверка | Команда | Ожидали | Получили | Итог | мс |\n");
     md += QStringLiteral("|---|---|---|---|---|---|---|---|\n");

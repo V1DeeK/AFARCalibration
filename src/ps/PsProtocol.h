@@ -1,7 +1,7 @@
 #pragma once
 
 // Обмен с PS изделия: кодирование и разбор сообщений без сети и без GUI.
-// Контракт: docs/contracts/ps-json-protocol.md.
+// Контракт: docs/contracts/ps-ethernet-v8.md.
 
 #include <nlohmann/json.hpp>
 
@@ -34,19 +34,20 @@ inline constexpr std::string_view KeepAlive = "keep_alive";
 inline constexpr std::string_view SetMode = "set_mode";
 inline constexpr std::string_view GetState = "get_state";
 inline constexpr std::string_view Rs485Send = "rs485_send";
-inline constexpr std::string_view SetPhaseAtten = "set_phase_atten";
-inline constexpr std::string_view GetPhaseAtten = "get_phase_atten";
-inline constexpr std::string_view SetAdc = "set_adc";
-inline constexpr std::string_view GetAdc = "get_adc";
+inline constexpr std::string_view SetPhaseAtten = "set_rfm_params";
+inline constexpr std::string_view GetPhaseAtten = "get_rfm_params";
+inline constexpr std::string_view GetRfmTelemetry = "get_rfm_telemetry";
 inline constexpr std::string_view SetBeamAzimuth = "set_beam_azimuth";
 inline constexpr std::string_view SetBeam = "set_beam";
 inline constexpr std::string_view GetBeam = "get_beam";
-inline constexpr std::string_view SetLo = "set_lo";
-inline constexpr std::string_view GetLo = "get_lo";
-inline constexpr std::string_view SetMixer = "set_mixer";
-inline constexpr std::string_view GetMixer = "get_mixer";
-inline constexpr std::string_view SetVideo = "set_video";
-inline constexpr std::string_view GetVideo = "get_video";
+inline constexpr std::string_view SetLo = "set_lo_params";
+inline constexpr std::string_view GetLo = "get_lo_params";
+inline constexpr std::string_view SetMixer = "set_mixer_params";
+inline constexpr std::string_view GetMixer = "get_mixer_params";
+inline constexpr std::string_view SetVideo = "set_video_params";
+inline constexpr std::string_view GetVideo = "get_video_params";
+inline constexpr std::string_view GetTrxStatus = "get_trx_status";
+inline constexpr std::string_view GetPlStatus = "get_pl_status";
 inline constexpr std::string_view SetSffParameters = "set_sff_parameters";
 inline constexpr std::string_view GetSffParameters = "get_sff_parameters";
 inline constexpr std::string_view SetSffStart = "set_sff_start";
@@ -127,6 +128,7 @@ struct ChannelCodes {
     int n = 1;
     int ph = 0;
     int att = 0;
+    int en = 1;
 
     friend bool operator==(const ChannelCodes&, const ChannelCodes&) = default;
 };
@@ -138,17 +140,6 @@ bool channelsFromJson(const nlohmann::json& payload, std::vector<ChannelCodes>& 
 /// Проверка и упорядочение перед отправкой; те же правила, что при разборе.
 bool channelsToJson(const std::vector<ChannelCodes>& channels, nlohmann::json& payload,
                     std::string* error = nullptr);
-
-struct AdcParams {
-    std::int64_t lo = 0;
-    std::int64_t bw = 0;
-    std::int64_t fs = 0;
-    double gain = 0.0;
-
-    [[nodiscard]] bool validate(std::string* error = nullptr) const;
-    [[nodiscard]] nlohmann::json toJson() const;
-    static bool fromJson(const nlohmann::json& o, AdcParams& out, std::string* error = nullptr);
-};
 
 enum class BeamSource { Azimuth, Table, Codes, None };
 
@@ -256,14 +247,18 @@ struct Telemetry {
     bool hasMode = false;
     std::optional<double> cpuLoad;      // %, поле "cpu_load"
     std::vector<double> cpuCores;       // %, поле "cpu_cores"
+    std::array<std::uint8_t, 10> statusBytes{};
 
     /// Принимает любой объект: известные поля разбираются, остальные игнорируются.
     static bool fromJson(const nlohmann::json& o, Telemetry& out, std::string* error = nullptr);
+    /// Протокол v8: 80 флагов, бит 0 — младший бит первого байта.
+    static bool fromStatusBytes(std::string_view bytes, Telemetry& out);
 };
 
 // ------------------------------------------- полное сканирование (§4.6)
 
-inline constexpr int kSffPeriodMaxSec = 3600;
+inline constexpr std::int64_t kSffFrequencyMinHz = 4'900'000'000LL;
+inline constexpr std::int64_t kSffFrequencyMaxHz = 6'000'000'000LL;
 
 /// set_sff_parameters / ответ get_sff_parameters.
 struct SffParams {
@@ -271,9 +266,7 @@ struct SffParams {
     std::int64_t freq_max = 6'000'000'000LL;
     double az_min = -kAzimuthLimitDeg;
     double az_max = kAzimuthLimitDeg;
-    int period = 0;  ///< с; 0 — однократный обзор
-
-    /// Частоты 0 < min < max ≤ 100 ГГц, сектор в ±30° и min < max, период 0…3600.
+    /// Частоты 4,9…6,0 ГГц, сектор в ±30° и min < max.
     [[nodiscard]] bool validate(std::string* error = nullptr) const;
     [[nodiscard]] nlohmann::json toJson() const;
     static bool fromJson(const nlohmann::json& o, SffParams& out, std::string* error = nullptr);

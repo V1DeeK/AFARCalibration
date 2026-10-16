@@ -95,6 +95,7 @@ TEST_CASE("PS: коды 16 каналов", "[ps][protocol]")
     REQUIRE(ps::channelsToJson(allChannels(), payload));
     REQUIRE(payload.at("ch").size() == 16);
     CHECK(payload["ch"][0].at("n") == 1);
+    CHECK(payload["ch"][0].at("en") == 1);
 
     std::vector<ps::ChannelCodes> back;
     REQUIRE(ps::channelsFromJson(payload, back));
@@ -117,33 +118,22 @@ TEST_CASE("PS: коды 16 каналов", "[ps][protocol]")
     ch[3].ph = 64;
     CHECK_FALSE(ps::channelsToJson(ch, payload, &error));
 
+    ch = allChannels();
+    ch[3].en = 2;
+    CHECK_FALSE(ps::channelsToJson(ch, payload, &error));
+
     CHECK_FALSE(ps::channelsFromJson(json{{"ch", json::array({json{{"n", "1"}}})}}, back, &error));
-}
-
-TEST_CASE("PS: параметры АЦП", "[ps][protocol]")
-{
-    const json in = json::parse(R"({"status":"OK","lo":5799998976,"bw":20000000,"fs":30720000,"gain":40})");
-    ps::AdcParams adc;
-    REQUIRE(ps::AdcParams::fromJson(in, adc));
-    CHECK(adc.lo == 5'799'998'976LL);
-    CHECK(adc.gain == 40.0);
-    CHECK(adc.toJson().at("fs") == 30'720'000);
-
-    adc.lo = 0;
-    CHECK_FALSE(adc.validate());
-    adc.lo = 200'000'000'000LL;
-    CHECK_FALSE(adc.validate());
 }
 
 TEST_CASE("PS: состояние луча", "[ps][protocol]")
 {
     ps::BeamState b;
-    REQUIRE(ps::BeamState::fromJson(json{{"src", "azimuth"}, {"az", 12.5}}, b));
+    REQUIRE(ps::BeamState::fromJson(json{{"src", "AZIMUTH"}, {"az", 12.5}}, b));
     CHECK(b.src == ps::BeamSource::Azimuth);
     CHECK(b.az == 12.5);
-    REQUIRE(ps::BeamState::fromJson(json{{"src", "table"}, {"beam", 7}}, b));
+    REQUIRE(ps::BeamState::fromJson(json{{"src", "TABLE"}, {"beam", 7}}, b));
     CHECK(b.beam == 7);
-    CHECK_FALSE(ps::BeamState::fromJson(json{{"src", "AZIMUTH"}}, b));
+    CHECK_FALSE(ps::BeamState::fromJson(json{{"src", "azimuth"}}, b));
 }
 
 TEST_CASE("PS: HEX-строка rs485_send", "[ps][protocol]")
@@ -152,6 +142,22 @@ TEST_CASE("PS: HEX-строка rs485_send", "[ps][protocol]")
     CHECK_FALSE(ps::hexBytesValid(""));
     CHECK_FALSE(ps::hexBytesValid("01A"));
     CHECK_FALSE(ps::hexBytesValid("0G"));
+}
+
+TEST_CASE("PS v8: параметры полного сканирования без period", "[ps][protocol]")
+{
+    ps::SffParams p;
+    REQUIRE(p.validate());
+    CHECK_FALSE(p.toJson().contains("period"));
+    p.freq_min = ps::kSffFrequencyMinHz - 1;
+    CHECK_FALSE(p.validate());
+    p = {};
+    p.freq_max = ps::kSffFrequencyMaxHz + 1;
+    CHECK_FALSE(p.validate());
+    p = {};
+    ps::SffParams parsed;
+    REQUIRE(ps::SffParams::fromJson(p.toJson(), parsed));
+    CHECK(parsed.freq_min == p.freq_min);
 }
 
 TEST_CASE("PS: команды модулей по v3 §2.5.2", "[ps][protocol][modules]")
@@ -232,34 +238,20 @@ TEST_CASE("PS: ответы модулей — примеры из v3", "[ps][pr
     CHECK_FALSE(MixerState::fromJson(nlohmann::json::parse(R"({"ch":[]})"), mix));
 }
 
-TEST_CASE("PS: телеметрия по предложению контракта", "[ps][telemetry]")
+TEST_CASE("PS v8: 10 байт технического состояния, младший бит первым", "[ps][telemetry]")
 {
-    const std::string dg =
-        R"({"msg_type":"telemetry","msg_class":"event","msg_count":201,"payload":{"time":1791484800000,"uptime":3605,"mode":"SERVICE","state":"","devices":{"power":"OK","rs485":"FAIL"},"temperature":{"pl":54.5},"power":{"v12":12.05}}})";
-    ps::Envelope env;
-    REQUIRE(ps::decodeLine(dg, env));
     ps::Telemetry t;
-    REQUIRE(ps::Telemetry::fromJson(env.payload, t));
-    CHECK(t.mode == ps::Mode::Service);
-    REQUIRE(t.devices.size() == 2);
-    CHECK(t.temperature.at(0).second == 54.5);
-    CHECK(t.hasMode);
-    CHECK_FALSE(ps::Telemetry::fromJson(json::array(), t));
-
-    // Реальная PS: другой набор полей, без режима и времени работы — всё равно телеметрия.
-    const std::string real =
-        R"({"msg_type":"telemetry","msg_class":"event","msg_count":196,"payload":{"cpu_cores":[87.0,1.0],"cpu_load":44.0,"temp":63.6,"voltages":{"vccaux":1.797,"vccint":1.022}}})";
-    ps::Envelope renv;
-    REQUIRE(ps::decodeLine(real, renv));
-    ps::Telemetry rt;
-    REQUIRE(ps::Telemetry::fromJson(renv.payload, rt));
-    CHECK_FALSE(rt.hasMode);
-    REQUIRE(rt.cpuLoad.has_value());
-    CHECK(*rt.cpuLoad == 44.0);
-    CHECK(rt.cpuCores.size() == 2);
-    REQUIRE(rt.temperature.size() == 1);
-    CHECK(rt.temperature.at(0).second == 63.6);
-    CHECK(rt.power.size() == 2);
+    std::string packet(10, char(0));
+    packet[0] = char(0x01);  // бит 0 — VCCINT исправен, бит 1 — VCCAUX неисправен
+    packet[9] = char(0x80);  // бит 79 — калибровочные таблицы исправны
+    REQUIRE(ps::Telemetry::fromStatusBytes(packet, t));
+    CHECK(t.statusBytes[0] == 1);
+    CHECK(t.statusBytes[9] == 128);
+    CHECK(t.devices.front().second == ps::DeviceHealth::Ok);
+    CHECK(t.devices[1].second == ps::DeviceHealth::Fail);
+    CHECK(t.devices.back().second == ps::DeviceHealth::Ok);
+    CHECK_FALSE(t.hasMode);
+    CHECK_FALSE(ps::Telemetry::fromStatusBytes(packet.substr(0, 9), t));
 }
 
 TEST_CASE("PS: совместимость версий", "[ps][protocol]")

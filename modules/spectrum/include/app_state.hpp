@@ -63,6 +63,8 @@ struct AppState {
     // закрывает контекст libiio и сбрасывает обратно.
     std::atomic<bool>     disconnect_requested{ false };
     std::atomic<bool>     is_connected     { false };
+    // При подключении через PS сервер IQ доступен только для чтения (протокол v8).
+    std::atomic<bool>     ps_iio_read_only { false };
 
     // Поиск платы по MAC — UI пишет запрос, BoardFinderThread выполняет.
     // Адрес плате выдаёт DHCP и он меняется между загрузками, а MAC постоянный,

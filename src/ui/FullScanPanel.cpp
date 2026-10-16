@@ -10,7 +10,6 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
-#include <QSpinBox>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -30,7 +29,7 @@ void makeFrequency(QWidget* parent, double hz, int unitIndex, QDoubleSpinBox*& v
     value = new QDoubleSpinBox(parent);
     value->setButtonSymbols(QAbstractSpinBox::NoButtons);
     value->setDecimals(3);
-    value->setRange(0.0, double(ps::kFrequencyLimitHz) / kMhz);
+    value->setRange(0.0, double(ps::kSffFrequencyMaxHz) / kMhz);
     unit = new QComboBox(parent);
     unit->addItem(QStringLiteral("МГц"), kMhz);
     unit->addItem(QStringLiteral("ГГц"), kGhz);
@@ -83,12 +82,6 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
     m_azFrom->setObjectName(QStringLiteral("sffAzFrom"));
     m_azTo = degBox(this, ps::kAzimuthLimitDeg);
     m_azTo->setObjectName(QStringLiteral("sffAzTo"));
-    m_period = new QSpinBox(this);
-    m_period->setObjectName(QStringLiteral("sffPeriod"));
-    m_period->setRange(0, ps::kSffPeriodMaxSec);
-    m_period->setSuffix(QStringLiteral(" с"));
-    m_period->setSpecialValueText(QStringLiteral("однократно"));
-    m_period->setButtonSymbols(QAbstractSpinBox::NoButtons);
 
     grid->addWidget(new QLabel(QStringLiteral("Частоты"), this), 0, 0);
     grid->addWidget(m_freqFrom, 0, 1);
@@ -98,8 +91,6 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
     grid->addWidget(new QLabel(QStringLiteral("Сектор"), this), 1, 0);
     grid->addWidget(m_azFrom, 1, 1);
     grid->addWidget(m_azTo, 1, 3);
-    grid->addWidget(new QLabel(QStringLiteral("Период обзора"), this), 2, 0);
-    grid->addWidget(m_period, 2, 1, 1, 2);
     grid->setColumnStretch(5, 1);
     layout->addLayout(grid);
 
@@ -167,7 +158,6 @@ bool FullScanPanel::readParams(ps::SffParams& out, QString* error) const
     p.freq_max = std::llround(toHz(m_freqTo, m_freqToUnit));
     p.az_min = m_azFrom->value();
     p.az_max = m_azTo->value();
-    p.period = m_period->value();
     std::string why;
     if (!p.validate(&why)) {
         if (error) {
@@ -269,9 +259,6 @@ void FullScanPanel::refreshParams()
     }
     if (!m_azTo->hasFocus()) {
         m_azTo->setValue(p->az_max);
-    }
-    if (!m_period->hasFocus()) {
-        m_period->setValue(p->period);
     }
 }
 

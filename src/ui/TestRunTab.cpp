@@ -70,7 +70,9 @@ QWidget* TestRunTab::buildStressPage()
         get(ps::msg::GetState),
         get(ps::msg::GetSffParameters),
         get(ps::msg::GetPhaseAtten),
-        get(ps::msg::GetAdc),
+        get(ps::msg::GetRfmTelemetry),
+        get(ps::msg::GetTrxStatus),
+        get(ps::msg::GetPlStatus),
         get(ps::msg::GetBeam),
         get(ps::msg::GetLo, ps::loGetPayload(ps::kLoMixer)),
         get(ps::msg::GetLo, ps::loGetPayload(ps::kLoCalibration)),
@@ -79,7 +81,6 @@ QWidget* TestRunTab::buildStressPage()
         set(ps::msg::SetMode),
         set(ps::msg::Rs485Send),
         set(ps::msg::SetPhaseAtten),
-        set(ps::msg::SetAdc),
         set(ps::msg::SetBeamAzimuth),
         set(ps::msg::SetBeam),
         set(ps::msg::SetLo),
@@ -180,10 +181,9 @@ QWidget* TestRunTab::buildUdpPage()
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
     layout->setSpacing(ui::kGap);
-    auto* hint = ui::hintLabel(QStringLiteral("PS шлёт телеметрию раз в секунду (контракт §5). Проверка "
-                                              "считает принятые, потерянные по msg_count и отброшенные "
-                                              "датаграммы за выбранное время. Ниже — состояние узлов платы "
-                                              "из последней телеметрии: ПЛИС (PL), RS-485, АЦП и др."),
+    auto* hint = ui::hintLabel(QStringLiteral("PS шлёт 10-байтное техническое состояние раз в секунду. Проверка "
+                                              "считает принятые и отброшенные датаграммы; точное число потерь "
+                                              "без счётчика в пакете неизвестно. Ниже — флаги узлов платы."),
                                page);
     auto* row = new QHBoxLayout;
     row->setSpacing(ui::kInnerGap);
@@ -274,7 +274,6 @@ void TestRunTab::startUdpCheck(int seconds)
     m_udpSeconds->setValue(seconds);
     const PsLink* link = m_session->link();
     m_udpStartReceived = link->telemetryPackets();
-    m_udpStartLost = link->telemetryLost();
     m_udpStartRejected = link->telemetryRejected();
     m_udpClock.start();
     m_udpTimer->start();
@@ -293,16 +292,14 @@ void TestRunTab::finishUdpCheck()
     m_udpTimer->stop();
     const PsLink* link = m_session->link();
     const quint64 received = link->telemetryPackets() - m_udpStartReceived;
-    const quint64 lost = link->telemetryLost() - m_udpStartLost;
     const quint64 rejected = link->telemetryRejected() - m_udpStartRejected;
     const double secs = double(m_udpClock.elapsed()) / 1000.0;
     // Период PS 1 с: за N секунд ждём не меньше N − 1 датаграмм.
-    const bool ok = received + 1 >= quint64(secs) && lost == 0 && rejected == 0;
-    m_udpVerdict->setText(QStringLiteral("%1: за %2 с принято %3, потеряно %4, отброшено %5")
+    const bool ok = received + 1 >= quint64(secs) && rejected == 0;
+    m_udpVerdict->setText(QStringLiteral("%1: за %2 с принято %3, отброшено %4")
                               .arg(ok ? QStringLiteral("Норма") : QStringLiteral("Не норма"))
                               .arg(secs, 0, 'f', 1)
                               .arg(received)
-                              .arg(lost)
                               .arg(rejected));
     ui::setTone(m_udpVerdict, ok ? ui::Tone::Ok : ui::Tone::Error);
     refreshEnabled();
@@ -311,9 +308,8 @@ void TestRunTab::finishUdpCheck()
 void TestRunTab::refreshUdp()
 {
     const PsLink* link = m_session->link();
-    m_udpCounters->setText(QStringLiteral("Всего с подключения: принято %1, потеряно %2, отброшено %3")
+    m_udpCounters->setText(QStringLiteral("10-байтных пакетов: принято %1, отброшено %2; потери без счётчика неизвестны")
                                .arg(link->telemetryPackets())
-                               .arg(link->telemetryLost())
                                .arg(link->telemetryRejected()));
     const auto& t = m_session->telemetry();
     if (!t) {

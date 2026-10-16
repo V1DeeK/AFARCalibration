@@ -41,11 +41,6 @@ QString qs(std::string_view s)
     return QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size()));
 }
 
-QString hzText(double hz)
-{
-    return QStringLiteral("%1 МГц").arg(hz / 1e6, 0, 'f', 6);
-}
-
 }  // namespace
 
 ParametersTab::ParametersTab(PsSession* session, QWidget* parent)
@@ -60,7 +55,6 @@ ParametersTab::ParametersTab(PsSession* session, QWidget* parent)
     auto* top = new QHBoxLayout;
     top->setSpacing(ui::kGap);
     top->addWidget(buildModeBox(), 1);
-    top->addWidget(buildAdcBox(), 1);
     top->addWidget(buildBeamBox(), 1);
     root->addLayout(top);
 
@@ -191,12 +185,13 @@ QWidget* ParametersTab::buildCodesPage()
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
     layout->setSpacing(ui::kInnerGap);
-    m_codes = new QTableWidget(ps::kChannels, 5, page);
+    m_codes = new QTableWidget(ps::kChannels, 7, page);
     m_codes->setObjectName(QStringLiteral("psCodes"));
     m_codes->setMinimumHeight(200);
     m_codes->setHorizontalHeaderLabels({QStringLiteral("Канал"), QStringLiteral("Фаза: задать"),
-                                        QStringLiteral("Атт.: задать"), QStringLiteral("Фаза: прочитано"),
-                                        QStringLiteral("Атт.: прочитано")});
+                                        QStringLiteral("Атт.: задать"), QStringLiteral("Вкл.: задать"),
+                                        QStringLiteral("Фаза: прочитано"), QStringLiteral("Атт.: прочитано"),
+                                        QStringLiteral("Вкл.: прочитано")});
     m_codes->verticalHeader()->setVisible(false);
     m_codes->verticalHeader()->setDefaultSectionSize(34);
     m_codes->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
@@ -206,13 +201,14 @@ QWidget* ParametersTab::buildCodesPage()
         auto* ch = new QTableWidgetItem(QString::number(row + 1));
         ch->setFlags(Qt::ItemIsEnabled);
         m_codes->setItem(row, 0, ch);
-        for (int col : {1, 2}) {
+        for (int col : {1, 2, 3}) {
             auto* spin = new QSpinBox(m_codes);
-            spin->setRange(0, ps::kCodeMax);
+            spin->setRange(0, col == 3 ? 1 : ps::kCodeMax);
+            if (col == 3) spin->setValue(1);
             spin->setButtonSymbols(QAbstractSpinBox::NoButtons);
             m_codes->setCellWidget(row, col, spin);
         }
-        for (int col : {3, 4}) {
+        for (int col : {4, 5, 6}) {
             auto* item = new QTableWidgetItem(QStringLiteral("—"));
             item->setFlags(Qt::ItemIsEnabled);
             m_codes->setItem(row, col, item);
@@ -285,74 +281,6 @@ QWidget* ParametersTab::buildCodesPage()
     return page;
 }
 
-QWidget* ParametersTab::buildAdcBox()
-{
-    auto* box = new QGroupBox(QStringLiteral("АЦП"), this);
-    box->setObjectName(QStringLiteral("adcBox"));
-    auto* layout = new QVBoxLayout(box);
-    layout->setSpacing(ui::kInnerGap);
-    const auto mhz = [box](double value, double max) {
-        auto* s = new QDoubleSpinBox(box);
-        s->setRange(0.0, max);
-        s->setDecimals(6);
-        s->setSuffix(QStringLiteral(" МГц"));
-        s->setValue(value);
-        s->setButtonSymbols(QAbstractSpinBox::NoButtons);
-        return s;
-    };
-    m_adcLoMhz = mhz(5800.0, 100000.0);
-    m_adcLoMhz->setObjectName(QStringLiteral("psAdcLo"));
-    m_adcBwMhz = mhz(20.0, 100000.0);
-    m_adcBwMhz->setObjectName(QStringLiteral("psAdcBw"));
-    m_adcFsMhz = mhz(30.72, 100000.0);
-    m_adcFsMhz->setObjectName(QStringLiteral("psAdcFs"));
-    m_adcGain = new QDoubleSpinBox(box);
-    m_adcGain->setObjectName(QStringLiteral("psAdcGain"));
-    m_adcGain->setRange(-100.0, 100.0);
-    m_adcGain->setDecimals(1);
-    m_adcGain->setSuffix(QStringLiteral(" дБ"));
-    m_adcGain->setValue(40.0);
-    m_adcGain->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    m_adcActual = new QLabel(QStringLiteral("установлено: —"), box);
-    m_adcActual->setObjectName(QStringLiteral("psAdcActual"));
-    m_adcActual->setProperty("role", QStringLiteral("hint"));
-    m_adcActual->setWordWrap(true);
-    auto* apply = new QPushButton(QStringLiteral("Применить"), box);
-    apply->setObjectName(QStringLiteral("psAdcApply"));
-    auto* read = new QPushButton(QStringLiteral("Прочитать"), box);
-    read->setObjectName(QStringLiteral("psAdcRead"));
-    ui::setButtonRole(apply, ui::ButtonRole::Primary);
-    ui::setButtonRole(read, ui::ButtonRole::Secondary);
-
-    auto* grid = new QGridLayout;
-    grid->setHorizontalSpacing(ui::kInnerGap);
-    grid->setVerticalSpacing(2);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Гетеродин приёмника lo"), box), 0, 0);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Полоса RF bw"), box), 0, 1);
-    grid->addWidget(m_adcLoMhz, 1, 0);
-    grid->addWidget(m_adcBwMhz, 1, 1);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Частота дискретизации fs"), box), 2, 0);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Усиление gain (ручное)"), box), 2, 1);
-    grid->addWidget(m_adcFsMhz, 3, 0);
-    grid->addWidget(m_adcGain, 3, 1);
-    auto* buttons = new QHBoxLayout;
-    buttons->setSpacing(ui::kInnerGap);
-    buttons->addWidget(apply, 1);
-    buttons->addWidget(read, 1);
-    layout->addLayout(grid);
-    layout->addLayout(buttons);
-    layout->addWidget(m_adcActual);
-    layout->addWidget(ui::hintLabel(QStringLiteral("Рабочий диапазон изделия 4,9–6,0 ГГц; частоту вне "
-                                                   "диапазона отклоняет PS."),
-                                    box));
-    layout->addStretch(1);
-
-    connect(apply, &QPushButton::clicked, this, &ParametersTab::applyAdc);
-    connect(read, &QPushButton::clicked, this, [this] { send(ps::msg::GetAdc); });
-    m_serviceControls.insert(m_serviceControls.end(), {apply, read});
-    return box;
-}
-
 QWidget* ParametersTab::buildBeamBox()
 {
     auto* box = new QGroupBox(QStringLiteral("Луч"), this);
@@ -417,7 +345,8 @@ void ParametersTab::writeCodes()
     std::vector<ps::ChannelCodes> codes;
     for (int row = 0; row < ps::kChannels; ++row) {
         codes.push_back({row + 1, static_cast<QSpinBox*>(m_codes->cellWidget(row, 1))->value(),
-                         static_cast<QSpinBox*>(m_codes->cellWidget(row, 2))->value()});
+                         static_cast<QSpinBox*>(m_codes->cellWidget(row, 2))->value(),
+                         static_cast<QSpinBox*>(m_codes->cellWidget(row, 3))->value()});
     }
     json payload;
     std::string error;
@@ -433,7 +362,8 @@ bool ParametersTab::saveCodes(const QString& path, QString* error) const
     std::vector<ps::ChannelCodes> codes;
     for (int row = 0; row < ps::kChannels; ++row) {
         codes.push_back({row + 1, static_cast<QSpinBox*>(m_codes->cellWidget(row, 1))->value(),
-                         static_cast<QSpinBox*>(m_codes->cellWidget(row, 2))->value()});
+                         static_cast<QSpinBox*>(m_codes->cellWidget(row, 2))->value(),
+                         static_cast<QSpinBox*>(m_codes->cellWidget(row, 3))->value()});
     }
     json payload;
     std::string why;
@@ -477,24 +407,10 @@ bool ParametersTab::loadCodes(const QString& path, QString* error)
     for (const auto& c : codes) {
         static_cast<QSpinBox*>(m_codes->cellWidget(c.n - 1, 1))->setValue(c.ph);
         static_cast<QSpinBox*>(m_codes->cellWidget(c.n - 1, 2))->setValue(c.att);
+        static_cast<QSpinBox*>(m_codes->cellWidget(c.n - 1, 3))->setValue(c.en);
     }
     log(QStringLiteral("Набор кодов загружен: %1").arg(path));
     return true;
-}
-
-void ParametersTab::applyAdc()
-{
-    ps::AdcParams adc;
-    adc.lo = std::llround(m_adcLoMhz->value() * 1e6);
-    adc.bw = std::llround(m_adcBwMhz->value() * 1e6);
-    adc.fs = std::llround(m_adcFsMhz->value() * 1e6);
-    adc.gain = m_adcGain->value();
-    std::string error;
-    if (!adc.validate(&error)) {
-        log(QString::fromStdString(error));
-        return;
-    }
-    send(ps::msg::SetAdc, adc.toJson());
 }
 
 void ParametersTab::showCodes(const std::vector<ps::ChannelCodes>& codes)
@@ -503,16 +419,22 @@ void ParametersTab::showCodes(const std::vector<ps::ChannelCodes>& codes)
         const int row = c.n - 1;
         const int wantPh = static_cast<QSpinBox*>(m_codes->cellWidget(row, 1))->value();
         const int wantAtt = static_cast<QSpinBox*>(m_codes->cellWidget(row, 2))->value();
-        auto* ph = m_codes->item(row, 3);
-        auto* att = m_codes->item(row, 4);
+        const int wantEn = static_cast<QSpinBox*>(m_codes->cellWidget(row, 3))->value();
+        auto* ph = m_codes->item(row, 4);
+        auto* att = m_codes->item(row, 5);
+        auto* en = m_codes->item(row, 6);
         ph->setText(QString::number(c.ph));
         att->setText(QString::number(c.att));
+        en->setText(QString::number(c.en));
         // Расхождение с заданным — текстом, а не только цветом (ТЗ т. 5.2).
         if (c.ph != wantPh) {
             ph->setText(QStringLiteral("%1 ≠ %2").arg(c.ph).arg(wantPh));
         }
         if (c.att != wantAtt) {
             att->setText(QStringLiteral("%1 ≠ %2").arg(c.att).arg(wantAtt));
+        }
+        if (c.en != wantEn) {
+            en->setText(QStringLiteral("%1 ≠ %2").arg(c.en).arg(wantEn));
         }
     }
 }
@@ -528,14 +450,6 @@ void ParametersTab::onResponse(const ps::Envelope& r, ps::Status status)
         std::vector<ps::ChannelCodes> codes;
         if (ps::channelsFromJson(r.payload, codes, &error)) {
             showCodes(codes);
-        }
-    } else if (r.msg_type == ps::msg::SetAdc || r.msg_type == ps::msg::GetAdc) {
-        ps::AdcParams adc;
-        if (ps::AdcParams::fromJson(r.payload, adc, &error)) {
-            m_adcActual->setText(QStringLiteral("установлено: lo %1, bw %2, fs %3, gain %4 дБ")
-                                     .arg(hzText(double(adc.lo)), hzText(double(adc.bw)),
-                                          hzText(double(adc.fs)))
-                                     .arg(adc.gain, 0, 'f', 1));
         }
     } else if (r.msg_type == ps::msg::SetBeamAzimuth || r.msg_type == ps::msg::SetBeam ||
                r.msg_type == ps::msg::GetBeam) {
@@ -561,9 +475,8 @@ void ParametersTab::onResponse(const ps::Envelope& r, ps::Status status)
 void ParametersTab::onTelemetry()
 {
     const PsLink* link = m_session->link();
-    m_tlmCounters->setText(QStringLiteral("принято %1, потеряно %2, отброшено %3")
+    m_tlmCounters->setText(QStringLiteral("10-байтных пакетов: принято %1, отброшено %2 (потери без счётчика не определяются)")
                                .arg(link->telemetryPackets())
-                               .arg(link->telemetryLost())
                                .arg(link->telemetryRejected()));
     const auto& tlm = m_session->telemetry();
     if (!tlm) {

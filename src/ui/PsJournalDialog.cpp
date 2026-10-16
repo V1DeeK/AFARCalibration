@@ -39,7 +39,8 @@ PsJournalDialog::PsJournalDialog(PsSession* session, QWidget* parent)
     m_type->setEditable(true);
     for (std::string_view t : {ps::msg::GetState, ps::msg::SetMode, ps::msg::GetSffParameters,
                                ps::msg::SetSffParameters, ps::msg::SetSffStart, ps::msg::SetSffStop,
-                               ps::msg::GetPhaseAtten, ps::msg::GetAdc, ps::msg::GetBeam,
+                               ps::msg::GetPhaseAtten, ps::msg::GetRfmTelemetry,
+                               ps::msg::GetTrxStatus, ps::msg::GetPlStatus, ps::msg::GetBeam,
                                ps::msg::GetLo, ps::msg::GetMixer, ps::msg::GetVideo}) {
         m_type->addItem(QString::fromUtf8(t.data(), static_cast<qsizetype>(t.size())));
     }

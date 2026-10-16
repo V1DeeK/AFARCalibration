@@ -228,21 +228,22 @@ const char* SpectrumRenderer::text(const char* russian, const char* english) con
 }
 
 void SpectrumRenderer::render_spectrum_contents() {
-    const bool audioPane = state_.demod_mode.load() != DemodMode::Off
-                        && state_.demod_audio_has_data.load();
     const bool clipPane = state_.clip_stream_active.load() || !local_clip_t_.empty();
-    const float spacing = ImGui::GetStyle().ItemSpacing.y;
-    // Сверху настройки приёма, снизу графики; настройки получают столько места, сколько
-    // нужно им, но не больше половины окна — остальное отдаём графикам.
-    const float avail = ImGui::GetContentRegionAvail().y;
-    const float controlsHeight = std::clamp(kControlsPaneHeight + 130.0f, 120.0f, avail * 0.5f);
-    ImGui::BeginChild("##controls_scroll", ImVec2(0.0f, controlsHeight));
-    render_controls();
+    ImGui::BeginChild("##spectrum_status", ImVec2(0.0f, 0.0f),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
+    render_status_bar();
     ImGui::EndChild();
+    if (ImGui::Button(show_controls_ ? text("Скрыть настройки", "Hide controls")
+                                     : text("Показать настройки", "Show controls")))
+        show_controls_ = !show_controls_;
+    if (show_controls_) {
+        const float avail = ImGui::GetContentRegionAvail().y;
+        const float controlsHeight = std::clamp(kControlsPaneHeight + 130.0f, 120.0f, avail * 0.5f);
+        ImGui::BeginChild("##controls_scroll", ImVec2(0.0f, controlsHeight));
+        render_controls();
+        ImGui::EndChild();
+    }
     ImGui::Separator();
-    (void)audioPane;
-    (void)clipPane;
-    (void)spacing;
     ImGui::BeginChild("##plots", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoScrollbar);
     if (ImPlot::BeginAlignedPlots("psd_waterfall_align")) {
@@ -421,7 +422,8 @@ void SpectrumRenderer::render_psd_plot() {
         reserved += kAudioPaneHeight;
     if (state_.clip_stream_active.load() || !local_clip_t_.empty())
         reserved += kClipPaneHeight;
-    float h = std::clamp(avail.y - reserved, 180.0f, kPsdHeight);
+    float h = show_controls_ ? std::clamp(avail.y - reserved, 180.0f, kPsdHeight)
+                             : std::max(180.0f, (avail.y - reserved) * 0.6f);
 
     // dual-channel capture (Rx1 + Rx2) gets two independent PSD panes side by side
     bool dual = (state_.chan_mode.load() == PlutoChannelMode::Both) && !local_psd2_.empty();
@@ -481,7 +483,9 @@ void SpectrumRenderer::render_waterfall() {
         reserved += kAudioPaneHeight;
     if (state_.clip_stream_active.load() || !local_clip_t_.empty())
         reserved += kClipPaneHeight;
-    float h = std::clamp(avail.y - reserved, 120.0f, kWaterfallHeight);
+    float h = show_controls_ ? std::clamp(avail.y - reserved, 120.0f, kWaterfallHeight)
+                             : std::max(120.0f, avail.y - reserved
+                                                       - 2.0f * ImGui::GetStyle().ItemSpacing.y);
 
     bool dual = (state_.chan_mode.load() == PlutoChannelMode::Both) && !local_waterfall2_.empty();
     if (dual) {
@@ -1325,14 +1329,23 @@ void SpectrumRenderer::render_controls() {
         ImGui::Dummy(ImVec2(0.0f, 4.0f));
     };
 
-    card("##card_status", [&] { render_status_bar(); });
-
     if (ImGui::BeginTable("##controls_columns", 3, ImGuiTableFlags_SizingStretchSame)) {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        card("##card_device", [&] { render_device_section(); });
+        card("##card_device", [&] {
+            if (state_.ps_iio_read_only.load()) {
+                ImGui::TextWrapped("Режим PS: IQ только для чтения. Настройка приёмника через libiio недоступна.");
+                ImGui::BeginDisabled();
+            }
+            render_device_section();
+            if (state_.ps_iio_read_only.load()) ImGui::EndDisabled();
+        });
         ImGui::TableNextColumn();
-        card("##card_tuning", [&] { render_tuning_section(); });
+        card("##card_tuning", [&] {
+            if (state_.ps_iio_read_only.load()) ImGui::BeginDisabled();
+            render_tuning_section();
+            if (state_.ps_iio_read_only.load()) ImGui::EndDisabled();
+        });
         card("##card_display", [&] { render_display_section(); });
         ImGui::TableNextColumn();
         card("##card_demod", [&] { render_demod_section(); });

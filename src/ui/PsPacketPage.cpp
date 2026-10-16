@@ -39,9 +39,6 @@ json templateFor(std::string_view type)
         ps::channelsToJson(codes, p);
         return p;
     }
-    if (type == ps::msg::SetAdc) {
-        return ps::AdcParams{5'800'000'000, 20'000'000, 30'720'000, 40.0}.toJson();
-    }
     if (type == ps::msg::SetBeamAzimuth) {
         return json{{"az", 0.0}};
     }
@@ -95,7 +92,8 @@ PsPacketPage::PsPacketPage(PsSession* session, QWidget* parent)
     for (std::string_view t :
          {ps::msg::GetState, ps::msg::SetMode, ps::msg::SetSffParameters, ps::msg::GetSffParameters,
           ps::msg::SetSffStart, ps::msg::SetSffStop, ps::msg::SetPhaseAtten, ps::msg::GetPhaseAtten,
-          ps::msg::SetAdc, ps::msg::GetAdc, ps::msg::SetBeamAzimuth, ps::msg::SetBeam, ps::msg::GetBeam,
+          ps::msg::GetRfmTelemetry, ps::msg::GetTrxStatus, ps::msg::GetPlStatus,
+          ps::msg::SetBeamAzimuth, ps::msg::SetBeam, ps::msg::GetBeam,
           ps::msg::Rs485Send, ps::msg::SetLo, ps::msg::GetLo, ps::msg::SetMixer, ps::msg::GetMixer,
           ps::msg::SetVideo, ps::msg::GetVideo}) {
         m_type->addItem(qs(t));

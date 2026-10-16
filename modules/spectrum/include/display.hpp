@@ -128,6 +128,7 @@ private:
     Language language_{ Language::Russian };
     bool light_theme_{ false };
     bool theme_dirty_{ true };
+    bool show_controls_{ true };
 
     // local copies so psd_mutex isn't held during rendering
     // ch2 copies are only meaningful when chan_mode == Both

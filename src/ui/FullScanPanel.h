@@ -45,7 +45,6 @@ private:
     QComboBox* m_freqToUnit = nullptr;
     QDoubleSpinBox* m_azFrom = nullptr;
     QDoubleSpinBox* m_azTo = nullptr;
-    QSpinBox* m_period = nullptr;
     QPushButton* m_apply = nullptr;
     QPushButton* m_start = nullptr;
     QPushButton* m_stop = nullptr;

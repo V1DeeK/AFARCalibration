@@ -140,9 +140,11 @@ void BoardParametersPage::requestRead()
         }
     };
     ask(ps::msg::GetState, json::object(), QStringLiteral("Состояние изделия"));
-    // АЦП, луч и модули PS отдаёт только в сервисном режиме (иначе NOT_SUPPORTED).
+    // Состояние трансивера, луч и модули PS отдаёт только в SERVICE.
     if (m_session->mode() == ps::Mode::Service) {
-        ask(ps::msg::GetAdc, json::object(), QStringLiteral("АЦП"));
+        ask(ps::msg::GetTrxStatus, json::object(), QStringLiteral("Трансивер"));
+        ask(ps::msg::GetPlStatus, json::object(), QStringLiteral("ПЛИС"));
+        ask(ps::msg::GetRfmTelemetry, json::object(), QStringLiteral("Температуры РЧ-модулей"));
         ask(ps::msg::GetBeam, json::object(), QStringLiteral("Луч"));
         ask(ps::msg::GetLo, ps::loGetPayload(ps::kLoMixer), qs(ps::loNameRu(ps::kLoMixer)));
         ask(ps::msg::GetLo, ps::loGetPayload(ps::kLoCalibration), qs(ps::loNameRu(ps::kLoCalibration)));

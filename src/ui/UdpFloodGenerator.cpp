@@ -1,13 +1,6 @@
 #include "UdpFloodGenerator.h"
 
-#include "PsProtocol.h"
-
-#include <QDateTime>
-
 #include <algorithm>
-
-namespace ps = afar::ps;
-using nlohmann::json;
 
 UdpFloodGenerator::UdpFloodGenerator(QObject* parent)
     : QObject(parent)
@@ -48,19 +41,8 @@ void UdpFloodGenerator::tick()
     const qint64 due = until * m_rate / 1000;
     qint64 budget = std::min<qint64>(2000, due - static_cast<qint64>(m_sent));
     while (budget-- > 0) {
-        ps::Envelope e;
-        e.msg_type = std::string(ps::msg::Telemetry);
-        e.msg_class = ps::MsgClass::Event;
-        e.msg_count = m_count++;
-        e.payload = json{{"time", QDateTime::currentMSecsSinceEpoch()},
-                         {"uptime", elapsed / 1000},
-                         {"mode", "IDLE"},
-                         {"state", "READY"},
-                         {"devices", json{{"power", "OK"}, {"rs485", "OK"}}},
-                         {"temperature", json{{"pl", 48.5}}},
-                         {"power", json{{"v12", 12.0}}}};
-        const std::string dg = ps::encodeDatagram(e);
-        m_socket.writeDatagram(dg.data(), static_cast<qint64>(dg.size()), QHostAddress::LocalHost, m_port);
+        const QByteArray packet(10, char(0xff));
+        m_socket.writeDatagram(packet, QHostAddress::LocalHost, m_port);
         ++m_sent;
     }
     if (last) {

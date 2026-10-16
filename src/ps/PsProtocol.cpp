@@ -327,8 +327,9 @@ bool checkChannels(std::vector<ChannelCodes>& channels, std::string* error)
             setError(error, "канал " + std::to_string(c.n) + " повторяется");
             return false;
         }
-        if (c.ph < 0 || c.ph > kCodeMax || c.att < 0 || c.att > kCodeMax) {
-            setError(error, "код канала " + std::to_string(c.n) + " вне 0…63");
+        if (c.ph < 0 || c.ph > kCodeMax || c.att < 0 || c.att > kCodeMax ||
+            (c.en != 0 && c.en != 1)) {
+            setError(error, "коды канала " + std::to_string(c.n) + " вне допустимого диапазона");
             return false;
         }
     }
@@ -353,13 +354,15 @@ bool channelsFromJson(const nlohmann::json& payload, std::vector<ChannelCodes>& 
         std::int64_t n = 0;
         std::int64_t ph = 0;
         std::int64_t att = 0;
+        std::int64_t en = 0;
         if (!e.is_object() || !readInt(e, "n", n) || !readInt(e, "ph", ph) ||
-            !readInt(e, "att", att) || n < -1 || n > 1000 || ph < -1 || ph > 1000 || att < -1 ||
-            att > 1000) {
-            setError(error, "элемент ch без целых n, ph, att");
+            !readInt(e, "att", att) || !readInt(e, "en", en) || n < -1 || n > 1000 ||
+            ph < -1 || ph > 1000 || att < -1 || att > 1000 || en < 0 || en > 1) {
+            setError(error, "элемент ch без допустимых n, ph, att, en");
             return false;
         }
-        channels.push_back({static_cast<int>(n), static_cast<int>(ph), static_cast<int>(att)});
+        channels.push_back({static_cast<int>(n), static_cast<int>(ph), static_cast<int>(att),
+                            static_cast<int>(en)});
     }
     if (!checkChannels(channels, error)) {
         return false;
@@ -377,50 +380,9 @@ bool channelsToJson(const std::vector<ChannelCodes>& channels, nlohmann::json& p
     }
     json arr = json::array();
     for (const auto& c : sorted) {
-        arr.push_back(json{{"n", c.n}, {"ph", c.ph}, {"att", c.att}});
+        arr.push_back(json{{"n", c.n}, {"ph", c.ph}, {"att", c.att}, {"en", c.en}});
     }
     payload = json{{"ch", std::move(arr)}};
-    return true;
-}
-
-bool AdcParams::validate(std::string* error) const
-{
-    if (lo <= 0 || lo > kFrequencyLimitHz) {
-        setError(error, "частота гетеродина lo вне (0; 100 ГГц]");
-        return false;
-    }
-    if (bw <= 0 || bw > kFrequencyLimitHz) {
-        setError(error, "полоса bw должна быть больше 0");
-        return false;
-    }
-    if (fs <= 0 || fs > kFrequencyLimitHz) {
-        setError(error, "частота дискретизации fs должна быть больше 0");
-        return false;
-    }
-    if (!std::isfinite(gain)) {
-        setError(error, "усиление gain не число");
-        return false;
-    }
-    return true;
-}
-
-nlohmann::json AdcParams::toJson() const
-{
-    return json{{"lo", lo}, {"bw", bw}, {"fs", fs}, {"gain", gain}};
-}
-
-bool AdcParams::fromJson(const nlohmann::json& o, AdcParams& out, std::string* error)
-{
-    AdcParams p;
-    if (!readInt(o, "lo", p.lo) || !readInt(o, "bw", p.bw) || !readInt(o, "fs", p.fs) ||
-        !readNumber(o, "gain", p.gain)) {
-        setError(error, "нет целых lo, bw, fs или числа gain");
-        return false;
-    }
-    if (!p.validate(error)) {
-        return false;
-    }
-    out = p;
     return true;
 }
 
@@ -432,13 +394,13 @@ bool BeamState::fromJson(const nlohmann::json& o, BeamState& out, std::string* e
         return false;
     }
     BeamState b;
-    if (src == "azimuth") {
+    if (src == "AZIMUTH") {
         b.src = BeamSource::Azimuth;
         if (!readNumber(o, "az", b.az)) {
             setError(error, "нет поля az");
             return false;
         }
-    } else if (src == "table") {
+    } else if (src == "TABLE") {
         b.src = BeamSource::Table;
         std::int64_t beam = 0;
         if (!readInt(o, "beam", beam) || beam < 0 || beam > 1'000'000) {
@@ -446,9 +408,9 @@ bool BeamState::fromJson(const nlohmann::json& o, BeamState& out, std::string* e
             return false;
         }
         b.beam = static_cast<int>(beam);
-    } else if (src == "codes") {
+    } else if (src == "CODES") {
         b.src = BeamSource::Codes;
-    } else if (src == "none") {
+    } else if (src == "NONE") {
         b.src = BeamSource::None;
     } else {
         setError(error, "неизвестный src: " + src);
@@ -738,6 +700,59 @@ bool MixerState::fromJson(const nlohmann::json& o, MixerState& out, std::string*
 
 // ------------------------------------------------------------- телеметрия
 
+bool Telemetry::fromStatusBytes(std::string_view bytes, Telemetry& out)
+{
+    if (bytes.size() != 10) {
+        return false;
+    }
+    static constexpr std::array<std::string_view, 80> names = {
+        "Цифровой модуль: VCCINT", "Цифровой модуль: VCCAUX",
+        "Цифровой модуль: VBRAM", "Цифровой модуль: температура < 85 °C",
+        "Цифровой модуль: температура < 125 °C", "", "", "",
+        "Трансивер: связь", "Трансивер: тактирование", "Трансивер: гетеродин RX",
+        "Трансивер: калибровка", "Трансивер: канал данных АЦП",
+        "Трансивер: проверка данных", "", "",
+        "Трансивер: тактовый сигнал", "Трансивер: LOCK",
+        "Трансивер: температура < 85 °C", "Трансивер: температура < 125 °C",
+        "", "", "", "",
+        "Гетеродин смесителя: RS-485", "Гетеродин смесителя: LOCK",
+        "Гетеродин смесителя: температура < 60 °C", "Гетеродин смесителя: температура < 80 °C",
+        "", "", "", "",
+        "Гетеродин калибровки: RS-485", "Гетеродин калибровки: LOCK",
+        "Гетеродин калибровки: температура < 60 °C", "Гетеродин калибровки: температура < 80 °C",
+        "", "", "", "",
+        "Смеситель: RS-485", "Смеситель: температура < 60 °C",
+        "Смеситель: температура < 80 °C", "", "", "", "", "",
+        "РЧ-модуль 1: температура < 60 °C", "РЧ-модуль 1: температура < 80 °C",
+        "РЧ-модуль 2: температура < 60 °C", "РЧ-модуль 2: температура < 80 °C",
+        "РЧ-модуль 3: температура < 60 °C", "РЧ-модуль 3: температура < 80 °C",
+        "РЧ-модуль 4: температура < 60 °C", "РЧ-модуль 4: температура < 80 °C",
+        "Видеоприёмник: RS-485", "Видеоприёмник: LOCK",
+        "Видеоприёмник: температура < 60 °C", "Видеоприёмник: температура < 80 °C",
+        "Видеоприёмник: уровень сигнала", "", "", "",
+        "Коммутационный модуль: температура < 60 °C",
+        "Коммутационный модуль: температура < 80 °C",
+        "Коммутационный модуль: влажность < 40 %",
+        "Коммутационный модуль: влажность < 70 %", "", "", "", "",
+        "Самопроверка: питание", "Самопроверка: ПЛИС",
+        "Самопроверка: трансивер", "Самопроверка: RS-485",
+        "Самопроверка: температура", "Самопроверка: синтезаторы",
+        "Самопроверка: IQ", "Самопроверка: калибровочные таблицы",
+    };
+    Telemetry t;
+    for (std::size_t i = 0; i < t.statusBytes.size(); ++i) {
+        t.statusBytes[i] = static_cast<std::uint8_t>(bytes[i]);
+    }
+    for (std::size_t bit = 0; bit < names.size(); ++bit) {
+        if (!names[bit].empty()) {
+            const bool ok = (t.statusBytes[bit / 8] & (1u << (bit % 8))) != 0;
+            t.devices.emplace_back(std::string(names[bit]), ok ? DeviceHealth::Ok : DeviceHealth::Fail);
+        }
+    }
+    out = std::move(t);
+    return true;
+}
+
 bool Telemetry::fromJson(const nlohmann::json& o, Telemetry& out, std::string* error)
 {
     if (!o.is_object()) {
@@ -811,16 +826,12 @@ std::string selfTestRu(std::string_view id)
 
 bool SffParams::validate(std::string* error) const
 {
-    if (freq_min <= 0 || freq_max > kFrequencyLimitHz || freq_min >= freq_max) {
-        setError(error, "частоты обзора: нужно 0 < от < до ≤ 100 ГГц");
+    if (freq_min < kSffFrequencyMinHz || freq_max > kSffFrequencyMaxHz || freq_min >= freq_max) {
+        setError(error, "частоты обзора: нужно 4,9 ГГц ≤ от < до ≤ 6,0 ГГц");
         return false;
     }
     if (az_min < -kAzimuthLimitDeg || az_max > kAzimuthLimitDeg || az_min >= az_max) {
         setError(error, "сектор обзора: нужно −30° ≤ от < до ≤ +30°");
-        return false;
-    }
-    if (period < 0 || period > kSffPeriodMaxSec) {
-        setError(error, "период обзора: 0…3600 с");
         return false;
     }
     return true;
@@ -829,20 +840,17 @@ bool SffParams::validate(std::string* error) const
 nlohmann::json SffParams::toJson() const
 {
     return json{{"freq_min", freq_min}, {"freq_max", freq_max}, {"az_min", az_min},
-                {"az_max", az_max},     {"period", period}};
+                {"az_max", az_max}};
 }
 
 bool SffParams::fromJson(const nlohmann::json& o, SffParams& out, std::string* error)
 {
     SffParams p;
-    std::int64_t period = 0;
     if (!readInt(o, "freq_min", p.freq_min) || !readInt(o, "freq_max", p.freq_max) ||
-        !readNumber(o, "az_min", p.az_min) || !readNumber(o, "az_max", p.az_max) ||
-        !readInt(o, "period", period)) {
-        setError(error, "нет параметров обзора freq_min, freq_max, az_min, az_max, period");
+        !readNumber(o, "az_min", p.az_min) || !readNumber(o, "az_max", p.az_max)) {
+        setError(error, "нет параметров обзора freq_min, freq_max, az_min, az_max");
         return false;
     }
-    p.period = static_cast<int>(std::clamp<std::int64_t>(period, -1, kSffPeriodMaxSec + 1));
     if (!p.validate(error)) {
         return false;
     }

@@ -136,7 +136,6 @@ bool PsLink::bindTelemetry()
         return true;
     }
     m_udp.close();
-    m_lastTlmCount = -1;
     return m_udp.bind(QHostAddress::AnyIPv4, m_requestedTelemetryPort,
                       QAbstractSocket::ShareAddress | QAbstractSocket::ReuseAddressHint);
 }
@@ -304,26 +303,15 @@ void PsLink::onUdpReadyRead()
         ++processed;
         const QNetworkDatagram dg = m_udp.receiveDatagram(static_cast<qint64>(ps::kMaxDatagramBytes) + 1);
         const QByteArray data = dg.data();
-        ps::Envelope env;
         ps::Telemetry tlm;
-        if (data.size() > static_cast<qsizetype>(ps::kMaxDatagramBytes) ||
-            !ps::decodeLine(std::string_view(data.constData(), static_cast<std::size_t>(data.size())), env) ||
-            env.msg_type != ps::msg::Telemetry || !ps::Telemetry::fromJson(env.payload, tlm)) {
+        if (!ps::Telemetry::fromStatusBytes(
+                std::string_view(data.constData(), static_cast<std::size_t>(data.size())), tlm)) {
             ++m_tlmRejected;
-            emit frameLogged(false, QStringLiteral("UDP"), QString::fromUtf8(data.left(512)));
+            emit frameLogged(false, QStringLiteral("UDP"), QString::fromLatin1(data.left(512).toHex(' ')));
             continue;
         }
-        if (m_lastTlmCount >= 0) {
-            const int expected = (m_lastTlmCount + 1) & 0xFF;
-            const int gap = (int(env.msg_count) - expected + 256) & 0xFF;
-            // Большой разрыв — скорее перезапуск PS, а не потери.
-            if (gap > 0 && gap < 128) {
-                m_tlmLost += quint64(gap);
-            }
-        }
-        m_lastTlmCount = env.msg_count;
         ++m_tlmReceived;
-        emit frameLogged(false, QStringLiteral("UDP"), QString::fromUtf8(data));
+        emit frameLogged(false, QStringLiteral("UDP"), QString::fromLatin1(data.toHex(' ')));
         // Подписчикам (экран, спектр) телеметрию отдаём не чаще kTlmEmitMinMs: счётчики при этом точные.
         const qint64 now = m_clock.elapsed();
         if (now - m_lastTlmEmitMs >= kTlmEmitMinMs) {

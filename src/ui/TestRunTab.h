@@ -53,7 +53,6 @@ private:
     QTimer* m_udpTimer = nullptr;
     QElapsedTimer m_udpClock;
     quint64 m_udpStartReceived = 0;
-    quint64 m_udpStartLost = 0;
     quint64 m_udpStartRejected = 0;
 
     QLineEdit* m_rawHex = nullptr;

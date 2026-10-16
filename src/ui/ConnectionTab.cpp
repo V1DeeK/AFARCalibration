@@ -218,7 +218,7 @@ QWidget* ConnectionTab::buildJournalBox()
     m_tcpOut = new StatTile(QStringLiteral("TCP ушло"), box);
     m_tcpIn = new StatTile(QStringLiteral("TCP пришло"), box);
     m_udpIn = new StatTile(QStringLiteral("UDP принято"), box);
-    m_udpLost = new StatTile(QStringLiteral("UDP потеряно"), box);
+    m_udpLost = new StatTile(QStringLiteral("UDP отброшено"), box);
     m_errors = new StatTile(QStringLiteral("Сообщений"), box);
     m_tcpOut->setObjectName(QStringLiteral("psTileTcpOut"));
     m_tcpIn->setObjectName(QStringLiteral("psTileTcpIn"));
@@ -363,8 +363,8 @@ void ConnectionTab::refreshCounters()
     m_tcpOut->setValue(QString::number(m_tcpOutCount));
     m_tcpIn->setValue(QString::number(m_tcpInCount));
     m_udpIn->setValue(QString::number(link->telemetryPackets()));
-    m_udpLost->setValue(QString::number(link->telemetryLost()));
-    m_udpLost->setTone(link->telemetryLost() > 0 ? ui::Tone::Warn : ui::Tone::Neutral);
+    m_udpLost->setValue(QString::number(link->telemetryRejected()));
+    m_udpLost->setTone(link->telemetryRejected() > 0 ? ui::Tone::Warn : ui::Tone::Neutral);
     m_errors->setValue(QString::number(m_errorCount));
     m_errors->setTone(m_errorCount > 0 ? ui::Tone::Warn : ui::Tone::Neutral);
 }
