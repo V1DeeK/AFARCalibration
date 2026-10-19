@@ -98,7 +98,8 @@ BoardParametersPage::BoardParametersPage(PsSession* session, QWidget* parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(ui::kInnerGap);
 
-    auto* row = new QHBoxLayout;
+    // Кнопка над статусом: окошко «Тех. состояние» в «Настройках» узкое.
+    auto* row = new QVBoxLayout;
     row->setSpacing(ui::kInnerGap);
     m_status = new QLabel(QStringLiteral("Готово к чтению"), this);
     m_status->setObjectName(QStringLiteral("boardParametersStatus"));
@@ -106,8 +107,8 @@ BoardParametersPage::BoardParametersPage(PsSession* session, QWidget* parent)
     m_read = new QPushButton(QStringLiteral("Получить параметры"), this);
     m_read->setObjectName(QStringLiteral("readBoardParameters"));
     ui::setButtonRole(m_read, ui::ButtonRole::Primary);
-    row->addWidget(m_status, 1);
-    row->addWidget(m_read);
+    row->addWidget(m_read, 0, Qt::AlignLeft);
+    row->addWidget(m_status);
 
     m_results = new QTabWidget(this);
     m_results->setObjectName(QStringLiteral("boardParametersTabs"));

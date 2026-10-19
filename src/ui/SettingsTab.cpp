@@ -55,11 +55,6 @@ SettingsTab::SettingsTab(PsSession* session, QWidget* parent)
     , m_session(session)
 {
     setObjectName(QStringLiteral("settingsTab"));
-    auto* root = new QGridLayout(this);
-    root->setContentsMargins(ui::kPageMargin, ui::kPageMargin, ui::kPageMargin, ui::kPageMargin);
-    root->setHorizontalSpacing(ui::kGap);
-    root->setVerticalSpacing(ui::kGap);
-
     auto* modulesBox = new QGroupBox(QStringLiteral("Модули"), this);
     modulesBox->setObjectName(QStringLiteral("modulesBox"));
     auto* modulesLayout = new QVBoxLayout(modulesBox);
@@ -70,11 +65,6 @@ SettingsTab::SettingsTab(PsSession* session, QWidget* parent)
     m_modulesPage->tabs()->addTab(m_diagnostics, QStringLiteral("Состояние"));
     m_osd = new PsOsdPage(m_session, m_modulesPage->tabs());
     m_modulesPage->tabs()->addTab(ui::scrollPage(m_osd, m_modulesPage->tabs()), QStringLiteral("OSD"));
-    m_operational = new OperationalPanel(m_session, m_modulesPage->tabs());
-    m_modulesPage->tabs()->addTab(ui::scrollPage(m_operational, m_modulesPage->tabs()),
-                                  QStringLiteral("Оперативный режим"));
-    m_modulesPage->tabs()->setTabToolTip(m_modulesPage->tabs()->count() - 1,
-                                         QStringLiteral("Команды v8 п. 3.5 — в режиме OPERATIONAL, не только в сервисном"));
     modulesLayout->addWidget(m_modulesPage);
 
     auto* scanBox = new QGroupBox(QStringLiteral("Полное сканирование"), this);
@@ -84,23 +74,42 @@ SettingsTab::SettingsTab(PsSession* session, QWidget* parent)
     m_fullScan = new FullScanPanel(m_session, scanBox);
     scanLayout->addWidget(m_fullScan);
 
-    // Сверху в ряд: подключение, тех. состояние, режим изделия. Ниже «Модули», под ними
-    // «Полное сканирование» и рядом с ним «Луч». Справа журнал во всю высоту окна.
-    root->addWidget(buildConnectionBox(), 0, 0);
-    root->addWidget(buildTechBox(), 0, 1);
-    root->addWidget(buildModeBox(), 0, 2);
-    root->addWidget(modulesBox, 1, 0, 1, 3);
-    root->addWidget(scanBox, 2, 0, 1, 2);
-    root->addWidget(buildBeamBox(), 2, 2);
-    root->addWidget(buildJournalBox(), 0, 3, 3, 1);
+    auto* opBox = new QGroupBox(QStringLiteral("Оперативный режим"), this);
+    opBox->setObjectName(QStringLiteral("opBox"));
+    opBox->setToolTip(QStringLiteral("Команды v8 п. 3.5 — в режиме OPERATIONAL, не только в сервисном"));
+    auto* opLayout = new QVBoxLayout(opBox);
+    opLayout->setContentsMargins(0, 0, 0, 0);
+    m_operational = new OperationalPanel(m_session, opBox);
+    opLayout->addWidget(m_operational);
 
-    root->setColumnStretch(0, 3);
-    root->setColumnStretch(1, 4);
-    root->setColumnStretch(2, 2);
-    root->setColumnStretch(3, 5);
-    root->setRowStretch(0, 0);
-    root->setRowStretch(1, 3);
-    root->setRowStretch(2, 2);
+    // Сверху в ряд: подключение, тех. состояние (узкое), оперативный режим и режим изделия.
+    // Ниже слева «Модули», под ними «Полное сканирование» и рядом «Луч»; справа журнал.
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(ui::kPageMargin, ui::kPageMargin, ui::kPageMargin, ui::kPageMargin);
+    root->setSpacing(ui::kGap);
+
+    auto* top = new QHBoxLayout;
+    top->setSpacing(ui::kGap);
+    top->addWidget(buildConnectionBox(), 8);
+    top->addWidget(buildTechBox(), 7);
+    top->addWidget(opBox, 18);
+    top->addWidget(buildModeBox(), 6);
+    root->addLayout(top);
+
+    auto* left = new QVBoxLayout;
+    left->setSpacing(ui::kGap);
+    left->addWidget(modulesBox, 3);
+    auto* scanRow = new QHBoxLayout;
+    scanRow->setSpacing(ui::kGap);
+    scanRow->addWidget(scanBox, 3);
+    scanRow->addWidget(buildBeamBox(), 1);
+    left->addLayout(scanRow, 2);
+
+    auto* bottom = new QHBoxLayout;
+    bottom->setSpacing(ui::kGap);
+    bottom->addLayout(left, 3);
+    bottom->addWidget(buildJournalBox(), 2);
+    root->addLayout(bottom, 1);
 
     m_journal = new PsJournalDialog(m_session, this);
 
@@ -316,13 +325,34 @@ QWidget* SettingsTab::buildModeBox()
     m_modeLabel->setObjectName(QStringLiteral("psMode"));
     m_modeLabel->setProperty("role", QStringLiteral("status"));
     m_modeLabel->setWordWrap(true);
+    // Подсказки — по v8 п. 1 (таблица 1) и п. 1.1–1.3: откуда в режим можно войти и как выйти.
     m_toService = new QPushButton(QStringLiteral("Перейти в сервисный"), box);
     m_toService->setObjectName(QStringLiteral("psToService"));
+    m_toService->setToolTip(QStringLiteral(
+        "<b>SERVICE — измерительный режим.</b><br>Настройка модулей, измерения и калибровка на стенде, "
+        "запись параметров при испытаниях.<br><b>Вход:</b> только из ожидания (IDLE, состояние READY).<br>"
+        "<b>Выход:</b> в ожидание (IDLE); PS сам восстанавливает рабочую конфигурацию."));
+    m_toOperational = new QPushButton(QStringLiteral("Перейти в оперативный"), box);
+    m_toOperational->setObjectName(QStringLiteral("psToOperational"));
+    m_toOperational->setToolTip(QStringLiteral(
+        "<b>OPERATIONAL — оперативный режим.</b><br>Поиск, захват и сопровождение источника: выдача "
+        "пеленга и класса источника в реальном времени.<br><b>Вход:</b> из ожидания (IDLE) или из "
+        "полного сканирования (FULL_SCAN_FREQ).<br><b>Выход:</b> в ожидание или в полное сканирование, "
+        "только из состояний «установка частоты» (OP_INITIALIZATION) и «ожидание команды» (OP_IDLE); "
+        "идущий поиск или сопровождение сначала останавливают кнопкой «Стоп»."));
     m_toIdle = new QPushButton(QStringLiteral("Вернуть в ожидание"), box);
     m_toIdle->setObjectName(QStringLiteral("psToIdle"));
+    m_toIdle->setToolTip(QStringLiteral(
+        "<b>IDLE — режим ожидания.</b><br>Безопасная точка: через него проходят все смены режима, "
+        "аппаратура в безопасной конфигурации; здесь доступны самопроверка и перезапуск.<br>"
+        "<b>Вход:</b> из любого режима (в оперативном — из OP_INITIALIZATION или OP_IDLE, в полном "
+        "сканировании — когда оно остановлено).<br><b>Выход:</b> в сервисный, оперативный или "
+        "полное сканирование."));
     m_getState = new QPushButton(QStringLiteral("Запросить состояние"), box);
     m_getState->setObjectName(QStringLiteral("psGetState"));
+    m_getState->setToolTip(QStringLiteral("get_state: текущий режим и состояние вложенного автомата"));
     ui::setButtonRole(m_toService, ui::ButtonRole::Primary);
+    ui::setButtonRole(m_toOperational, ui::ButtonRole::Primary);
     ui::setButtonRole(m_toIdle, ui::ButtonRole::Secondary);
     ui::setButtonRole(m_getState, ui::ButtonRole::Secondary);
     m_selfTest = new QPushButton(QStringLiteral("Запустить самопроверку"), box);
@@ -336,19 +366,22 @@ QWidget* SettingsTab::buildModeBox()
     ui::setButtonRole(m_reset, ui::ButtonRole::Danger);
     layout->addWidget(m_modeLabel);
     layout->addWidget(m_toService);
+    layout->addWidget(m_toOperational);
     layout->addWidget(m_toIdle);
     layout->addWidget(m_getState);
     // Кнопки друг под другом: окошко узкое, рядом с «Тех. состоянием» и «Лучом».
     layout->addWidget(m_selfTest);
     layout->addWidget(m_reset);
     layout->addWidget(ui::hintLabel(
-        QStringLiteral("В сервисный режим PS переходит только из ожидания (READY). "
-                       "При выходе из него PS сам восстанавливает рабочую конфигурацию."),
+        QStringLiteral("Наведите курсор на кнопку режима: там сказано, для чего режим, "
+                       "откуда в него можно войти и как выйти."),
         box));
     layout->addStretch(1);
 
     connect(m_toService, &QPushButton::clicked, this,
             [this] { send(ps::msg::SetMode, json{{"mode", "SERVICE"}}); });
+    connect(m_toOperational, &QPushButton::clicked, this,
+            [this] { send(ps::msg::SetMode, json{{"mode", "OPERATIONAL"}}); });
     connect(m_toIdle, &QPushButton::clicked, this,
             [this] { send(ps::msg::SetMode, json{{"mode", "IDLE"}}); });
     connect(m_getState, &QPushButton::clicked, this, [this] { send(ps::msg::GetState); });
@@ -488,8 +521,9 @@ QWidget* SettingsTab::buildBeamBox()
     m_beamId->setButtonSymbols(QAbstractSpinBox::NoButtons);
     auto* setBeam = new QPushButton(QStringLiteral("Установить луч"), box);
     setBeam->setObjectName(QStringLiteral("psSetBeam"));
-    auto* getBeam = new QPushButton(QStringLiteral("Запросить состояние луча"), box);
+    auto* getBeam = new QPushButton(QStringLiteral("Состояние луча"), box);
     getBeam->setObjectName(QStringLiteral("psGetBeam"));
+    getBeam->setToolTip(QStringLiteral("get_beam: запросить состояние луча"));
     ui::setButtonRole(setAz, ui::ButtonRole::Primary);
     ui::setButtonRole(setBeam, ui::ButtonRole::Primary);
     ui::setButtonRole(getBeam, ui::ButtonRole::Secondary);
@@ -752,6 +786,7 @@ void SettingsTab::refreshEnabled()
     m_selfTest->setEnabled(idleReady);
     m_reset->setEnabled(idleReady);
     m_toService->setEnabled(ready && (!known || mode == ps::Mode::Idle));
+    m_toOperational->setEnabled(ready && (!known || mode == ps::Mode::Idle || mode == ps::Mode::FullScanFreq));
     m_toIdle->setEnabled(ready && known && mode != ps::Mode::Idle);
     m_getState->setEnabled(ready);
     for (QWidget* w : m_serviceControls) {
@@ -814,10 +849,11 @@ QWidget* SettingsTab::buildConnectionBox()
     m_findByMac = new QPushButton(QStringLiteral("Найти по MAC"), box);
     m_findByMac->setObjectName(QStringLiteral("psFindByMac"));
     ui::setButtonRole(m_findByMac, ui::ButtonRole::Secondary);
-    auto* buttons = new QHBoxLayout;
+    // Кнопки друг под другом: окошко узкое, рядом с ним в ряд ещё три.
+    auto* buttons = new QVBoxLayout;
     buttons->setSpacing(ui::kInnerGap);
-    buttons->addWidget(m_connect, 1);
-    buttons->addWidget(m_findByMac, 1);
+    buttons->addWidget(m_connect);
+    buttons->addWidget(m_findByMac);
 
     m_message = ui::hintLabel(QString(), box);
     m_message->setObjectName(QStringLiteral("psMessage"));

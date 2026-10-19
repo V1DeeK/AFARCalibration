@@ -2,7 +2,7 @@
 // программа шлёт PS, — свой тест. Команда отправляется так же, как это делает оператор
 // (кнопкой на вкладке), тестовый PS записывает, что пришло, а тест сверяет msg_type и
 // payload с таблицами документа и проверяет, что ответ показан оператору.
-// Оперативный режим (п. 3.5) — вкладка «Модули» → «Оперативный режим».
+// Оперативный режим (п. 3.5) — окошко «Оперативный режим» в верхнем ряду «Настроек».
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -364,7 +364,14 @@ namespace {
 /// Изделие в OPERATIONAL по кнопке «Перейти в оперативный».
 void toOperational(Bench& b)
 {
-    b.click("opToOperational");
+    // Подсказки кнопок режима: для чего режим, откуда вход и куда выход (v8 п. 1).
+    for (const char* name : {"psToService", "psToOperational", "psToIdle"}) {
+        const QString tip = child<QPushButton>(*b.parameters, name)->toolTip();
+        CHECK(tip.contains(QStringLiteral("Вход:")));
+        CHECK(tip.contains(QStringLiteral("Выход:")));
+    }
+    CHECK(child<QPushButton>(*b.parameters, "psToOperational")->toolTip().contains(QStringLiteral("FULL_SCAN_FREQ")));
+    b.click("psToOperational");
     REQUIRE(waitFor([&] { return b.session->mode() == ps::Mode::Operational; }));
     CHECK(b.received(ps::msg::SetMode) == json{{"mode", "OPERATIONAL"}});
     QCoreApplication::processEvents();
@@ -386,7 +393,7 @@ TEST_CASE("v8 3.5: кнопки оперативного режима сами �
     REQUIRE(waitFor([&] { return b.server.last(ps::msg::GetOpFrequency) != nullptr; }));
     CHECK(b.received(ps::msg::SetMode) == json{{"mode", "OPERATIONAL"}});
     CHECK(b.session->mode() == ps::Mode::Operational);
-    CHECK(child<QLabel>(*b.parameters, "opMode")->text().contains(QStringLiteral("оперативный")));
+    CHECK(child<QLabel>(*b.parameters, "psMode")->text().contains(QStringLiteral("оперативный")));
 }
 
 TEST_CASE("v8 3.5.1.1 set_op_frequency: Гц, 4,9–6,0 ГГц, ответ после калибровки", "[v8][op]")

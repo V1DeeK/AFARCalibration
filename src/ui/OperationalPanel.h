@@ -18,6 +18,7 @@ class QTableWidget;
 /// поиск, захват, сброс, стоп, удержание азимута — и таблицы событий
 /// send_op_survey_result и send_op_track_result. Если изделие не в режиме
 /// OPERATIONAL, панель сначала переводит его туда, как «Полное сканирование».
+/// Текущий режим и кнопка «Перейти в оперативный» — в окошке «Режим изделия».
 class OperationalPanel final : public QWidget {
     Q_OBJECT
 
@@ -40,8 +41,6 @@ private:
     void refreshControls();
 
     PsSession* m_session;
-    QLabel* m_mode = nullptr;
-    QPushButton* m_toOp = nullptr;
 
     QDoubleSpinBox* m_freq = nullptr;  ///< МГц
     QComboBox* m_acq = nullptr;

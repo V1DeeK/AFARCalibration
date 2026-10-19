@@ -11,6 +11,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -37,6 +38,7 @@ QDoubleSpinBox* degBox(QWidget* parent, const char* name, double value)
     box->setRange(-ps::kAzimuthLimitDeg, ps::kAzimuthLimitDeg);
     box->setSuffix(QStringLiteral("°"));
     box->setValue(value);
+    box->setFixedWidth(68);
     return box;
 }
 
@@ -87,7 +89,9 @@ QTableWidget* resultTable(QWidget* parent, const char* name, const QStringList& 
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setAlternatingRowColors(true);
     table->setShowGrid(false);
-    table->setMinimumHeight(110);
+    table->setMinimumHeight(100);
+    // Высоту задаёт окошко, а не «естественный» размер таблицы: верхний ряд «Настроек» невысокий.
+    table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
     return table;
 }
 
@@ -107,21 +111,6 @@ OperationalPanel::OperationalPanel(PsSession* session, QWidget* parent)
     layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
     layout->setSpacing(ui::kInnerGap);
 
-    auto* top = new QHBoxLayout;
-    top->setSpacing(ui::kInnerGap);
-    m_mode = new QLabel(this);
-    m_mode->setObjectName(QStringLiteral("opMode"));
-    m_mode->setProperty("role", QStringLiteral("status"));
-    m_mode->setWordWrap(true);
-    m_toOp = new QPushButton(QStringLiteral("Перейти в оперативный"), this);
-    m_toOp->setObjectName(QStringLiteral("opToOperational"));
-    m_toOp->setToolTip(QStringLiteral("set_mode OPERATIONAL. Любая кнопка ниже сама переводит изделие "
-                                      "в оперативный режим, если оно в другом."));
-    ui::setButtonRole(m_toOp, ui::ButtonRole::Primary);
-    top->addWidget(m_mode, 1);
-    top->addWidget(m_toOp);
-    layout->addLayout(top);
-
     layout->addWidget(buildSettings());
     layout->addWidget(buildActions());
 
@@ -130,11 +119,6 @@ OperationalPanel::OperationalPanel(PsSession* session, QWidget* parent)
     layout->addWidget(m_state);
     layout->addWidget(buildResults(), 1);
 
-    connect(m_toOp, &QPushButton::clicked, this, [this] {
-        if (m_session->send(ps::msg::SetMode, json{{"mode", "OPERATIONAL"}}) >= 0) {
-            m_state->setText(QStringLiteral("Перевожу изделие в оперативный режим…"));
-        }
-    });
     connect(m_session->link(), &PsLink::responseReceived, this, &OperationalPanel::onResponse);
     connect(m_session->link(), &PsLink::eventReceived, this, &OperationalPanel::onEvent);
     connect(m_session, &PsSession::controlsChanged, this, &OperationalPanel::refreshControls);
@@ -204,10 +188,10 @@ QWidget* OperationalPanel::buildSettings()
     row(1, QStringLiteral("Калибровка"), {m_cal}, startCal, getCal);
 
     // Политика захвата и сброса (таблица 17).
-    m_acq = choiceBox(box, "opAcq", {{"AUTO", QStringLiteral("захват: авто")},
-                                     {"CONFIRM", QStringLiteral("захват: по команде")}});
-    m_loss = choiceBox(box, "opLoss", {{"AUTO", QStringLiteral("сброс: авто")},
-                                       {"CONFIRM", QStringLiteral("сброс: по команде")}});
+    m_acq = choiceBox(box, "opAcq", {{"AUTO", QStringLiteral("авто")}, {"CONFIRM", QStringLiteral("по команде")}});
+    m_loss = choiceBox(box, "opLoss", {{"AUTO", QStringLiteral("авто")}, {"CONFIRM", QStringLiteral("по команде")}});
+    m_acq->setToolTip(QStringLiteral("Захват (acq): найденный источник захватывается сам (авто) или по кнопке «Захват»"));
+    m_loss->setToolTip(QStringLiteral("Сброс (loss): потерянная цель сбрасывается сама (авто) или по кнопке «Сброс цели»"));
     auto* setPolicy = button(QStringLiteral("Записать"), "opSetPolicy", QStringLiteral("set_op_policy"),
                              ui::ButtonRole::Primary);
     auto* getPolicy = button(QStringLiteral("Прочитать"), "opGetPolicy", QStringLiteral("get_op_policy"));
@@ -236,11 +220,12 @@ QWidget* OperationalPanel::buildSettings()
     row(4, QStringLiteral("Пеленг по"), {m_data}, setData, getData);
     grid->setColumnStretch(1, 1);
 
+    // Видны только поля выбранного вида луча: окошко узкое.
     const auto rayEnabled = [this] {
         const bool scan = choice(m_rayMode) == "SCAN";
-        m_azMin->setEnabled(scan);
-        m_azMax->setEnabled(scan);
-        m_azFix->setEnabled(!scan);
+        m_azMin->setVisible(scan);
+        m_azMax->setVisible(scan);
+        m_azFix->setVisible(!scan);
     };
     rayEnabled();
     connect(m_rayMode, &QComboBox::currentIndexChanged, this, rayEnabled);
@@ -345,27 +330,24 @@ QWidget* OperationalPanel::buildActions()
 
 QWidget* OperationalPanel::buildResults()
 {
-    auto* box = new QWidget(this);
-    auto* layout = new QVBoxLayout(box);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(ui::kInnerGap);
-    layout->addWidget(ui::captionLabel(QStringLiteral("Результаты поиска (send_op_survey_result) — "
-                                                      "двойной щелчок по строке подставляет азимут захвата"),
-                                       box));
+    // События — две вкладки, чтобы окошко в верхнем ряду «Настроек» оставалось невысоким.
+    auto* box = new QTabWidget(this);
+    box->setObjectName(QStringLiteral("opResults"));
+    box->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+    box->setMinimumHeight(150);
     m_survey = resultTable(box, "opSurvey",
                            {QStringLiteral("Азимут"), QStringLiteral("Ширина, МГц"), QStringLiteral("С/Ш, дБ"),
                             QStringLiteral("Класс"), QStringLiteral("Достоверность"), QStringLiteral("Когерентных, %"),
                             QStringLiteral("Для пеленга, %")});
-    layout->addWidget(m_survey, 1);
-    layout->addWidget(ui::captionLabel(QStringLiteral("Захват и сопровождение (send_op_track_result), "
-                                                      "новые сверху"),
-                                       box));
+    m_survey->setToolTip(QStringLiteral("send_op_survey_result; двойной щелчок по строке подставляет азимут захвата"));
+    box->addTab(m_survey, QStringLiteral("Результаты поиска"));
     m_track = resultTable(box, "opTrack",
                           {QStringLiteral("Время"), QStringLiteral("Состояние"), QStringLiteral("Луч"),
                            QStringLiteral("Пеленг"), QStringLiteral("Прогноз"), QStringLiteral("Ошибка"),
                            QStringLiteral("Скорость, °/с"), QStringLiteral("С/Ш, дБ"), QStringLiteral("Класс"),
                            QStringLiteral("Источник"), QStringLiteral("Метод")});
-    layout->addWidget(m_track, 1);
+    m_track->setToolTip(QStringLiteral("send_op_track_result, новые строки сверху"));
+    box->addTab(m_track, QStringLiteral("Захват и сопровождение"));
 
     connect(m_survey, &QTableWidget::cellDoubleClicked, this, [this](int r, int) {
         if (auto* item = m_survey->item(r, 0)) {
@@ -510,21 +492,7 @@ void OperationalPanel::onEvent(const ps::Envelope& event)
 void OperationalPanel::refreshControls()
 {
     const bool allowed = m_session->manualAllowed();
-    const bool known = m_session->modeKnown();
-    const bool op = known && m_session->mode() == ps::Mode::Operational;
     for (QPushButton* b : m_buttons) {
         b->setEnabled(allowed);
     }
-    m_toOp->setEnabled(allowed && !op);
-    QString text = QStringLiteral("режим: —");
-    if (!m_session->link()->isReady()) {
-        text = QStringLiteral("нет связи с PS");
-    } else if (known) {
-        text = QStringLiteral("режим: %1").arg(QString::fromStdString(ps::modeRu(m_session->mode())));
-        if (!m_session->state().isEmpty()) {
-            text += QStringLiteral(", %1").arg(QString::fromStdString(ps::stateRu(m_session->state().toStdString())));
-        }
-    }
-    m_mode->setText(text);
-    ui::setTone(m_mode, op ? ui::Tone::Ok : ui::Tone::Neutral);
 }
