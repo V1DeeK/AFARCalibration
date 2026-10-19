@@ -87,6 +87,7 @@ void TestPsServer::resetService()
     m_video["att_mode"] = 0;
     m_video["en_vid"] = 0;
     m_video["temp"] = 44.0;
+    m_video["pres"] = 1;
     m_mixer = json{{"ch", json::array()}, {"temp", 39.0}};
     for (int n = 1; n <= ps::kMixerChannels; ++n) {
         m_mixer["ch"].push_back(json{{"n", n}, {"en", 0}, {"rp", 0}, {"if_att", 0.0}, {"att", 31.5}});
@@ -135,6 +136,7 @@ void TestPsServer::onReadyRead()
             continue;
         }
         ++m_commands;
+        m_received.push_back(env);
         if (!m_silent) {
             handle(env);
         }
@@ -446,14 +448,6 @@ bool applyFields(const json& in, const std::vector<ps::ModuleField>& fields, jso
     return true;
 }
 
-json withoutStatus(json j, std::initializer_list<std::string_view> drop)
-{
-    for (auto k : drop) {
-        j.erase(std::string(k));
-    }
-    return j;
-}
-
 }  // namespace
 
 const json& TestPsServer::moduleState(int addr) const
@@ -485,7 +479,8 @@ void TestPsServer::handleModule(const ps::Envelope& cmd)
             reply(cmd, ps::Status::InvalidArgument);
             return;
         }
-        reply(cmd, ps::Status::Ok, withoutStatus(lo, {"temp", "lock"}));
+        // В ответе set_* — установленные значения и телеметрия (v8 п. 3.6.1.5).
+        reply(cmd, ps::Status::Ok, lo);
         return;
     }
     if (m_modulesSilent) {
@@ -499,7 +494,7 @@ void TestPsServer::handleModule(const ps::Envelope& cmd)
             reply(cmd, ps::Status::InvalidArgument);
             return;
         }
-        reply(cmd, ps::Status::Ok, withoutStatus(m_video, {"temp", "lock"}));
+        reply(cmd, ps::Status::Ok, m_video);
     } else if (t == ps::msg::GetMixer) {
         reply(cmd, ps::Status::Ok, m_mixer);
     } else if (t == ps::msg::SetMixer) {
@@ -527,7 +522,7 @@ void TestPsServer::handleModule(const ps::Envelope& cmd)
             answer.push_back(slot);
         }
         m_mixer = std::move(next);
-        reply(cmd, ps::Status::Ok, json{{"ch", answer}});
+        reply(cmd, ps::Status::Ok, json{{"ch", answer}, {"temp", m_mixer["temp"]}});
     }
 }
 
@@ -536,7 +531,11 @@ void TestPsServer::sendTelemetry()
     if (!m_helloDone || m_tlmPort == 0 || m_tlmOff) {
         return;
     }
-    QByteArray packet(10, char(0xff));
+    // Всё исправно: биты 13–15 — флаги ошибок, у исправного изделия они 0 (v8 таблица 5).
+    QByteArray packet = m_statusBytes.isEmpty() ? QByteArray(10, char(0xff)) : m_statusBytes;
+    if (m_statusBytes.isEmpty()) {
+        packet[1] = char(0x1f);
+    }
     if (m_fault) {
         packet[9] = char(0x7f); // бит 79: самопроверка калибровочных таблиц
     }

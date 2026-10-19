@@ -231,6 +231,12 @@ afar_enable_warnings(test_ps_tab)
 add_test(NAME ps_tab COMMAND test_ps_tab)
 set_tests_properties(ps_tab PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_ps_v8_commands test_ps_v8_commands.cpp)
+target_link_libraries(test_ps_v8_commands PRIVATE Catch2::Catch2WithMain Qt6::Test afar_app_ui afar_test_ps_server)
+afar_enable_warnings(test_ps_v8_commands)
+add_test(NAME ps_v8_commands COMMAND test_ps_v8_commands)
+set_tests_properties(ps_v8_commands PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 300)
+
 add_executable(test_main_window test_main_window.cpp)
 target_link_libraries(test_main_window PRIVATE Catch2::Catch2WithMain Qt6::Test afar_app_ui afar_test_ps_server)
 afar_enable_warnings(test_main_window)

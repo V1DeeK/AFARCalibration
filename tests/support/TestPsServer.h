@@ -8,6 +8,8 @@
 #include <QUdpSocket>
 
 #include <array>
+#include <string_view>
+#include <vector>
 
 class QTcpServer;
 class QTcpSocket;
@@ -42,6 +44,21 @@ public:
         return m_codes;
     }
     [[nodiscard]] int commandsReceived() const { return m_commands; }
+    /// Все принятые команды в порядке прихода.
+    [[nodiscard]] const std::vector<afar::ps::Envelope>& received() const { return m_received; }
+    /// Последняя команда этого типа; nullptr — не приходила.
+    [[nodiscard]] const afar::ps::Envelope* last(std::string_view msgType) const
+    {
+        for (auto it = m_received.rbegin(); it != m_received.rend(); ++it) {
+            if (it->msg_type == msgType) {
+                return &*it;
+            }
+        }
+        return nullptr;
+    }
+    /// 10 байт технического состояния вместо «всё исправно»; пусто — по умолчанию.
+    void setStatusBytes(const QByteArray& bytes) { m_statusBytes = bytes; }
+    void sendTelemetryNow() { sendTelemetry(); }
     /// Состояние модулей: addr 1, 2 — гетеродины, 4 — видеоприёмник.
     [[nodiscard]] const nlohmann::json& moduleState(int addr) const;
     [[nodiscard]] const nlohmann::json& mixerState() const { return m_mixer; }
@@ -79,11 +96,13 @@ private:
     quint16 m_tlmPort = 0;
     quint8 m_tlmCount = 0;
     int m_commands = 0;
+    std::vector<afar::ps::Envelope> m_received;
+    QByteArray m_statusBytes;
     qint64 m_startMs = 0;
 
     afar::ps::Mode m_mode = afar::ps::Mode::Idle;
     std::array<afar::ps::ChannelCodes, afar::ps::kChannels> m_codes{};
-    std::string m_beamSrc = "none";
+    std::string m_beamSrc = "NONE";
     double m_beamAz = 0.0;
     int m_beam = 0;
     nlohmann::json m_lo1;
