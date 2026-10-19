@@ -5,12 +5,15 @@
 #include "PsSession.h"
 #include "UiStyle.h"
 
+#include <QDateTime>
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -64,6 +67,26 @@ void flatten(const json& j, int depth, QStringList& out)
     }
 }
 
+/// Название запроса для вкладки «Ошибки»: модули — как в «Модулях», чтобы отказ
+/// чтения и отказ записи одного модуля были одной строкой.
+QString requestTitle(const std::string& type, const json& payload)
+{
+    if (type == ps::msg::SetLo || type == ps::msg::GetLo) {
+        const auto addr = payload.find("addr");
+        if (addr != payload.end() && addr->is_number_integer()) {
+            return qs(ps::loNameRu(addr->get<int>()));
+        }
+        return QStringLiteral("Гетеродин");
+    }
+    if (type == ps::msg::SetMixer || type == ps::msg::GetMixer) {
+        return QStringLiteral("Смеситель");
+    }
+    if (type == ps::msg::SetVideo || type == ps::msg::GetVideo) {
+        return QStringLiteral("Видеоприёмник");
+    }
+    return qs(type);
+}
+
 }  // namespace
 
 BoardParametersPage::BoardParametersPage(PsSession* session, QWidget* parent)
@@ -101,7 +124,13 @@ BoardParametersPage::BoardParametersPage(PsSession* session, QWidget* parent)
     }
     m_main->setPlaceholderText(QStringLiteral("После подключения здесь появятся параметры платы."));
     m_details->setPlaceholderText(QStringLiteral("Здесь появятся ответы PS как они пришли (JSON)."));
+    m_errors = new QListWidget(m_results);
+    m_errors->setObjectName(QStringLiteral("boardParametersErrors"));
+    m_errors->setMinimumHeight(120);
+    m_errors->setWordWrap(true);
+    m_errors->setSelectionMode(QAbstractItemView::NoSelection);
     m_results->addTab(m_main, QStringLiteral("Основное"));
+    m_results->addTab(m_errors, QStringLiteral("Ошибки"));
     m_results->addTab(m_details, QStringLiteral("Подробно"));
 
     layout->addLayout(row);
@@ -114,12 +143,28 @@ BoardParametersPage::BoardParametersPage(PsSession* session, QWidget* parent)
     connect(m_read, &QPushButton::clicked, this, &BoardParametersPage::requestRead);
     connect(m_session->link(), &PsLink::responseReceived, this,
             [this](const ps::Envelope& env, ps::Status status) {
-                onResponse(qs(env.msg_type), env.msg_count, static_cast<int>(status), env.payload);
+                const QString key = QStringLiteral("%1#%2").arg(qs(env.msg_type)).arg(env.msg_count);
+                if (m_pending.contains(key)) {
+                    onResponse(qs(env.msg_type), env.msg_count, static_cast<int>(status), env.payload);
+                    return;
+                }
+                // Ответы на команды других вкладок: отказ — в «Ошибки», успех снимает прежний отказ.
+                if (env.msg_type == ps::msg::KeepAlive || env.msg_type == ps::msg::Hello) {
+                    return;
+                }
+                const QString title = requestTitle(env.msg_type, env.payload);
+                if (status != ps::Status::Ok) {
+                    noteRefusal(title, static_cast<int>(status));
+                } else if (m_refusals.remove(title) > 0) {
+                    renderErrors();
+                }
             });
-    // Телеметрия идёт каждую секунду: значения в «Основном» обновляются сами.
+    // Телеметрия идёт каждую секунду: значения в «Основном» и неисправности в «Ошибках» обновляются сами.
+    connect(m_session, &PsSession::telemetryChanged, this, &BoardParametersPage::renderErrors);
     connect(m_session, &PsSession::telemetryChanged, this, &BoardParametersPage::render);
     connect(m_session, &PsSession::modeChanged, this, &BoardParametersPage::render);
     connect(m_session, &PsSession::statusChanged, this, &BoardParametersPage::render);
+    renderErrors();
 }
 
 void BoardParametersPage::requestRead()
@@ -178,6 +223,11 @@ void BoardParametersPage::onResponse(const QString& msgType, int msgCount, int s
     r.payload = payload;
     m_pending.erase(it);
     m_replies.push_back(r);
+    if (status != static_cast<int>(ps::Status::Ok)) {
+        noteRefusal(r.title, status);
+    } else if (m_refusals.remove(r.title) > 0) {
+        renderErrors();
+    }
     emit operationProgress(QStringLiteral("Чтение параметров платы"),
                            static_cast<int>(m_replies.size()),
                            static_cast<int>(m_replies.size() + m_pending.size()));
@@ -241,6 +291,9 @@ void BoardParametersPage::render()
             main << QStringLiteral("Проверка %1: %2").arg(qs(ps::selfTestRu(id)), qs(std::string(ps::toString(h))));
         }
     }
+    if (const int count = m_errors->count(); count > 0 && m_errors->item(0)->data(Qt::UserRole).toBool()) {
+        main << QString() << QStringLiteral("Ошибок: %1 — подробно на вкладке «Ошибки»").arg(count);
+    }
     if (m_serviceNote) {
         main << QString()
              << QStringLiteral("АЦП, луч, гетеродины, смеситель и видеоприёмник PS отдаёт только в сервисном режиме.");
@@ -255,9 +308,6 @@ void BoardParametersPage::render()
                 flatten(r.payload, 1, lines);
                 main << lines;
             }
-        } else {
-            main << QString()
-                 << QStringLiteral("%1: PS отказал (%2)").arg(r.title, qs(std::string(ps::toString(static_cast<ps::Status>(r.status)))));
         }
         details << QStringLiteral("— %1 (status %2)").arg(r.title, qs(std::string(ps::toString(static_cast<ps::Status>(r.status)))))
                 << qs(r.payload.dump(2)) << QString();
@@ -274,4 +324,57 @@ void BoardParametersPage::render()
     };
     setText(m_main, main.join(QLatin1Char('\n')));
     setText(m_details, details.join(QLatin1Char('\n')));
+}
+
+void BoardParametersPage::noteRefusal(const QString& title, int status)
+{
+    m_refusals.insert(title, {QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss")), status});
+    renderErrors();
+}
+
+QStringList BoardParametersPage::errors() const
+{
+    QStringList out;
+    for (int i = 0; i < m_errors->count(); ++i) {
+        if (m_errors->item(i)->data(Qt::UserRole).toBool()) {
+            out << m_errors->item(i)->text();
+        }
+    }
+    return out;
+}
+
+void BoardParametersPage::renderErrors()
+{
+    QStringList lines;
+    for (auto it = m_refusals.cbegin(); it != m_refusals.cend(); ++it) {
+        lines << QStringLiteral("%1  %2: PS отказал (%3)")
+                     .arg(it.value().time, it.key(),
+                          qs(std::string(ps::toString(static_cast<ps::Status>(it.value().status)))));
+    }
+    // Неисправности из UDP-пакета технического состояния — пока они приходят.
+    if (const auto& tlm = m_session->telemetry()) {
+        for (const auto& [id, h] : tlm->devices) {
+            if (h == ps::DeviceHealth::Fail) {
+                lines << QStringLiteral("UDP: %1 — неисправность").arg(qs(id));
+            }
+        }
+    }
+    if (m_errors->count() > 0 && lines == errors()) {
+        return;  // телеметрия раз в секунду: без перемен список не перерисовываем
+    }
+    m_errors->clear();
+    for (const QString& line : std::as_const(lines)) {
+        auto* item = new QListWidgetItem(line, m_errors);
+        item->setForeground(QBrush(ui::errorColor()));
+        item->setData(Qt::UserRole, true);
+    }
+    if (lines.isEmpty()) {
+        auto* item = new QListWidgetItem(QStringLiteral("Ошибок нет"), m_errors);
+        item->setForeground(QBrush(ui::okColor()));
+    }
+    const int index = m_results->indexOf(m_errors);
+    m_results->setTabText(index, lines.isEmpty() ? QStringLiteral("Ошибки")
+                                                 : QStringLiteral("Ошибки (%1)").arg(lines.size()));
+    m_results->tabBar()->setTabTextColor(index, lines.isEmpty() ? QColor() : ui::errorColor());
+    render();
 }

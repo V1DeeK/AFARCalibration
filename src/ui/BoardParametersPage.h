@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QMap>
 #include <QString>
 #include <QWidget>
 
@@ -8,6 +9,7 @@
 
 class PsSession;
 class QLabel;
+class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
 class QTabWidget;
@@ -17,6 +19,11 @@ class QTimer;
 /// состояние, версия протокола, температура, напряжения и загрузка процессора из
 /// телеметрии, а в сервисном режиме ещё АЦП, луч, гетеродины, смеситель и видеоприёмник.
 /// Настройки платы не меняются: уходят только запросы get_*.
+///
+/// Вкладка «Ошибки» между «Основным» и «Подробно» собирает красным отказы PS
+/// (статус ответа не OK, например HW_NOT_READY) и неисправности из UDP-пакета
+/// технического состояния. Отказ уходит из списка, когда тот же запрос
+/// выполнен успешно.
 class BoardParametersPage final : public QWidget {
     Q_OBJECT
 
@@ -26,6 +33,8 @@ public:
     /// Запросить параметры, как по кнопке «Получить параметры».
     void requestRead();
     [[nodiscard]] bool busy() const { return m_busy; }
+    /// Строки вкладки «Ошибки» — отказы PS и неисправности по UDP.
+    [[nodiscard]] QStringList errors() const;
 
 signals:
     /// Ход операции для полосы состояния главного окна.
@@ -41,6 +50,8 @@ private:
     void onResponse(const QString& msgType, int msgCount, int status, const nlohmann::json& payload);
     void finish(const QString& note);
     void render();
+    void noteRefusal(const QString& title, int status);
+    void renderErrors();
 
     PsSession* m_session;
     QLabel* m_status = nullptr;
@@ -48,6 +59,13 @@ private:
     QTabWidget* m_results = nullptr;
     QPlainTextEdit* m_main = nullptr;
     QPlainTextEdit* m_details = nullptr;
+    QListWidget* m_errors = nullptr;
+    /// Отказы PS по названию запроса: время и статус последнего отказа.
+    struct Refusal {
+        QString time;
+        int status = 0;
+    };
+    QMap<QString, Refusal> m_refusals;
     QTimer* m_timeout = nullptr;
     QHash<QString, Reply> m_pending;   // ключ «тип#номер» запросов, ждущих ответа
     QVector<Reply> m_replies;          // полученные ответы в порядке запроса
