@@ -4,7 +4,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "ConnectionTab.h"
 #include "MacResolver.h"
 #include "MainWindow.h"
 #include "PsSession.h"
@@ -169,7 +168,9 @@ QStringList layoutProblems(QWidget* page)
             QList<QWidget*> kids;
             for (QObject* o : parent->children()) {
                 auto* w = qobject_cast<QWidget*>(o);
-                if (w && w->isVisible() && !w->isWindow()) {
+                // Подложки строк таблиц полей («Модули») лежат под виджетами строки намеренно.
+                if (w && w->isVisible() && !w->isWindow() &&
+                    !w->property("role").toString().startsWith(QStringLiteral("grid"))) {
                     kids << w;
                 }
             }
@@ -218,7 +219,7 @@ TEST_CASE("VNA probe button starts a hidden S2VNA and finishes without hanging",
     }
     app();
     Window w;
-    w.openTab(2);
+    w.openTab(1);
     auto* backend = child<QComboBox>(*w.window, "vnaBackend");
     backend->setCurrentIndex(backend->findData(1));
     QPushButton* probe = nullptr;
@@ -259,7 +260,7 @@ TEST_CASE("VNA switch connects, disconnects and reconnects the demo stand", "[ui
 {
     app();
     Window w;
-    w.openTab(2);
+    w.openTab(1);
     auto* backend = child<QComboBox>(*w.window, "vnaBackend");
     backend->setCurrentIndex(backend->findData(0));
     QPushButton* power = nullptr;
@@ -291,7 +292,7 @@ TEST_CASE("VNA switch connects, disconnects and reconnects the demo stand", "[ui
     }
 }
 
-TEST_CASE("Главное окно: шесть вкладок в порядке эскиза", "[ui][window]")
+TEST_CASE("Главное окно: пять вкладок в порядке эскиза", "[ui][window]")
 {
     app();
     Window w;
@@ -299,8 +300,7 @@ TEST_CASE("Главное окно: шесть вкладок в порядке 
     for (int i = 0; i < w.tabs->count(); ++i) {
         names << w.tabs->tabText(i);
     }
-    CHECK(names == QStringList{QStringLiteral("Подключение"), QStringLiteral("Установка параметров"),
-                               QStringLiteral("Измерение S-параметров"), QStringLiteral("Спектр"),
+    CHECK(names == QStringList{QStringLiteral("Настройки"), QStringLiteral("Измерение S-параметров"), QStringLiteral("Спектр"),
                                QStringLiteral("Тестовый прогон"), QStringLiteral("Приёмка")});
     // Окно умещается на небольшом экране: содержимое вкладок прокручивается, а не растягивает окно.
     CHECK(w.window->minimumSizeHint().width() <= 920);
@@ -312,7 +312,7 @@ TEST_CASE("Измерение S-параметров: управление на�
 {
     app();
     Window w;
-    w.openTab(2);
+    w.openTab(1);
 
     auto* plot = child<QWidget>(*w.window, "graphPlot0");
     auto* controls = child<QScrollArea>(*w.window, "graphControlsScroll");
@@ -330,7 +330,8 @@ TEST_CASE("Главное окно: «Тех. состояние» — толь�
     auto* boardTabs = tech->findChild<QTabWidget*>(QStringLiteral("boardParametersTabs"));
     REQUIRE(boardTabs != nullptr);
     CHECK(boardTabs->tabText(0) == QStringLiteral("Основное"));
-    CHECK(boardTabs->tabText(1) == QStringLiteral("Подробно"));
+    CHECK(boardTabs->tabText(1) == QStringLiteral("Ошибки"));
+    CHECK(boardTabs->tabText(2) == QStringLiteral("Подробно"));
     // Телеметрия PS в «Тех. состоянии» не показывается: нет ни вкладки, ни плиток узлов.
     for (QTabWidget* tabs : tech->findChildren<QTabWidget*>()) {
         for (int i = 0; i < tabs->count(); ++i) {
@@ -341,7 +342,7 @@ TEST_CASE("Главное окно: «Тех. состояние» — толь�
     CHECK(tech->findChild<QLabel*>(QStringLiteral("psTechMode")) == nullptr);
     CHECK(tech->findChild<QPushButton*>(QStringLiteral("readBoardParameters")) != nullptr);
 
-    auto* command = child<QGroupBox>(*w.window, "commandBox");
+    auto* command = child<QWidget>(*w.window, "commandBox");
     CHECK(command->findChildren<QTabWidget*>().isEmpty());
 
     // Без связи с PS «Получить параметры» ничего не шлёт и говорит об этом.
@@ -399,14 +400,14 @@ TEST_CASE("Главное окно: IP платы вводится с клави
     CHECK(waitFor([&] { return moduleStatus->text().contains(QStringLiteral("PS: на связи")); }, 3000));
 
     // Одна и та же связь работает на других вкладках без повторного подключения.
-    w.openTab(1);
+    w.openTab(0);
     auto* toService = child<QPushButton>(*w.window, "psToService");
     REQUIRE(waitFor([&] { return toService->isEnabled(); }));
     toService->click();
     REQUIRE(waitFor([&] { return child<QPushButton>(*w.window, "psWriteCodes")->isEnabled(); }));
     CHECK(child<QLabel>(*w.window, "psMode")->text().contains(QStringLiteral("сервисный")));
 
-    w.openTab(4);
+    w.openTab(3);
     auto* journal = child<QTableWidget>(*w.window, "testRunJournal");
     CHECK(journal->rowCount() > 3);
     child<QPushButton>(*w.window, "udpCheckStart")->click();
@@ -415,11 +416,11 @@ TEST_CASE("Главное окно: IP платы вводится с клави
                     14000));
     CHECK(child<QLabel>(*w.window, "udpVerdict")->text().startsWith(QStringLiteral("Норма")));
 
-    w.openTab(5);
+    w.openTab(4);
     auto* start = child<QPushButton>(*w.window, "psCheckStart");
     CHECK(start->isEnabled());
 
-    // Отключение на вкладке «Подключение» гасит ручные команды везде.
+    // Отключение на вкладке «Настройки» гасит ручные команды везде.
     w.openTab(0);
     child<QPushButton>(*w.window, "psConnect")->click();
     CHECK_FALSE(w.session->link()->isReady());
@@ -442,7 +443,7 @@ TEST_CASE("Спектр запрашивает SERVICE и адрес PS посл
     REQUIRE(waitFor([&] { return w.session->link()->isReady() && w.session->modeKnown(); }));
     CHECK(server.mode() == afar::ps::Mode::Idle);
 
-    w.openTab(3);
+    w.openTab(2);
     REQUIRE(waitFor([&] { return server.mode() == afar::ps::Mode::Service; }));
     REQUIRE(waitFor([&] { return w.engine->state().connect_requested.load(); }));
     {
@@ -450,7 +451,7 @@ TEST_CASE("Спектр запрашивает SERVICE и адрес PS посл
         CHECK(w.engine->state().pluto_ip == "ip:127.0.0.1");
     }
 
-    w.openTab(1);
+    w.openTab(0);
     child<QPushButton>(*w.window, "psToIdle")->click();
     REQUIRE(waitFor([&] { return server.mode() == afar::ps::Mode::Idle; }));
     CHECK(w.engine->state().disconnect_requested.load());
@@ -545,14 +546,14 @@ TEST_CASE("Снимки вкладок в обеих темах для пров�
     // Набираем состояния, как их видит оператор: журнал, результаты сканирования, стресс-тест, приёмка.
     child<QPushButton>(*w.window, "sffStart")->click();
     REQUIRE(waitFor([&] { return child<QTableWidget>(*w.window, "sffResults")->rowCount() == 3; }));
-    w.openTab(4);
+    w.openTab(3);
     child<QSpinBox>(*w.window, "stressDuration")->setValue(2);
     child<QSpinBox>(*w.window, "stressCount")->setValue(60);
     child<QPushButton>(*w.window, "stressStart")->click();
     waitFor([&] { return false; }, 2500);
     child<QPushButton>(*w.window, "udpCheckStart")->click();
     waitFor([&] { return false; }, 3500);
-    w.openTab(5);
+    w.openTab(4);
     child<QPushButton>(*w.window, "psCheckStart")->click();
     waitFor([&] { return false; }, 2500);
 
@@ -569,3 +570,4 @@ TEST_CASE("Снимки вкладок в обеих темах для пров�
     }
     applyAppTheme(*qApp, AppTheme::Light);
 }
+

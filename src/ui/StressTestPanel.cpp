@@ -209,7 +209,7 @@ void StressTestPanel::start()
         return;
     }
     if (!m_session->manualAllowed()) {
-        m_summary->setText(QStringLiteral("Нет связи с PS — сначала подключитесь на вкладке «Подключение»."));
+        m_summary->setText(QStringLiteral("Нет связи с PS — сначала подключитесь на вкладке «Настройки»."));
         return;
     }
     resetCounters();

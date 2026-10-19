@@ -257,10 +257,8 @@ add_library(afar_app_ui STATIC
     ui/S2VnaRuntime.h
     ui/BoardParametersPage.cpp
     ui/BoardParametersPage.h
-    ui/ParametersTab.cpp
-    ui/ParametersTab.h
-    ui/ConnectionTab.cpp
-    ui/ConnectionTab.h
+    ui/SettingsTab.cpp
+    ui/SettingsTab.h
     ui/FullScanPanel.cpp
     ui/FullScanPanel.h
     ui/PsExchangeView.cpp

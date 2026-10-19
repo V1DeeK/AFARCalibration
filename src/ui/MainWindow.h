@@ -14,10 +14,9 @@ class CodeMatrixTab;
 class ConnectionBar;
 class MeasureTab;
 class MeasureWorker;
-class ConnectionTab;
-class ParametersTab;
 class PsServiceCheckPage;
 class PsSession;
+class SettingsTab;
 class SpectrumOpenGLWidget;
 class TestRunTab;
 class QTabWidget;
@@ -140,10 +139,10 @@ private:
     PsSession* m_psSession = nullptr;
     QTabWidget* m_tabs = nullptr;
     QPushButton* m_themeButton = nullptr;
-    ConnectionTab* m_connectionTab = nullptr;
+    SettingsTab* m_settingsTab = nullptr;
     BoardParametersPage* m_boardPage = nullptr;
-    ParametersTab* m_parametersTab = nullptr;
     SpectrumOpenGLWidget* m_spectrum = nullptr;
+    QWidget* m_spectrumPage = nullptr;  ///< страница «Спектр» (без OpenGL — пояснение)
     QTimer* m_spectrumConnectTimer = nullptr;
     bool m_spectrumServiceRequested = false;
     bool m_spectrumConnectedFromPs = false;

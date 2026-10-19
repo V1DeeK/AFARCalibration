@@ -8,7 +8,7 @@ class QComboBox;
 class QLabel;
 class QLineEdit;
 
-/// Модальное окно «Журнал» вкладки «Подключение»: весь обмен с PS по TCP и UDP
+/// Модальное окно «Журнал» вкладки «Настройки»: весь обмен с PS по TCP и UDP
 /// и ручная отправка команды с payload одной строкой, как журнал консоли PS
 /// в РМО.
 class PsJournalDialog final : public QDialog {

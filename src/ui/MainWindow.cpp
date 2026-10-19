@@ -6,8 +6,7 @@
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
 #include "BoardParametersPage.h"
-#include "ConnectionTab.h"
-#include "ParametersTab.h"
+#include "SettingsTab.h"
 #include "PsServiceCheckPage.h"
 #include "PsSession.h"
 #include "TestRunTab.h"
@@ -136,15 +135,12 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_tabs->setCornerWidget(m_themeButton, Qt::TopRightCorner);
     connect(m_themeButton, &QPushButton::clicked, this, &MainWindow::onToggleTheme);
 
-    // --- Подключение ---
-    m_connectionTab = new ConnectionTab(m_psSession, m_tabs);
+    // --- Настройки: подключение к плате и установка параметров ---
+    m_settingsTab = new SettingsTab(m_psSession, m_tabs);
     m_boardPage = new BoardParametersPage(m_psSession);
-    m_connectionTab->setTechPage(m_boardPage);
+    m_settingsTab->setTechPage(m_boardPage);
     connect(m_boardPage, &BoardParametersPage::operationProgress, this,
             [this](const QString& text, int done, int total) { setOperationProgress(text, done, total); });
-
-    // --- Установка параметров ---
-    m_parametersTab = new ParametersTab(m_psSession, m_tabs);
 
     // --- Измерение S-параметров: всё, что было в «Калибровке AFAR» ---
     auto* viewport = new QScrollArea(m_tabs);
@@ -175,8 +171,8 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     calLayout->setContentsMargins(0, 0, 0, 0);
     calLayout->addWidget(m_measure->calibrationPanel());
     m_connections->setMiddleWidget(calBox);
-    // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Подключение».
-    m_connectionTab->addTechSection(m_connections->scpiPanel());
+    // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Настройки».
+    m_settingsTab->addTechSection(m_connections->scpiPanel());
 
     rootLayout->addWidget(m_connections);
     rootLayout->addWidget(m_measure, 1);
@@ -213,15 +209,15 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     refreshCheck();
 
     // Страницы прокручиваются: при тесной рамке окна появляется прокрутка, а виджеты не налезают друг на друга.
-    m_tabs->addTab(ui::scrollPage(m_connectionTab), QStringLiteral("Подключение"));
-    m_tabs->addTab(ui::scrollPage(m_parametersTab), QStringLiteral("Установка параметров"));
+    m_tabs->addTab(ui::scrollPage(m_settingsTab), QStringLiteral("Настройки"));
     m_tabs->addTab(viewport, QStringLiteral("Измерение S-параметров"));
+    m_spectrumPage = spectrumPage;
     m_tabs->addTab(spectrumPage, QStringLiteral("Спектр"));
     m_tabs->addTab(ui::scrollPage(m_testRun), QStringLiteral("Тестовый прогон"));
     m_tabs->addTab(ui::scrollPage(acceptance), QStringLiteral("Приёмка"));
     setCentralWidget(m_tabs);
 
-    const QString tabKey = QStringLiteral("ui/active_tab_v3");
+    const QString tabKey = QStringLiteral("ui/active_tab_v4");
     m_tabs->setCurrentIndex(qBound(0, QSettings().value(tabKey, 0).toInt(), m_tabs->count() - 1));
     connect(m_tabs, &QTabWidget::currentChanged, this,
             [tabKey](int index) { QSettings().setValue(tabKey, index); });
@@ -376,7 +372,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
 void MainWindow::updateSpectrumFromPs()
 {
     const bool ready = m_psSession->link()->isReady();
-    const bool spectrumTab = m_tabs->currentIndex() == 3;
+    const bool spectrumTab = m_tabs->currentWidget() == m_spectrumPage;
     if (m_spectrumConnectedFromPs
         && (!ready || (m_psSession->modeKnown()
                        && m_psSession->mode() != afar::ps::Mode::Service))) {

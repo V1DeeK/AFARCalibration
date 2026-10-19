@@ -7,10 +7,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "ConnectionTab.h"
 #include "FullScanPanel.h"
 #include "MacResolver.h"
-#include "ParametersTab.h"
+#include "SettingsTab.h"
 #include "PsDiagnosticsPage.h"
 #include "PsLink.h"
 #include "PsModulesPage.h"
@@ -97,8 +96,9 @@ struct Bench {
         session = std::make_unique<PsSession>();
         session->macResolver()->setArpReader([] { return QHash<QString, QString>{}; });
         session->macResolver()->setCandidateProvider([] { return QStringList{}; });
-        connection = std::make_unique<ConnectionTab>(session.get());
-        parameters = std::make_unique<ParametersTab>(session.get());
+        settings = std::make_unique<SettingsTab>(session.get());
+        connection = settings.get();
+        parameters = settings.get();
         testRun = std::make_unique<TestRunTab>(session.get());
         connection->resize(1300, 800);
         connection->show();
@@ -108,8 +108,7 @@ struct Bench {
     ~Bench()
     {
         testRun.reset();
-        parameters.reset();
-        connection.reset();
+        settings.reset();
         session.reset();
     }
 
@@ -154,8 +153,10 @@ struct Bench {
 
     TestPsServer server;
     std::unique_ptr<PsSession> session;
-    std::unique_ptr<ConnectionTab> connection;
-    std::unique_ptr<ParametersTab> parameters;
+    std::unique_ptr<SettingsTab> settings;
+    /// Бывшие вкладки «Подключение» и «Установка параметров» — теперь одна «Настройки».
+    SettingsTab* connection = nullptr;
+    SettingsTab* parameters = nullptr;
     std::unique_ptr<TestRunTab> testRun;
 };
 

@@ -1,13 +1,13 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "ConnectionTab.h"
 #include "BoardParametersPage.h"
 #include "FullScanPanel.h"
 #include "MacResolver.h"
-#include "ParametersTab.h"
+#include "SettingsTab.h"
 #include "PsJournalDialog.h"
 #include "PsDiagnosticsPage.h"
+#include "PsExchangeView.h"
 #include "PsModulesPage.h"
 #include "PsOsdPage.h"
 #include "PsPacketPage.h"
@@ -30,10 +30,12 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
 #include <QSpinBox>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTemporaryDir>
@@ -93,8 +95,9 @@ struct Ui {
         // Тесты не сканируют сеть: поиск по MAC — только по подставленным данным.
         session->macResolver()->setArpReader([] { return QHash<QString, QString>{}; });
         session->macResolver()->setCandidateProvider([] { return QStringList{}; });
-        connection = std::make_unique<ConnectionTab>(session.get());
-        parameters = std::make_unique<ParametersTab>(session.get());
+        settings = std::make_unique<SettingsTab>(session.get());
+        connection = settings.get();
+        parameters = settings.get();
         testRun = std::make_unique<TestRunTab>(session.get());
         check = std::make_unique<PsServiceCheckPage>(session->link());
         QObject::connect(check.get(), &PsServiceCheckPage::runningChanged, session.get(),
@@ -107,8 +110,7 @@ struct Ui {
     {
         check.reset();
         testRun.reset();
-        parameters.reset();
-        connection.reset();
+        settings.reset();
         session.reset();
     }
     void show()
@@ -116,12 +118,14 @@ struct Ui {
         connection->resize(1300, 800);
         connection->show();
         parameters->show();
-        static_cast<void>(QTest::qWaitForWindowExposed(connection.get()));
+        static_cast<void>(QTest::qWaitForWindowExposed(connection));
     }
 
     std::unique_ptr<PsSession> session;
-    std::unique_ptr<ConnectionTab> connection;
-    std::unique_ptr<ParametersTab> parameters;
+    std::unique_ptr<SettingsTab> settings;
+    /// Бывшие вкладки «Подключение» и «Установка параметров» — теперь одна «Настройки».
+    SettingsTab* connection = nullptr;
+    SettingsTab* parameters = nullptr;
     std::unique_ptr<TestRunTab> testRun;
     std::unique_ptr<PsServiceCheckPage> check;
 };
@@ -600,13 +604,13 @@ TEST_CASE("Подключение: «Тех. состояние» без тел�
             CHECK(tabs->tabText(i) != QStringLiteral("Телеметрия"));
         }
     }
-    auto* command = child<QGroupBox>(*ui.connection, "commandBox");
+    auto* command = child<QWidget>(*ui.connection, "commandBox");
     CHECK(command->findChildren<QTabWidget*>().isEmpty());
     // Журнал открывается только справа — отдельной кнопкой, и он один.
     int openJournalButtons = 0;
     for (QPushButton* b : ui.connection->findChildren<QPushButton*>()) {
         // Кнопки самого модального окна журнала — не в счёт, они внутри него.
-        if (b->window() == ui.connection.get() && b->text().contains(QStringLiteral("Открыть журнал"))) {
+        if (b->window() == ui.connection && b->text().contains(QStringLiteral("Открыть журнал"))) {
             ++openJournalButtons;
         }
     }
@@ -784,7 +788,7 @@ TEST_CASE("Полное сканирование: перевод в режим, 
     Ui ui;
     ui.show();
     connectUi(ui, server);
-    QWidget& c = *ui.parameters;  // «Полное сканирование» живёт на вкладке «Установка параметров»
+    QWidget& c = *ui.parameters;  // «Полное сканирование» живёт на вкладке «Настройки»
 
     child<QDoubleSpinBox>(c, "sffFreqFrom")->setValue(5000.0);  // МГц
     child<QComboBox>(c, "sffFreqToUnit")->setCurrentIndex(1);   // ГГц
@@ -905,9 +909,14 @@ TEST_CASE("Журнал обмена: выбранное сообщение ви
     Ui ui;
     ui.show();
     connectUi(ui, server);
-    auto* table = child<QTableWidget>(*ui.connection, "psJournalRecent");
-    auto* detail = ui.connection->findChild<QPlainTextEdit*>(QStringLiteral("psExchangeDetail"));
-    REQUIRE(detail != nullptr);
+    auto* table = child<QTableWidget>(*ui.connection, "psExchange");
+    // Панель «сообщение целиком» — у той же таблицы, а не у модального окна журнала.
+    QWidget* owner = table;
+    while (owner != nullptr && qobject_cast<PsExchangeView*>(owner) == nullptr) {
+        owner = owner->parentWidget();
+    }
+    REQUIRE(owner != nullptr);
+    QPlainTextEdit* detail = static_cast<PsExchangeView*>(owner)->detail();
     waitFor([&] { return false; }, 250);
     REQUIRE(table->rowCount() > 0);
     CHECK(detail->toPlainText().isEmpty());
@@ -970,6 +979,63 @@ TEST_CASE("Параметры платы по PS: вне сервисного р
     CHECK(text.contains(QStringLiteral("Луч")));
     CHECK(text.contains(QStringLiteral("Видеоприёмник")));
     CHECK_FALSE(text.contains(QStringLiteral("только в сервисном режиме")));
+}
+
+TEST_CASE("Тех. состояние: отказы PS и неисправности UDP — красным на вкладке «Ошибки»", "[ps][ui][board]")
+{
+    app();
+    TestPsServer server;
+    server.setTelemetryPeriodMs(100);
+    Ui ui;
+    ui.show();
+    connectUi(ui, server);
+    BoardParametersPage page(ui.session.get());
+    auto* tabs = page.findChild<QTabWidget*>(QStringLiteral("boardParametersTabs"));
+    REQUIRE(tabs != nullptr);
+    CHECK(tabs->tabText(1) == QStringLiteral("Ошибки"));
+    CHECK(page.errors().isEmpty());
+
+    child<QPushButton>(*ui.parameters, "psToService")->click();
+    REQUIRE(waitFor([&] { return ui.session->mode() == afar::ps::Mode::Service; }));
+    // Модули не ответили по RS-485 — PS отказывает с HW_NOT_READY на каждый из четырёх.
+    server.setModulesSilent(true);
+    page.requestRead();
+    REQUIRE(waitFor([&] { return !page.busy(); }, 4000));
+    const QStringList errors = page.errors();
+    for (const QString& module : {QStringLiteral("Гетеродин смесителя"), QStringLiteral("Гетеродин калибровки"),
+                                  QStringLiteral("Смеситель"), QStringLiteral("Видеоприёмник")}) {
+        INFO(module.toStdString());
+        CHECK(errors.filter(QStringLiteral("%1: PS отказал (HW_NOT_READY)").arg(module)).size() == 1);
+    }
+    CHECK(tabs->tabText(1) == QStringLiteral("Ошибки (%1)").arg(errors.size()));
+    CHECK(tabs->tabBar()->tabTextColor(1) == ui::errorColor());
+    auto* list = page.findChild<QListWidget*>(QStringLiteral("boardParametersErrors"));
+    REQUIRE(list != nullptr);
+    CHECK(list->item(0)->foreground().color() == ui::errorColor());
+    // В «Основном» отказы не повторяются, там только ссылка на «Ошибки».
+    const QString main = page.findChild<QPlainTextEdit*>(QStringLiteral("boardParametersOutput"))->toPlainText();
+    CHECK_FALSE(main.contains(QStringLiteral("PS отказал")));
+    CHECK(main.contains(QStringLiteral("на вкладке «Ошибки»")));
+
+    // Отказ команды с другой вкладки тоже попадает в «Ошибки»; успешный ответ снимает его.
+    server.setModulesSilent(false);
+    page.requestRead();
+    REQUIRE(waitFor([&] { return !page.busy(); }, 4000));
+    CHECK(page.errors().filter(QStringLiteral("PS отказал")).isEmpty());
+    server.setModulesSilent(true);
+    child<QPushButton>(*ui.parameters, "psMixerRead")->click();
+    REQUIRE(waitFor([&] { return page.errors().filter(QStringLiteral("Смеситель: PS отказал")).size() == 1; }));
+    server.setModulesSilent(false);
+    child<QPushButton>(*ui.parameters, "psMixerRead")->click();
+    REQUIRE(waitFor([&] { return page.errors().filter(QStringLiteral("Смеситель")).isEmpty(); }));
+
+    // Неисправность из UDP-пакета технического состояния: бит 75 — «Самопроверка: RS-485».
+    QByteArray bytes(10, static_cast<char>(0xff));
+    bytes[1] = static_cast<char>(0x1f);  // биты 13–15 — флаги ошибок, 0 = исправно
+    bytes[9] = static_cast<char>(0xf7);
+    server.setStatusBytes(bytes);
+    REQUIRE(waitFor([&] { return page.errors().filter(QStringLiteral("UDP: Самопроверка: RS-485")).size() == 1; }));
+    CHECK(page.errors().filter(QStringLiteral("UDP:")).size() == 1);
 }
 
 TEST_CASE("Модули — гетеродины, смеситель, видеоприёмник по JSON", "[ps][ui][modules]")
@@ -1057,8 +1123,7 @@ TEST_CASE("Единый вид: у каждой кнопки действия н
     ui.show();
     ui.check->show();
     const std::vector<std::pair<QString, QWidget*>> pages{
-        {QStringLiteral("Подключение"), ui.connection.get()},
-        {QStringLiteral("Установка параметров"), ui.parameters.get()},
+        {QStringLiteral("Настройки"), ui.settings.get()},
         {QStringLiteral("Тестовый прогон"), ui.testRun.get()},
         {QStringLiteral("Приёмка PS"), ui.check.get()},
     };
@@ -1074,13 +1139,15 @@ TEST_CASE("Единый вид: у каждой кнопки действия н
     }
 }
 
-TEST_CASE("Подключение: период keep_alive задаётся в «Обмене сообщениями с PS» и применяется к связи", "[ps][ui][keepalive]")
+TEST_CASE("Настройки: период keep_alive задаётся в «Одиночном сообщении» и применяется к связи", "[ps][ui][keepalive]")
 {
     app();
     Ui ui;
     ui.show();
-    auto* box = child<QGroupBox>(*ui.connection, "commandBox");
-    CHECK(box->title() == QStringLiteral("Обмен сообщениями с PS"));
+    // «Обмен сообщениями с PS» теперь вкладка «Одиночное сообщение» в журнале «Настроек».
+    auto* box = child<QWidget>(*ui.connection, "commandBox");
+    QTabWidget* journalTabs = ui.settings->journalTabs();
+    CHECK(journalTabs->tabText(journalTabs->indexOf(box)) == QStringLiteral("Одиночное сообщение"));
     auto* spin = child<QSpinBox>(*ui.connection, "psKeepAlive");
     CHECK(spin->value() == 5000);
     CHECK(ui.session->link()->timeouts().keepAliveIdleMs == 5000);
@@ -1112,3 +1179,4 @@ TEST_CASE("Подключение: период keep_alive задаётся в �
     waitFor([&] { return false; }, 1500);
     CHECK(server.commandsReceived() - before >= 3);
 }
+
