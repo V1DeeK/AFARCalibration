@@ -2,11 +2,7 @@
 
 #include "UiStyle.h"
 
-#include "S2VnaLauncher.h"
-
-#include <QCheckBox>
 #include <QComboBox>
-#include <QFileDialog>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -17,7 +13,6 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
-#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStandardItem>
@@ -155,33 +150,17 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     vnaLayout->setSpacing(ui::kInnerGap);
     m_backend = new QComboBox(this);
     m_backend->setObjectName(QStringLiteral("vnaBackend"));
-    m_backend->addItem(QStringLiteral("Связанный демостенд (VNA + DUT)"), 0);
-    // QSettings vna/backend = 0/1/2/3 (userData); подписи меняются, ключи нет.
-    // Alias «S2VNA …» в UserRole+1 — для поиска/подсказок операторам со старым именем.
-    m_backend->addItem(QStringLiteral("C2220 Socket (SCPI)"), 1);
-    m_backend->setItemData(1, QStringLiteral("S2VNA Socket"), Qt::UserRole + 1);
+    m_backend->addItem(QStringLiteral("Демостенд"), 0);
+    m_backend->setItemData(0, QStringLiteral("Имитатор VNA + DUT без оборудования"), Qt::ToolTipRole);
+    m_backend->addItem(QStringLiteral("C2220 через S2VNA"), 1);
     m_backend->setItemData(
         1,
         QStringLiteral(
-            "Живой C1220/C2220 по TCP. Запустите S2VNA и включите Socket Server вручную."),
-        Qt::ToolTipRole);
-    m_backend->addItem(QStringLiteral("C2220 COM (SCPI)"), 2);
-    m_backend->setItemData(2, QStringLiteral("S2VNA COM"), Qt::UserRole + 1);
-    m_backend->setItemData(
-        2,
-        QStringLiteral(
-            "Живой C2220 по COM. Нужен запущенный SCPI-сервер S2VNA (удалённый COM)."),
-        Qt::ToolTipRole);
-    m_backend->addItem(QStringLiteral("S2VNA Demo C2220 (Socket)"), 3);
-    m_backend->setItemData(3, QStringLiteral("S2VNA Demo Mode"), Qt::UserRole + 1);
-    m_backend->setItemData(
-        3,
-        QStringLiteral(
-            "Запустите S2VNA в Demo Mode и включите Socket Server вручную. "
-            "Графики и отчёты не являются метрологией."),
+            "Живой C1220/C2220 по TCP. При проверке связи S2VNA запускается скрыто, "
+            "если она ещё не запущена."),
         Qt::ToolTipRole);
     m_backend->setToolTip(
-        QStringLiteral("S2VNA = SCPI-сервер; калибровка и измерения — из AFAR."));
+        QStringLiteral("Реальный C2220 подключается через S2VNA; Демостенд работает локально."));
     m_host = new QLineEdit(QStringLiteral("127.0.0.1"), this);
     m_host->setObjectName(QStringLiteral("vnaHost"));
     m_port = new QSpinBox(this);
@@ -189,9 +168,7 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     m_port->setRange(1, 65535);
     m_port->setValue(5025);
     m_port->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    m_com = new QLineEdit(QStringLiteral("COM3"), this);
-    m_com->setObjectName(QStringLiteral("vnaComPort"));
-    m_probe = new QPushButton(QStringLiteral("Проверить связь"), this);
+    m_probe = new QPushButton(QStringLiteral("Вкл"), this);
     m_probe->setObjectName(QStringLiteral("btnPrimary"));
     ui::setButtonRole(m_probe, ui::ButtonRole::Primary);
     auto* vnaFields = new QGridLayout;
@@ -205,38 +182,9 @@ ConnectionBar::ConnectionBar(QWidget* parent)
     vnaLayout->addWidget(caption(QStringLiteral("Тип подключения")));
     vnaLayout->addWidget(m_backend);
     vnaLayout->addLayout(vnaFields);
-    vnaLayout->addWidget(caption(QStringLiteral("COM-порт")));
-    vnaLayout->addWidget(m_com);
-    // S2VNA на этом ПК программа запускает сама, без окна (РЭ S2VNA ч. 2, стр. 343).
-    m_s2vnaAutoStart = new QCheckBox(QStringLiteral("Запускать S2VNA скрыто"), this);
-    m_s2vnaAutoStart->setObjectName(QStringLiteral("s2vnaAutoStart"));
-    m_s2vnaAutoStart->setToolTip(QStringLiteral(
-        "Если S2VNA не запущена, программа запустит её без окна с включённым Socket Server "
-        "на указанном порту и закроет при выходе. Уже запущенную оператором S2VNA программа "
-        "не закрывает. Только для адреса 127.0.0.1 / localhost."));
-    m_s2vnaPath = new QLineEdit(S2VnaLauncher::defaultExecutablePath(), this);
-    m_s2vnaPath->setObjectName(QStringLiteral("s2vnaPath"));
-    m_s2vnaPath->setPlaceholderText(QStringLiteral("Путь к S2VNA.exe"));
-    m_s2vnaBrowse = new QPushButton(QStringLiteral("Обзор…"), this);
-    m_s2vnaBrowse->setObjectName(QStringLiteral("s2vnaBrowse"));
-    auto* s2vnaPathRow = new QHBoxLayout;
-    s2vnaPathRow->setSpacing(ui::kInnerGap);
-    s2vnaPathRow->addWidget(m_s2vnaPath, 1);
-    s2vnaPathRow->addWidget(m_s2vnaBrowse);
-    m_s2vnaWindow = new QPushButton(QStringLiteral("Показать окно S2VNA"), this);
-    m_s2vnaWindow->setObjectName(QStringLiteral("s2vnaWindow"));
-    m_s2vnaWindow->setToolTip(QStringLiteral(
-        "Нужно, например, для калибровки или настройки в самой S2VNA. Повторное нажатие "
-        "снова убирает окно."));
-    m_s2vnaWindow->setEnabled(false);
-
-    vnaLayout->addWidget(m_s2vnaAutoStart);
-    vnaLayout->addWidget(caption(QStringLiteral("Программа S2VNA")));
-    vnaLayout->addLayout(s2vnaPathRow);
     vnaLayout->addWidget(m_vna);
     vnaLayout->addWidget(m_filterReady);
     vnaLayout->addWidget(m_probe);
-    vnaLayout->addWidget(m_s2vnaWindow);
     vnaLayout->addStretch(1);
 
     // --- Контроллер изделия и состояние: вторая страница общей области ---
@@ -333,43 +281,13 @@ ConnectionBar::ConnectionBar(QWidget* parent)
             &ConnectionBar::onBackendChanged);
     connect(m_probe, &QPushButton::clicked, this, [this]() {
         saveSettings();
-        emit vnaSettingsChanged();
-        emit probeVnaRequested();
+        emit vnaConnectionToggleRequested(!m_vnaConnectionActive);
     });
     connect(m_host, &QLineEdit::editingFinished, this, [this]() {
         saveSettings();
         emit vnaSettingsChanged();
     });
     connect(m_port, &QSpinBox::editingFinished, this, [this]() {
-        saveSettings();
-        emit vnaSettingsChanged();
-    });
-    connect(m_s2vnaAutoStart, &QCheckBox::toggled, this, [this]() {
-        updateFieldsEnabled();
-        saveSettings();
-    });
-    connect(m_s2vnaPath, &QLineEdit::editingFinished, this, [this]() { saveSettings(); });
-    connect(m_s2vnaBrowse, &QPushButton::clicked, this, [this]() {
-        const QString path = QFileDialog::getOpenFileName(
-            this, QStringLiteral("Программа S2VNA"), m_s2vnaPath->text(),
-#ifdef Q_OS_WIN
-            QStringLiteral("S2VNA (S2VNA*.exe);;Программы (*.exe)")
-#else
-            QString()
-#endif
-        );
-        if (!path.isEmpty()) {
-            m_s2vnaPath->setText(path);
-            saveSettings();
-        }
-    });
-    connect(m_s2vnaWindow, &QPushButton::clicked, this, [this]() {
-        m_s2vnaWindowShown = !m_s2vnaWindowShown;
-        m_s2vnaWindow->setText(m_s2vnaWindowShown ? QStringLiteral("Скрыть окно S2VNA")
-                                                  : QStringLiteral("Показать окно S2VNA"));
-        emit s2vnaWindowVisibilityRequested(m_s2vnaWindowShown);
-    });
-    connect(m_com, &QLineEdit::editingFinished, this, [this]() {
         saveSettings();
         emit vnaSettingsChanged();
     });
@@ -447,16 +365,11 @@ void ConnectionBar::updateDutEndpointEnabled()
 void ConnectionBar::updateFieldsEnabled()
 {
     const int b = vnaBackend();
-    const bool settingsEnabled = !m_timeoutsLocked;
+    const bool settingsEnabled = !m_timeoutsLocked && !m_vnaConnectionActive;
     m_backend->setEnabled(settingsEnabled);
-    m_host->setEnabled(settingsEnabled && (b == 1 || b == 3));
-    m_port->setEnabled(settingsEnabled && (b == 1 || b == 3));
-    m_com->setEnabled(settingsEnabled && b == 2);
-    m_probe->setEnabled(settingsEnabled);
-    const bool socketBackend = b == 1 || b == 3;
-    m_s2vnaAutoStart->setEnabled(settingsEnabled && socketBackend);
-    m_s2vnaPath->setEnabled(settingsEnabled && socketBackend && m_s2vnaAutoStart->isChecked());
-    m_s2vnaBrowse->setEnabled(m_s2vnaPath->isEnabled());
+    m_host->setEnabled(settingsEnabled && b == 1);
+    m_port->setEnabled(settingsEnabled && b == 1);
+    m_probe->setEnabled(!m_timeoutsLocked);
     if (m_scpiSimulate) {
         m_scpiSimulate->setVisible(b == 0);
     }
@@ -479,26 +392,12 @@ void ConnectionBar::emitTimeoutsChanged()
 void ConnectionBar::loadSettings()
 {
     QSettings s;
-    const int backend = s.value(QStringLiteral("vna/backend"), 1).toInt();
+    const int savedBackend = s.value(QStringLiteral("vna/backend"), 1).toInt();
+    const int backend = savedBackend == 3 ? 0 : savedBackend == 2 ? 1 : savedBackend;
     const int backendIndex = m_backend->findData(backend);
-    {
-        // Иначе onBackendChanged() сохранит значения по умолчанию раньше, чем
-        // загрузятся адрес, порт и путь к S2VNA.
-        const QSignalBlocker block(m_backend);
-        m_backend->setCurrentIndex(backendIndex >= 0 ? backendIndex : m_backend->findData(1));
-    }
+    m_backend->setCurrentIndex(backendIndex >= 0 ? backendIndex : m_backend->findData(1));
     m_host->setText(s.value(QStringLiteral("vna/host"), QStringLiteral("127.0.0.1")).toString());
     m_port->setValue(s.value(QStringLiteral("vna/port"), 5025).toInt());
-    m_com->setText(s.value(QStringLiteral("vna/com"), QStringLiteral("COM3")).toString());
-    m_s2vnaPath->setText(s.value(QStringLiteral("vna/s2vna_path"),
-                                 S2VnaLauncher::defaultExecutablePath())
-                             .toString());
-    {
-        // toggled() сохраняет настройки, а остальные поля ещё не загружены.
-        const QSignalBlocker block(m_s2vnaAutoStart);
-        m_s2vnaAutoStart->setChecked(
-            s.value(QStringLiteral("vna/s2vna_autostart"), true).toBool());
-    }
     m_connectMs->blockSignals(true);
     m_sweepMs->blockSignals(true);
     m_retries->blockSignals(true);
@@ -530,9 +429,6 @@ void ConnectionBar::saveSettings() const
     s.setValue(QStringLiteral("vna/backend"), vnaBackend());
     s.setValue(QStringLiteral("vna/host"), vnaHost());
     s.setValue(QStringLiteral("vna/port"), vnaPort());
-    s.setValue(QStringLiteral("vna/com"), vnaComPort());
-    s.setValue(QStringLiteral("vna/s2vna_autostart"), m_s2vnaAutoStart->isChecked());
-    s.setValue(QStringLiteral("vna/s2vna_path"), s2vnaPath());
     s.setValue(QStringLiteral("vna/connect_ms"), vnaConnectTimeoutMs());
     s.setValue(QStringLiteral("vna/sweep_ms"), vnaSweepTimeoutMs());
     s.setValue(QStringLiteral("vna/retries"), vnaMeasureRetries());
@@ -555,11 +451,6 @@ QString ConnectionBar::vnaHost() const
 int ConnectionBar::vnaPort() const
 {
     return m_port->value();
-}
-
-QString ConnectionBar::vnaComPort() const
-{
-    return m_com->text().trimmed();
 }
 
 bool ConnectionBar::allowDirectAccess() const
@@ -605,6 +496,13 @@ QString ConnectionBar::dutComPort() const
 void ConnectionBar::setVnaSettingsLocked(bool locked)
 {
     m_timeoutsLocked = locked;
+    updateFieldsEnabled();
+}
+
+void ConnectionBar::setVnaConnectionActive(bool active)
+{
+    m_vnaConnectionActive = active;
+    m_probe->setText(active ? QStringLiteral("Выкл") : QStringLiteral("Вкл"));
     updateFieldsEnabled();
 }
 
@@ -657,30 +555,6 @@ void ConnectionBar::setVnaInfo(const QString& model,
         ui::setTone(m_vna, ui::Tone::Error);
         m_filterReady->setText(QStringLiteral("S-параметры: нужна связь VNA"));
         ui::setTone(m_filterReady, ui::Tone::Error);
-    }
-}
-
-bool ConnectionBar::s2vnaAutoStart() const
-{
-    return m_s2vnaAutoStart->isChecked();
-}
-
-QString ConnectionBar::s2vnaPath() const
-{
-    return m_s2vnaPath->text().trimmed();
-}
-
-void ConnectionBar::setS2VnaWindowControlEnabled(bool enabled)
-{
-    if (m_s2vnaWindow->isEnabled() == enabled) {
-        return;
-    }
-    m_s2vnaWindow->setEnabled(enabled);
-    if (!enabled) {
-        // После переподключения S2VNA снова без окна (запуск с /visible:off) или
-        // в том виде, в каком её оставил оператор; текст кнопки — к исходному.
-        m_s2vnaWindowShown = false;
-        m_s2vnaWindow->setText(QStringLiteral("Показать окно S2VNA"));
     }
 }
 

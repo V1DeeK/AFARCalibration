@@ -5,7 +5,10 @@
 #include "ConnectionBar.h"
 #include "MeasureTab.h"
 #include <QTabWidget>
+#include <QTcpSocket>
+#include <QTcpServer>
 #include "S21PlotWidget.h"
+#include "S2VnaRuntime.h"
 #include "StartWizard.h"
 
 #include <QApplication>
@@ -29,6 +32,7 @@
 #include <QStandardItemModel>
 #include <QTabBar>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QToolButton>
 #include <QGroupBox>
 #include <QListWidget>
@@ -196,21 +200,68 @@ TEST_CASE("connection, controller and calibration share one tab area", "[ui]")
     CHECK(calibration->isVisible());
 }
 
-TEST_CASE("S2VNA demo is a distinct local socket backend", "[ui][settings][demo]")
+TEST_CASE("VNA exposes only hardware and local demo backends", "[ui][settings][demo]")
 {
     (void)application();
     ConnectionBar bar;
     auto* backend = bar.findChild<QComboBox*>(QStringLiteral("vnaBackend"));
     auto* host = bar.findChild<QLineEdit*>(QStringLiteral("vnaHost"));
     auto* port = bar.findChild<QSpinBox*>(QStringLiteral("vnaPort"));
-    auto* com = bar.findChild<QLineEdit*>(QStringLiteral("vnaComPort"));
     REQUIRE(backend != nullptr);
-    REQUIRE(backend->findData(3) >= 0);
-    backend->setCurrentIndex(backend->findData(3));
-    REQUIRE(bar.vnaBackend() == 3);
+    REQUIRE(backend->count() == 2);
+    REQUIRE(backend->findData(0) >= 0);
+    REQUIRE(backend->findData(1) >= 0);
+    REQUIRE(backend->findData(2) < 0);
+    REQUIRE(backend->findData(3) < 0);
+    REQUIRE(bar.findChild<QLineEdit*>(QStringLiteral("vnaComPort")) == nullptr);
+    backend->setCurrentIndex(backend->findData(0));
+    REQUIRE(bar.vnaBackend() == 0);
+    REQUIRE_FALSE(host->isEnabled());
+    REQUIRE_FALSE(port->isEnabled());
+    backend->setCurrentIndex(backend->findData(1));
+    REQUIRE(bar.vnaBackend() == 1);
     REQUIRE(host->isEnabled());
     REQUIRE(port->isEnabled());
-    REQUIRE_FALSE(com->isEnabled());
+}
+
+TEST_CASE("S2VNA launcher rejects invalid socket ports before touching processes", "[ui][vna]")
+{
+    S2VnaRuntime runtime;
+    REQUIRE_FALSE(runtime.ensureRunningHidden(0).ok);
+    REQUIRE_FALSE(runtime.ensureRunningHidden(65536).ok);
+    REQUIRE_FALSE(runtime.ownedProcessRunning());
+}
+
+TEST_CASE("owned S2VNA starts once and opens its Socket Server", "[.s2vna-live]")
+{
+    if (!qEnvironmentVariableIsSet("AFAR_TEST_LIVE_S2VNA")) {
+        SKIP("Requires an explicitly reserved local S2VNA installation");
+    }
+    S2VnaRuntime runtime;
+    QTcpServer blocker;
+    REQUIRE(blocker.listen(QHostAddress::LocalHost, 5025));
+    REQUIRE_FALSE(runtime.ensureRunningHidden(5025).ok);
+    blocker.close();
+    const auto started = runtime.ensureRunningHidden(5025);
+    INFO(started.message.toStdString());
+    REQUIRE(started.ok);
+    REQUIRE(started.started);
+    REQUIRE(runtime.ownedProcessRunning());
+    const auto repeated = runtime.ensureRunningHidden(5025);
+    REQUIRE(repeated.ok);
+    REQUIRE_FALSE(repeated.started);
+
+    bool socketReady = false;
+    for (int attempt = 0; attempt < 45 && runtime.ownedProcessRunning(); ++attempt) {
+        QTcpSocket socket;
+        socket.connectToHost(QStringLiteral("127.0.0.1"), 5025);
+        if (socket.waitForConnected(500)) {
+            socketReady = true;
+            break;
+        }
+        QThread::msleep(500);
+    }
+    REQUIRE(socketReady);
 }
 
 TEST_CASE("VNA settings are locked while a series owns the instrument", "[ui][settings]")
@@ -220,10 +271,9 @@ TEST_CASE("VNA settings are locked while a series owns the instrument", "[ui][se
     auto* backend = bar.findChild<QComboBox*>(QStringLiteral("vnaBackend"));
     auto* host = bar.findChild<QLineEdit*>(QStringLiteral("vnaHost"));
     auto* port = bar.findChild<QSpinBox*>(QStringLiteral("vnaPort"));
-    auto* com = bar.findChild<QLineEdit*>(QStringLiteral("vnaComPort"));
     QPushButton* probe = nullptr;
     for (auto* button : bar.findChildren<QPushButton*>()) {
-        if (button->text() == QStringLiteral("Проверить связь")) {
+        if (button->text() == QStringLiteral("Вкл")) {
             probe = button;
             break;
         }
@@ -231,7 +281,6 @@ TEST_CASE("VNA settings are locked while a series owns the instrument", "[ui][se
     REQUIRE(backend != nullptr);
     REQUIRE(host != nullptr);
     REQUIRE(port != nullptr);
-    REQUIRE(com != nullptr);
     REQUIRE(probe != nullptr);
 
     backend->setCurrentIndex(1);
@@ -239,15 +288,28 @@ TEST_CASE("VNA settings are locked while a series owns the instrument", "[ui][se
     REQUIRE_FALSE(backend->isEnabled());
     REQUIRE_FALSE(host->isEnabled());
     REQUIRE_FALSE(port->isEnabled());
-    REQUIRE_FALSE(com->isEnabled());
     REQUIRE_FALSE(probe->isEnabled());
 
     bar.setVnaSettingsLocked(false);
     REQUIRE(backend->isEnabled());
     REQUIRE(host->isEnabled());
     REQUIRE(port->isEnabled());
-    REQUIRE_FALSE(com->isEnabled());
     REQUIRE(probe->isEnabled());
+
+    QVector<bool> toggles;
+    QObject::connect(&bar, &ConnectionBar::vnaConnectionToggleRequested,
+                     &bar, [&toggles](bool enable) { toggles.push_back(enable); });
+    probe->click();
+    CHECK(toggles == QVector<bool>{true});
+    bar.setVnaConnectionActive(true);
+    CHECK(probe->text() == QStringLiteral("Выкл"));
+    CHECK_FALSE(backend->isEnabled());
+    CHECK(probe->isEnabled());
+    probe->click();
+    CHECK(toggles == QVector<bool>{true, false});
+    bar.setVnaConnectionActive(false);
+    CHECK(probe->text() == QStringLiteral("Вкл"));
+    CHECK(backend->isEnabled());
 }
 
 TEST_CASE("plot wheel zooms and reset restores the full range", "[ui]")

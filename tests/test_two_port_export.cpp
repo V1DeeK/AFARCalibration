@@ -59,7 +59,7 @@ TEST_CASE("two-port Touchstone and PDF use one complete sweep", "[two_port_expor
         touchstoneText << touchstone.rdbuf();
         REQUIRE(touchstoneText.str().find("# Hz S RI R 50") != std::string::npos);
         REQUIRE(touchstoneText.str().find("PLANAR,C2220,SN1,1.0") != std::string::npos);
-        REQUIRE(touchstoneText.str().find("S2VNA_DEMO_NON_METROLOGICAL")
+        REQUIRE(touchstoneText.str().find("DEMO_STAND_NON_METROLOGICAL")
                 != std::string::npos);
         REQUIRE(touchstoneText.str().find("device_serial=DUT-42") != std::string::npos);
         REQUIRE(touchstoneText.str().find("operator_assessment=ACCEPTED")

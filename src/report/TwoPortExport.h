@@ -16,7 +16,7 @@ struct TwoPortMeasurement {
     std::string vna_idn;
     std::string measured_utc;
     double reference_ohm{50.0};
-    /// Источник — S2VNA Demo; данные пригодны для демонстрации, не для метрологии.
+    /// Источник — Демостенд; данные пригодны для демонстрации, не для метрологии.
     bool demo_mode{false};
     /// Пользовательские маркеры графика, привязанные к ближайшей точке свипа.
     std::vector<std::uint64_t> marker_frequency_hz;

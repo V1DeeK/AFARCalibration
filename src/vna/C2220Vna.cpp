@@ -413,22 +413,6 @@ bool C2220Vna::correction_enabled()
     return scpi_state_is_on(query("SENS:CORR:STAT?"));
 }
 
-void C2220Vna::set_window_visible(bool visible)
-{
-    require_connected("set_window_visible");
-    write_cmd(visible ? "SYST:SHOW" : "SYST:HIDE");
-}
-
-void C2220Vna::terminate_software()
-{
-    require_connected("terminate_software");
-    write_cmd("SYST:TERM");
-    // Ответа нет: S2VNA закрывает сокет при выходе.
-    connected_ = false;
-    configured_ = false;
-    transport_.disconnect();
-}
-
 void C2220Vna::calibrate_one_port(OnePortCalibrationStep step, int port)
 {
     require_connected("calibrate_one_port");

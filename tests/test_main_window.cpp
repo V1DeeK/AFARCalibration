@@ -24,6 +24,7 @@
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QOpenGLWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -35,9 +36,11 @@
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QUdpSocket>
 #include <QtTest/QtTest>
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 
@@ -207,6 +210,86 @@ QStringList layoutProblems(QWidget* page)
 }
 
 }  // namespace
+
+TEST_CASE("VNA probe button starts a hidden S2VNA and finishes without hanging", "[.s2vna-live-ui]")
+{
+    if (!qEnvironmentVariableIsSet("AFAR_TEST_LIVE_S2VNA")) {
+        SKIP("Requires an explicitly reserved local S2VNA installation");
+    }
+    app();
+    Window w;
+    w.openTab(2);
+    auto* backend = child<QComboBox>(*w.window, "vnaBackend");
+    backend->setCurrentIndex(backend->findData(1));
+    QPushButton* probe = nullptr;
+    for (auto* button : w.window->findChildren<QPushButton*>()) {
+        if (button->text() == QStringLiteral("Вкл")) {
+            probe = button;
+            break;
+        }
+    }
+    REQUIRE(probe != nullptr);
+    QString warning;
+    QTimer dismissWarning;
+    dismissWarning.setInterval(100);
+    QObject::connect(&dismissWarning, &QTimer::timeout, [&] {
+        for (QWidget* topLevel : QApplication::topLevelWidgets()) {
+            auto* dialog = qobject_cast<QMessageBox*>(topLevel);
+            if (dialog && dialog->isVisible()) {
+                warning = dialog->text();
+                dialog->accept();
+            }
+        }
+    });
+    dismissWarning.start();
+    probe->click();
+    const auto diagnostics = w.window->findChildren<QLabel*>();
+    CHECK(std::any_of(diagnostics.begin(), diagnostics.end(), [](QLabel* label) {
+        return label->text().contains(QStringLiteral("S2VNA запускается скрыто"));
+    }));
+    REQUIRE(waitFor([&] {
+        return !warning.isEmpty() || std::any_of(diagnostics.begin(), diagnostics.end(), [](QLabel* label) {
+                   return label->text().contains(QStringLiteral("Связь OK:"));
+               });
+    }, 50000));
+    dismissWarning.stop();
+}
+
+TEST_CASE("VNA switch connects, disconnects and reconnects the demo stand", "[ui][window]")
+{
+    app();
+    Window w;
+    w.openTab(2);
+    auto* backend = child<QComboBox>(*w.window, "vnaBackend");
+    backend->setCurrentIndex(backend->findData(0));
+    QPushButton* power = nullptr;
+    for (auto* button : w.window->findChildren<QPushButton*>()) {
+        if (button->text() == QStringLiteral("Вкл")) {
+            power = button;
+            break;
+        }
+    }
+    REQUIRE(power != nullptr);
+    for (int i = 0; i < 2; ++i) {
+        power->click();
+        REQUIRE(waitFor([&] {
+            const auto labels = w.window->findChildren<QLabel*>();
+            return power->text() == QStringLiteral("Выкл")
+                && std::any_of(labels.begin(), labels.end(), [](QLabel* label) {
+                       return label->text().startsWith(QStringLiteral("C2220:"))
+                           && !label->text().contains(QStringLiteral("нет связи"));
+                   });
+        }));
+        power->click();
+        REQUIRE(waitFor([&] {
+            const auto labels = w.window->findChildren<QLabel*>();
+            return power->text() == QStringLiteral("Вкл") && backend->isEnabled()
+                && std::any_of(labels.begin(), labels.end(), [](QLabel* label) {
+                       return label->text().startsWith(QStringLiteral("C2220: нет связи"));
+                   });
+        }));
+    }
+}
 
 TEST_CASE("Главное окно: шесть вкладок в порядке эскиза", "[ui][window]")
 {

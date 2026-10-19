@@ -7,7 +7,6 @@
 #include "RawS21Store.h"
 #include "RunConfig.h"
 #include "RunEventLog.h"
-#include "ScpiComTransport.h"
 #include "ScpiSocketTransport.h"
 
 #include "afar/ScpiIdn.h"
@@ -38,8 +37,7 @@ QString controllerUnavailableMessage()
 QString linkedDemoStandRequiredMessage()
 {
     return QStringLiteral(
-        "Для демонстрационной калибровки канала выберите VNA «Связанный демостенд "
-        "(VNA + DUT)». S2VNA Demo используется для двухпортовых измерений.");
+        "Для демонстрационной калибровки канала выберите тип подключения «Демостенд».");
 }
 
 struct DiskSnippet {
@@ -220,11 +218,9 @@ void MeasureWorker::rebuildVna()
     std::lock_guard lock(m_transportMutex);
     m_c2220.reset();
     m_socket.reset();
-    m_com.reset();
     m_simVna.reset();
     m_vna = nullptr;
     m_lastIdn.clear();
-    m_demoVerified = false;
 
     C2220Vna::Profile profile;
     profile.allow_direct_access = m_allowDirect;
@@ -234,14 +230,10 @@ void MeasureWorker::rebuildVna()
         m_sweepTimeoutMs > 0 ? m_sweepTimeoutMs : 30000);
     profile.measure_retries = m_measureRetries >= 0 ? m_measureRetries : 2;
 
-    if (m_backend == BackendSocket || m_backend == BackendS2VnaDemo) {
+    if (m_backend == BackendSocket) {
         m_socket = std::make_unique<ScpiSocketTransport>(m_host.toStdString(),
                                                           static_cast<std::uint16_t>(m_port));
         m_c2220 = std::make_unique<C2220Vna>(*m_socket, profile);
-        m_vna = m_c2220.get();
-    } else if (m_backend == BackendCom) {
-        m_com = std::make_unique<ScpiComTransport>(m_comPort.toStdString());
-        m_c2220 = std::make_unique<C2220Vna>(*m_com, profile);
         m_vna = m_c2220.get();
     } else {
         m_simVna = std::make_unique<VnaSimulator>();
@@ -283,7 +275,6 @@ void MeasureWorker::emitPendingScpiErrors()
 void MeasureWorker::configureVna(int backend,
                                  const QString& host,
                                  int port,
-                                 const QString& comPort,
                                  bool allowDirectAccess,
                                  int connectTimeoutMs,
                                  int sweepTimeoutMs,
@@ -300,12 +291,15 @@ void MeasureWorker::configureVna(int backend,
             return;
         }
     }
+    if (backend != BackendSimulator && backend != BackendSocket) {
+        emit diagnostic(QStringLiteral("Недоступный тип подключения VNA"));
+        return;
+    }
     m_timer->stop();
     m_orch.reset();
     m_backend = backend;
     m_host = host.trimmed().isEmpty() ? QStringLiteral("127.0.0.1") : host.trimmed();
     m_port = (port > 0 && port < 65536) ? port : 5025;
-    m_comPort = comPort.trimmed().isEmpty() ? QStringLiteral("COM3") : comPort.trimmed();
     m_allowDirect = allowDirectAccess;
     m_connectTimeoutMs = connectTimeoutMs > 0 ? connectTimeoutMs : 3000;
     m_sweepTimeoutMs = sweepTimeoutMs > 0 ? sweepTimeoutMs : 30000;
@@ -383,23 +377,9 @@ void MeasureWorker::probeVna()
         m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
     }
     std::string idn;
-    if (m_backend == BackendS2VnaDemo) {
-        m_demoVerified = false;
-    }
     bool ok = m_orch->probeIdentify(idn);
-    if (ok && m_backend == BackendS2VnaDemo) {
-        const auto fields = parse_scpi_idn(idn);
-        m_demoVerified = fields.model.find("C2220") != std::string::npos
-            && fields.serial.empty();
-        if (!m_demoVerified) {
-            idn = "S2VNA Demo не подтверждён: ожидался C2220 с пустым серийным номером, *IDN?="
-                + idn;
-            ok = false;
-            m_vna->abort();
-        }
-    } else if (ok && m_backend == BackendSocket
-               && parse_scpi_idn(idn).serial.empty()) {
-        idn = "S2VNA Demo обнаружен вместо живого VNA; выберите backend «S2VNA Demo C2220»";
+    if (ok && m_backend == BackendSocket && parse_scpi_idn(idn).serial.empty()) {
+        idn = "S2VNA в Demo Mode вместо живого C2220; для имитации выберите «Демостенд»";
         ok = false;
         m_vna->abort();
     }
@@ -427,6 +407,18 @@ void MeasureWorker::probeVna()
         emit diagnostic(QString::fromStdString(idn));
     }
     emitPendingScpiErrors();
+}
+
+void MeasureWorker::disconnectVna()
+{
+    if (m_vna) {
+        m_vna->abort();
+    }
+    m_lastIdn.clear();
+    m_lastTwoPortMeasurement.reset();
+    emit twoPortExportAvailable(false);
+    emitConnection();
+    emit vnaDisconnected();
 }
 
 void MeasureWorker::simulateScpiError()
@@ -475,7 +467,7 @@ void MeasureWorker::runProbeCodes(double fStartHz,
     if (st != RunState::Idle) {
         m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
     }
-    // На живом VNA (S2VNA/COM) settle через doSleep обязателен: DutSimulator
+    // На живом VNA settle через doSleep обязателен: DutSimulator
     // без readback идёт в confirmDutOrSettle → doSleep. Ускоряем только имитатор.
     if (m_backend == BackendSimulator) {
         m_orch->setSleepEnabled(false);
@@ -521,11 +513,6 @@ void MeasureWorker::measureNow(double fStartHz,
 {
     if (!m_vna || !m_orch) {
         emit measureNowFinished(false, QStringLiteral("VNA не сконфигурирован"));
-        return;
-    }
-    if (m_backend == BackendS2VnaDemo && !m_demoVerified) {
-        emit measureNowFinished(
-            false, QStringLiteral("Сначала подтвердите подключение S2VNA Demo C2220"));
         return;
     }
     if (!std::isfinite(fStartHz) || !std::isfinite(fStopHz) || fStartHz >= fStopHz) {
@@ -601,7 +588,7 @@ void MeasureWorker::measureNow(double fStartHz,
         }
         measurement.sweep = m_orch->lastMeasuredSweep();
         measurement.vna_idn = m_orch->lastVnaIdn();
-        measurement.demo_mode = m_backend == BackendS2VnaDemo;
+        measurement.demo_mode = m_backend == BackendSimulator;
         measurement.measured_utc = QDateTime::currentDateTimeUtc()
                                        .toString(Qt::ISODateWithMs)
                                        .toStdString();
@@ -776,7 +763,7 @@ void MeasureWorker::selectCalibrationKit(int index)
 {
     if (!m_c2220 || !m_c2220->connected()) {
         emit diagnostic(QStringLiteral(
-            "Комплект мер не выбран: сначала нажмите «Проверить связь» с живым VNA"));
+            "Комплект мер не выбран: сначала включите связь с живым VNA"));
         return;
     }
     try {
@@ -788,38 +775,6 @@ void MeasureWorker::selectCalibrationKit(int index)
         emit diagnostic(QStringLiteral("Комплект мер не выбран: %1")
                             .arg(QString::fromUtf8(ex.what())));
     }
-}
-
-void MeasureWorker::setVnaWindowVisible(bool visible)
-{
-    if (!m_c2220 || !m_c2220->connected()) {
-        emit diagnostic(QStringLiteral(
-            "Окно S2VNA не переключено: сначала нажмите «Проверить связь»"));
-        return;
-    }
-    try {
-        m_c2220->set_window_visible(visible);
-        emit diagnostic(visible ? QStringLiteral("Окно S2VNA показано")
-                                : QStringLiteral("Окно S2VNA скрыто"));
-    } catch (const std::exception& ex) {
-        emit diagnostic(QStringLiteral("Окно S2VNA не переключено: %1")
-                            .arg(QString::fromUtf8(ex.what())));
-    }
-}
-
-void MeasureWorker::terminateVnaSoftware()
-{
-    if (!m_c2220 || !m_c2220->connected()) {
-        return;
-    }
-    try {
-        m_c2220->terminate_software();
-    } catch (const std::exception& ex) {
-        emit diagnostic(QStringLiteral("S2VNA не приняла SYST:TERM: %1")
-                            .arg(QString::fromUtf8(ex.what())));
-    }
-    m_lastIdn.clear();
-    emitConnection();
 }
 
 QString MeasureWorker::stateToRussian(afar::RunState state)
@@ -959,11 +914,11 @@ QString MeasureWorker::standMismatch() const
         return m_backend == BackendSimulator ? QString() : linkedDemoStandRequiredMessage();
     }
     if (m_ctrlBackend == CtrlPs) {
-        if (m_backend == BackendSocket || m_backend == BackendCom) {
+        if (m_backend == BackendSocket) {
             return QString();
         }
         return QStringLiteral(
-            "Для серии с PS изделия выберите реальный C2220 (S2VNA Socket или COM): "
+            "Для серии с PS изделия выберите реальный C2220 через S2VNA: "
             "имитатор VNA не видит реальную решётку.");
     }
     return controllerUnavailableMessage();
@@ -1013,11 +968,7 @@ void MeasureWorker::emitConnection()
     } else if (m_c2220) {
         vnaOk = m_c2220->connected();
         model = QStringLiteral("PLANAR C2220");
-        if (m_backend == BackendSocket || m_backend == BackendS2VnaDemo) {
-            address = QStringLiteral("%1:%2").arg(m_host).arg(m_port);
-        } else {
-            address = m_comPort;
-        }
+        address = QStringLiteral("%1:%2").arg(m_host).arg(m_port);
     }
     if (!m_lastIdn.isEmpty()) {
         const auto fields = parse_scpi_idn(m_lastIdn.toStdString());
@@ -1346,13 +1297,6 @@ void MeasureWorker::prepare(const QString& dataRoot,
         emit diagnostic(message);
         return;
     }
-    if (m_backend == BackendS2VnaDemo && !m_demoVerified) {
-        const QString message =
-            QStringLiteral("Сначала подтвердите подключение S2VNA Demo C2220");
-        emit prepareFinished(false, message);
-        emit diagnostic(message);
-        return;
-    }
     if (forceSafeState) {
         activeDut()->set_safe_state();
     }
@@ -1418,13 +1362,6 @@ void MeasureWorker::prepareRecovery(const QString& seriesDir)
     m_sweepThrottleArmed = false;
     m_artifactPreviewSent = false;
     if (const QString message = standMismatch(); !message.isEmpty()) {
-        emit prepareFinished(false, message);
-        emit diagnostic(message);
-        return;
-    }
-    if (m_backend == BackendS2VnaDemo && !m_demoVerified) {
-        const QString message =
-            QStringLiteral("Сначала подтвердите подключение S2VNA Demo C2220");
         emit prepareFinished(false, message);
         emit diagnostic(message);
         return;

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "S2VnaRuntime.h"
+
+#include <QElapsedTimer>
 #include <QMainWindow>
 #include <QString>
 #include <QVector>
@@ -15,7 +18,6 @@ class ConnectionTab;
 class ParametersTab;
 class PsServiceCheckPage;
 class PsSession;
-class S2VnaLauncher;
 class SpectrumOpenGLWidget;
 class TestRunTab;
 class QTabWidget;
@@ -74,8 +76,9 @@ private slots:
     void onToggleTheme();
     void onApplyVnaSettings();
     void onApplyControllerSettings();
-    void onProbeVna();
+    void onToggleVnaConnection(bool enable);
     void onProbeFinished(bool ok, const QString& idnOrError);
+    void onVnaDisconnected();
     void refreshDataSourceBadge(bool probeOk = false, const QString& idnOrError = {});
     void onEtaChanged(const QString& text);
     void onSweepPreview(const QVector<double>& freqGhz,
@@ -123,9 +126,6 @@ private:
     void loadExampleDefaults();
     void refreshThemeButton();
     void beginVnaProbe(bool measureAfterSuccess);
-    void onS2VnaLaunchFinished(bool ok, const QString& message);
-    /// SYST:TERM своей копии S2VNA и ожидание выхода (чужую S2VNA не трогаем).
-    void stopOwnedS2Vna(bool sendTerminate);
     void setOperationProgress(const QString& text, qint64 completed, qint64 total);
     void updateModuleStatus();
     void updateSpectrumFromPs();
@@ -155,8 +155,13 @@ private:
 
     QThread* m_thread = nullptr;
     MeasureWorker* m_worker = nullptr;
-    S2VnaLauncher* m_s2vna = nullptr;
     int m_state = 0;
     bool m_vnaConnected = false;
+    bool m_connectionRequested = false;
+    bool m_disconnectPending = false;
     bool m_measureAfterProbe = false;
+    bool m_autoProbePending = false;
+    bool m_reusedExternalS2Vna = false;
+    QElapsedTimer m_autoProbeTimer;
+    S2VnaRuntime m_s2vnaRuntime;
 };

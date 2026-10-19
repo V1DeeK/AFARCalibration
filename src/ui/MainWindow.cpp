@@ -10,7 +10,6 @@
 #include "ParametersTab.h"
 #include "PsServiceCheckPage.h"
 #include "PsSession.h"
-#include "S2VnaLauncher.h"
 #include "TestRunTab.h"
 #include "UiStyle.h"
 #include "RunConfig.h"
@@ -32,6 +31,7 @@
 #include <QComboBox>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHostAddress>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -287,18 +287,13 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     connect(m_connections, &ConnectionBar::vnaSettingsChanged, this, &MainWindow::onApplyVnaSettings);
     connect(m_connections, &ConnectionBar::controllerSettingsChanged, this,
             &MainWindow::onApplyControllerSettings);
-    connect(m_connections, &ConnectionBar::probeVnaRequested, this, &MainWindow::onProbeVna);
-    m_s2vna = new S2VnaLauncher(this);
-    connect(m_s2vna, &S2VnaLauncher::finished, this, &MainWindow::onS2VnaLaunchFinished);
-    connect(m_connections, &ConnectionBar::s2vnaWindowVisibilityRequested, this,
-            [this](bool visible) {
-                QMetaObject::invokeMethod(m_worker, "setVnaWindowVisible", Qt::QueuedConnection,
-                                          Q_ARG(bool, visible));
-            });
+    connect(m_connections, &ConnectionBar::vnaConnectionToggleRequested,
+            this, &MainWindow::onToggleVnaConnection);
     connect(m_connections, &ConnectionBar::simulateScpiErrorRequested, this, [this]() {
         QMetaObject::invokeMethod(m_worker, "simulateScpiError", Qt::QueuedConnection);
     });
     connect(m_worker, &MeasureWorker::probeFinished, this, &MainWindow::onProbeFinished);
+    connect(m_worker, &MeasureWorker::vnaDisconnected, this, &MainWindow::onVnaDisconnected);
     connect(m_worker, &MeasureWorker::vnaCalibrationDetected, this,
             [this](const QString& id, bool enabled) {
                 m_measure->setVnaCalibrationIdHint(id);
@@ -375,16 +370,6 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     QSettings().setValue(QStringLiteral("ui/window_geometry_v1"), saveGeometry());
-    using afar::RunState;
-    const auto state = static_cast<RunState>(m_state);
-    const bool seriesActive = state == RunState::Running || state == RunState::Pausing
-        || state == RunState::Paused || state == RunState::Stopping
-        || state == RunState::Finalizing;
-    // Во время серии S2VNA закрывается позже, в деструкторе, после остановки серии.
-    if (!seriesActive) {
-        // Без связи SYST:TERM не дойдёт: сразу закрываем окно своей копии.
-        stopOwnedS2Vna(m_vnaConnected);
-    }
     QMainWindow::closeEvent(event);
 }
 
@@ -462,7 +447,6 @@ MainWindow::~MainWindow()
             m_thread->wait();
         }
     }
-    stopOwnedS2Vna(false);
 }
 
 void MainWindow::loadExampleDefaults()
@@ -633,8 +617,6 @@ void MainWindow::onConnectionChanged(const QString& vnaModel,
                                      const QString& vnaFirmware)
 {
     m_vnaConnected = vnaConnected;
-    m_connections->setS2VnaWindowControlEnabled(vnaConnected
-                                                && m_connections->vnaBackend() != 0);
     m_connections->setVnaInfo(vnaModel, vnaAddress, vnaConnected, vnaSerial, vnaFirmware);
     m_connections->setControllerInfo(controllerIface, dutConnected);
     m_connections->setTemperatureC(temperatureC, temperatureValid);
@@ -856,10 +838,12 @@ QString MainWindow::defaultDataRoot() const
 
 void MainWindow::onApplyVnaSettings()
 {
+    m_autoProbePending = false;
+    m_reusedExternalS2Vna = false;
     QMetaObject::invokeMethod(
         m_worker, "configureVna", Qt::QueuedConnection,
         Q_ARG(int, m_connections->vnaBackend()), Q_ARG(QString, m_connections->vnaHost()),
-        Q_ARG(int, m_connections->vnaPort()), Q_ARG(QString, m_connections->vnaComPort()),
+        Q_ARG(int, m_connections->vnaPort()),
         Q_ARG(bool, m_connections->allowDirectAccess()),
         Q_ARG(int, m_connections->vnaConnectTimeoutMs()),
         Q_ARG(int, m_connections->vnaSweepTimeoutMs()),
@@ -876,62 +860,78 @@ void MainWindow::onApplyControllerSettings()
         Q_ARG(QString, m_connections->dutComPort()));
 }
 
-void MainWindow::onProbeVna()
+void MainWindow::onToggleVnaConnection(bool enable)
 {
-    beginVnaProbe(false);
+    if (enable) {
+        if (m_disconnectPending) {
+            return;
+        }
+        m_connectionRequested = true;
+        m_connections->setVnaConnectionActive(true);
+        beginVnaProbe(false);
+        return;
+    }
+    m_connectionRequested = false;
+    m_autoProbePending = false;
+    m_measureAfterProbe = false;
+    m_disconnectPending = true;
+    m_connections->setVnaConnectionActive(false);
+    m_connections->setVnaSettingsLocked(true);
+    m_connections->setDiagnostic(QStringLiteral("Отключение VNA…"));
+    m_worker->interruptIo();
+    QMetaObject::invokeMethod(m_worker, "disconnectVna", Qt::QueuedConnection);
+}
+
+void MainWindow::onVnaDisconnected()
+{
+    m_s2vnaRuntime.stopOwned();
+    m_disconnectPending = false;
+    m_connections->setVnaSettingsLocked(false);
+    refreshDataSourceBadge();
+    m_connections->setDiagnostic(QStringLiteral("Связь VNA выключена"));
+    statusBar()->showMessage(QStringLiteral("Связь VNA выключена"), 5000);
 }
 
 void MainWindow::beginVnaProbe(bool measureAfterSuccess)
 {
-    m_measureAfterProbe = measureAfterSuccess;
+    if (m_autoProbePending) {
+        m_connections->setDiagnostic(QStringLiteral("S2VNA запускается; проверка связи уже выполняется"));
+        return;
+    }
     onApplyVnaSettings();
     onApplyControllerSettings();
-    const int backend = m_connections->vnaBackend();
-    const bool socketBackend = backend == 1 || backend == 3;
-    if (socketBackend && m_connections->s2vnaAutoStart()
-        && S2VnaLauncher::isLocalHost(m_connections->vnaHost())) {
-        if (m_s2vna->busy()) {
+    m_measureAfterProbe = measureAfterSuccess;
+    const QHostAddress host(m_connections->vnaHost());
+    const bool localHost = m_connections->vnaHost().compare(QStringLiteral("localhost"),
+                                                             Qt::CaseInsensitive) == 0
+        || host.isLoopback();
+    if (m_connections->vnaBackend() == 1 && localHost
+        && !qEnvironmentVariableIsSet("AFAR_DISABLE_AUTO_S2VNA")) {
+        const auto start = m_s2vnaRuntime.ensureRunningHidden(m_connections->vnaPort());
+        if (!start.ok) {
+            m_measureAfterProbe = false;
+            m_connectionRequested = false;
+            m_connections->setVnaConnectionActive(false);
+            m_connections->setDiagnostic(start.message);
+            QMessageBox::warning(this, QStringLiteral("Запуск S2VNA"), start.message);
             return;
         }
-        S2VnaLauncher::Options options;
-        options.executable = m_connections->s2vnaPath();
-        options.port = static_cast<quint16>(m_connections->vnaPort());
-        options.demo = backend == 3;
-        m_connections->setDiagnostic(QStringLiteral("Проверка S2VNA на этом ПК…"));
-        m_s2vna->ensureRunning(options);
-        return;
+        m_reusedExternalS2Vna = !start.started && !m_s2vnaRuntime.ownedProcessRunning();
+        m_autoProbePending = start.started;
+        if (start.started) {
+            m_autoProbeTimer.start();
+            m_connections->setDiagnostic(start.message);
+        }
     }
-    m_connections->setDiagnostic(
-        QStringLiteral("Подключение к %1:%2…")
-            .arg(m_connections->vnaHost())
-            .arg(m_connections->vnaPort()));
+    if (!m_autoProbePending) {
+        m_connections->setDiagnostic(
+            m_connections->vnaBackend() == 0
+                ? QStringLiteral("Проверка локального демостенда…")
+                : QStringLiteral("Подключение к %1:%2…")
+                      .arg(m_connections->vnaHost())
+                      .arg(m_connections->vnaPort()));
+    }
     QMetaObject::invokeMethod(m_worker, "probeVna", Qt::QueuedConnection);
-}
-
-void MainWindow::onS2VnaLaunchFinished(bool ok, const QString& message)
-{
-    if (!ok) {
-        onProbeFinished(false, message);
-        return;
-    }
-    statusBar()->showMessage(message, 8000);
-    m_connections->setDiagnostic(
-        QStringLiteral("%1. Подключение к %2:%3…")
-            .arg(message, m_connections->vnaHost())
-            .arg(m_connections->vnaPort()));
-    QMetaObject::invokeMethod(m_worker, "probeVna", Qt::QueuedConnection);
-}
-
-void MainWindow::stopOwnedS2Vna(bool sendTerminate)
-{
-    if (!m_s2vna || !m_s2vna->ownsRunningProcess()) {
-        return;
-    }
-    if (sendTerminate && m_worker) {
-        QMetaObject::invokeMethod(m_worker, "terminateVnaSoftware", Qt::QueuedConnection);
-    }
-    // SYST:TERM — штатный выход S2VNA; иначе закрытие окна, в крайнем случае kill.
-    m_s2vna->stopOwned(sendTerminate ? 10000 : 0);
 }
 
 void MainWindow::refreshDataSourceBadge(bool probeOk, const QString& idnOrError)
@@ -942,20 +942,13 @@ void MainWindow::refreshDataSourceBadge(bool probeOk, const QString& idnOrError)
         idn.contains(QStringLiteral("SIM"), Qt::CaseInsensitive)
         || idn.contains(QStringLiteral("VnaSimulator"), Qt::CaseInsensitive);
 
-    if (backend == 3) {
-        m_connections->setDataSourceText(
-            probeOk
-                ? QStringLiteral("Источник: S2VNA DEMO C2220 (не метрология)")
-                : QStringLiteral("Источник: S2VNA DEMO (связь не проверена)"));
-        return;
-    }
     if (backend == 0 || (probeOk && idnLooksSim)) {
         m_connections->setDataSourceText(
             QStringLiteral("Источник: имитатор (не метрология стенда)"));
         return;
     }
 
-    if (probeOk && (backend == 1 || backend == 2) && !idn.isEmpty()) {
+    if (probeOk && backend == 1 && !idn.isEmpty()) {
         QString brief = idn;
         if (brief.size() > 64) {
             brief = brief.left(61) + QStringLiteral("...");
@@ -971,6 +964,23 @@ void MainWindow::refreshDataSourceBadge(bool probeOk, const QString& idnOrError)
 
 void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
 {
+    if (!m_connectionRequested) {
+        return;
+    }
+    const bool knownWrongSource = idnOrError.contains(QStringLiteral("Demo Mode"),
+                                                       Qt::CaseInsensitive);
+    if (!ok && !knownWrongSource && m_autoProbePending && m_autoProbeTimer.elapsed() < 45000
+        && m_s2vnaRuntime.ownedProcessRunning()) {
+        m_connections->setDiagnostic(QStringLiteral("Ожидание S2VNA и C2220… %1")
+                                         .arg(idnOrError));
+        QTimer::singleShot(1000, this, [this] {
+            if (m_autoProbePending) {
+                QMetaObject::invokeMethod(m_worker, "probeVna", Qt::QueuedConnection);
+            }
+        });
+        return;
+    }
+    m_autoProbePending = false;
     const bool measureAfterSuccess = m_measureAfterProbe;
     m_measureAfterProbe = false;
     refreshDataSourceBadge(ok, idnOrError);
@@ -981,23 +991,28 @@ void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
             onMeasureNow();
         }
     } else {
+        onToggleVnaConnection(false);
         m_connections->setDiagnostic(QStringLiteral("Нет связи: %1").arg(idnOrError));
-        const bool demoMode = m_connections->vnaBackend() == 3;
-        QMessageBox::warning(
-            this, QStringLiteral("Проверка VNA"),
-            demoMode
+        const QString message = m_connections->vnaBackend() == 0
+            ? QStringLiteral("Не удалось запустить локальный демостенд.\n\n%1").arg(idnOrError)
+            : knownWrongSource
                 ? QStringLiteral(
-                      "Не удалось подключить S2VNA Demo C2220.\n\n%1\n\n"
-                      "Проверьте путь к S2VNA в настройках подключения (программа "
-                      "запускает её сама в Demo Mode) либо запустите S2VNA вручную в "
-                      "Demo Mode с Socket Server. Физический анализатор не требуется.")
+                      "S2VNA отвечает в Demo Mode, а не от подключённого C2220.\n\n%1\n\n"
+                      "Подключите прибор и повторите проверку. Для работы без прибора "
+                      "используйте «Демостенд».")
+                      .arg(idnOrError)
+                : m_reusedExternalS2Vna
+                ? QStringLiteral(
+                      "Уже запущенная S2VNA не отвечает через Socket Server.\n\n%1\n\n"
+                      "Программа не меняет и не закрывает экземпляр, запущенный вручную. "
+                      "Закройте его и повторите проверку для скрытого автозапуска.")
                       .arg(idnOrError)
                 : QStringLiteral(
-                      "Не удалось подключиться к C2220 через SCPI-сервер S2VNA.\n\n%1\n\n"
-                      "Проверьте: путь к S2VNA указан (программа запускает её сама) "
-                      "или S2VNA запущена вручную с Socket Server на этом порту, прибор "
-                      "подключён по USB. Пока нет прибора — выберите «S2VNA Demo C2220».")
-                      .arg(idnOrError));
+                  "Не удалось подключиться к C2220 через SCPI-сервер S2VNA.\n\n%1\n\n"
+                  "Проверьте: S2VNA запущена, Socket Server включён (порт), "
+                  "прибор подключен. Пока нет прибора — выберите «Демостенд».")
+                  .arg(idnOrError);
+        QMessageBox::warning(this, QStringLiteral("Проверка VNA"), message);
     }
 }
 

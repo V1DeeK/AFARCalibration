@@ -17,10 +17,9 @@ include(${PROJECT_SOURCE_DIR}/cmake/Json.cmake)
 add_library(afar_interfaces INTERFACE)
 target_include_directories(afar_interfaces INTERFACE ${PROJECT_SOURCE_DIR}/include)
 
-# VNA-002…005: SCPI Socket/COM + C1220/C2220 (закрытый набор из vna-c2220-scpi.md)
+# SCPI Socket + C1220/C2220 (закрытый набор из vna-c2220-scpi.md)
 add_library(afar_vna STATIC
     vna/ScpiSocketTransport.cpp
-    vna/ScpiComTransport.cpp
     vna/C2220Vna.cpp
 )
 target_include_directories(afar_vna PUBLIC
@@ -242,8 +241,6 @@ add_library(afar_app_ui STATIC
     ui/MainWindow.h
     ui/ConnectionBar.cpp
     ui/ConnectionBar.h
-    ui/S2VnaLauncher.cpp
-    ui/S2VnaLauncher.h
     ui/MeasureTab.cpp
     ui/MeasureTab.h
     ui/S21PlotWidget.cpp
@@ -256,6 +253,8 @@ add_library(afar_app_ui STATIC
     ui/StartWizard.h
     ui/MeasureWorker.cpp
     ui/MeasureWorker.h
+    ui/S2VnaRuntime.cpp
+    ui/S2VnaRuntime.h
     ui/BoardParametersPage.cpp
     ui/BoardParametersPage.h
     ui/ParametersTab.cpp

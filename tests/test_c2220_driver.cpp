@@ -3,7 +3,6 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "C2220Vna.h"
-#include "ScpiComTransport.h"
 #include "ScpiSocketTransport.h"
 
 #include <atomic>
@@ -634,35 +633,6 @@ TEST_CASE("C2220Vna selects a documented S2VNA calibration kit", "[c2220]")
     REQUIRE_THROWS_AS(vna.select_calibration_kit(65), std::runtime_error);
 }
 
-TEST_CASE("C2220Vna shows, hides and terminates S2VNA by documented SCPI", "[c2220]")
-{
-    ScpiTcpStub stub;
-    stub.start();
-    ScpiSocketTransport transport("127.0.0.1", stub.port());
-    C2220Vna vna(transport);
-    REQUIRE_THROWS_AS(vna.set_window_visible(true), std::runtime_error);
-    vna.connect();
-
-    vna.set_window_visible(true);
-    vna.set_window_visible(false);
-    // Запрос после записи гарантирует, что заглушка уже прочитала обе команды.
-    REQUIRE_FALSE(vna.identify().empty());
-    REQUIRE(stub.saw_exact("SYST:SHOW"));
-    REQUIRE(stub.saw_exact("SYST:HIDE"));
-
-    vna.terminate_software();
-    REQUIRE_FALSE(vna.connected());
-    bool sawTerminate = false;
-    for (int i = 0; i < 100 && !sawTerminate; ++i) {
-        sawTerminate = stub.saw_exact("SYST:TERM");
-        if (!sawTerminate) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    }
-    REQUIRE(sawTerminate);
-    REQUIRE_THROWS_AS(vna.set_window_visible(true), std::runtime_error);
-}
-
 TEST_CASE("C2220Vna calibrate_one_port SOLT1 sequence against stub", "[c2220]")
 {
     ScpiTcpStub stub;
@@ -693,16 +663,4 @@ TEST_CASE("C2220Vna calibrate_one_port SOLT1 sequence against stub", "[c2220]")
                       std::runtime_error);
     REQUIRE_THROWS_AS(vna.calibrate_one_port(OnePortCalibrationStep::Begin, 3),
                       std::runtime_error);
-}
-
-TEST_CASE("ScpiComTransport compiles and rejects missing port", "[c2220][com]")
-{
-#ifdef _WIN32
-    ScpiComTransport com("COM9");
-    // Без петли/адаптера порт обычно отсутствует — ожидаем ошибку CreateFile, не краш.
-    REQUIRE_THROWS_AS(com.connect(), std::runtime_error);
-#else
-    ScpiComTransport com("COM9");
-    REQUIRE_THROWS_AS(com.connect(), std::runtime_error);
-#endif
 }

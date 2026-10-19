@@ -117,7 +117,7 @@ QWidget* MeasureTab::makeCalPage()
 
     auto* transportNote = new QLabel(
         QStringLiteral(
-            "SCPI через текущий VNA-транспорт (Socket/COM); отдельный UI S2VNA для "
+            "SCPI через S2VNA Socket; отдельный UI S2VNA для "
             "калибровки не требуется. На имитаторе шаги проходят без стендовой "
             "метрологии. Перед каждым шагом — подтверждение оператора."),
         page);
