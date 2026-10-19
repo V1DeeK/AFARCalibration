@@ -6,6 +6,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -22,6 +23,8 @@ using nlohmann::json;
 namespace {
 
 constexpr std::array<int, 4> kPowers{-4, -1, 2, 5};
+constexpr int kHeaderHeight = 28;
+constexpr int kRowHeight = 38;
 
 QString qs(std::string_view s)
 {
@@ -41,8 +44,16 @@ QString prefix(PsModulesPage::Module m)
 }
 
 /// Значение для подписи «Прочитано»: частота — в МГц.
+QString flagText(bool on)
+{
+    return on ? QStringLiteral("да (1)") : QStringLiteral("нет (0)");
+}
+
 QString valueText(const ps::ModuleField& f, double v)
 {
+    if (f.kind == ps::ModuleFieldKind::Flag) {
+        return flagText(v != 0.0);
+    }
     if (f.kind == ps::ModuleFieldKind::FrequencyHz) {
         return QString::number(v / 1e6, 'f', 6) + QStringLiteral(" МГц");
     }
@@ -78,7 +89,8 @@ PsModulesPage::PsModulesPage(PsLink* link, QWidget* parent)
 {
     auto* layout = new QVBoxLayout(this);
     m_tabs = new QTabWidget(this);
-    m_tabs->setUsesScrollButtons(false);
+    // Семь вкладок не растягивают «Модули» вширь: в узком окне появляются стрелки прокрутки.
+    m_tabs->setUsesScrollButtons(true);
     m_tabs->setObjectName(QStringLiteral("psModulesTabs"));
     m_tabs->addTab(buildModule(Lo1, ps::loFields()), qs(ps::loNameRu(ps::kLoMixer)));
     m_tabs->addTab(buildModule(Lo2, ps::loFields()), qs(ps::loNameRu(ps::kLoCalibration)));
@@ -123,8 +135,10 @@ QWidget* PsModulesPage::makeEditor(const ps::ModuleField& f, const QString& name
     QWidget* editor = nullptr;
     switch (f.kind) {
     case ps::ModuleFieldKind::Flag: {
-        auto* box = new QCheckBox(QStringLiteral("1 — да"), this);
+        // Подпись говорит, что уйдёт в PS: «да (1)» или «нет (0)».
+        auto* box = new QCheckBox(flagText(false), this);
         connect(box, &QCheckBox::toggled, this, mark);
+        connect(box, &QCheckBox::toggled, box, [box](bool on) { box->setText(flagText(on)); });
         editor = box;
         break;
     }
@@ -198,6 +212,17 @@ void PsModulesPage::setEditorValue(const ps::ModuleField& f, QWidget* editor, do
 
 namespace {
 
+/// Подложка строки таблицы полей: шапка с чертой снизу, строки — через одну с заливкой
+/// и с тонкой чертой между ними. Добавляется в сетку раньше виджетов строки — лежит под ними.
+void addStripe(QGridLayout* grid, int row, int columns, bool header, QWidget* owner)
+{
+    auto* stripe = new QFrame(owner);
+    stripe->setProperty("role", header ? QStringLiteral("gridHeader")
+                                       : (row % 2 == 0 ? QStringLiteral("gridStripe") : QStringLiteral("gridRow")));
+    stripe->setAttribute(Qt::WA_TransparentForMouseEvents);
+    grid->addWidget(stripe, row, 0, 1, columns);
+}
+
 /// Поля модуля в прокручиваемой области: «Модули» можно сделать невысокими, кнопки остаются на виду.
 QScrollArea* scrolled(QLayout* content, QWidget* owner)
 {
@@ -219,14 +244,25 @@ QWidget* PsModulesPage::buildModule(Module m, const std::vector<ps::ModuleField>
     auto* page = new QWidget(this);
     auto* grid = new QGridLayout;
     grid->setHorizontalSpacing(ui::kInnerGap);
-    grid->setVerticalSpacing(ui::kInnerGap);
     auto& mod = m_ui[m];
     // Широкое окошко: поля идут двумя колонками, каждая — «Передать | Поле | Значение | Прочитано».
     const int columns = 1;
     const int perColumn = (static_cast<int>(fields.size()) + columns - 1) / columns;
     constexpr int kColumnWidth = 5;  // send, поле, значение, прочитано, зазор
+    // Строки без зазора, чтобы подложки шли сплошной таблицей; последний столбец — поле справа.
+    grid->setVerticalSpacing(0);
+    grid->setContentsMargins(0, 0, 0, 0);
+    const int span = columns * kColumnWidth + 1;  // столбец 0 и последний — поля слева и справа
+    addStripe(grid, 0, span, true, page);
+    grid->setRowMinimumHeight(0, kHeaderHeight);
+    for (int i = 0; i < static_cast<int>(fields.size()); ++i) {
+        addStripe(grid, i + 1, span, false, page);
+        grid->setRowMinimumHeight(i + 1, kRowHeight);
+    }
+    grid->setColumnMinimumWidth(0, ui::kInnerGap);
+    grid->setColumnMinimumWidth(span - 1, ui::kInnerGap);
     for (int c = 0; c < columns; ++c) {
-        const int base = c * kColumnWidth;
+        const int base = c * kColumnWidth + 1;
         grid->addWidget(ui::captionLabel(QStringLiteral("Передать"), page), 0, base);
         grid->addWidget(ui::captionLabel(QStringLiteral("Поле"), page), 0, base + 1);
         grid->addWidget(ui::captionLabel(QStringLiteral("Значение"), page), 0, base + 2);
@@ -234,6 +270,7 @@ QWidget* PsModulesPage::buildModule(Module m, const std::vector<ps::ModuleField>
         grid->setColumnStretch(base + 1, 3);
         grid->setColumnStretch(base + 3, 2);
         grid->setColumnMinimumWidth(base + 2, 150);
+        grid->setColumnMinimumWidth(base + 3, 90);
         if (c + 1 < columns) {
             grid->setColumnMinimumWidth(base + 4, ui::kGap * 2);
         }
@@ -242,7 +279,7 @@ QWidget* PsModulesPage::buildModule(Module m, const std::vector<ps::ModuleField>
     for (const auto& f : fields) {
         const int column = index / perColumn;
         const int row = index % perColumn + 1;
-        const int base = column * kColumnWidth;
+        const int base = column * kColumnWidth + 1;
         const QString name = prefix(m) + QLatin1Char('_') + qs(f.key);
         FieldRow r{f};
         r.send = new QCheckBox(page);
@@ -289,29 +326,39 @@ QWidget* PsModulesPage::buildMixer()
     auto* page = new QWidget(this);
     auto* grid = new QGridLayout;
     grid->setHorizontalSpacing(ui::kInnerGap);
-    grid->setVerticalSpacing(ui::kInnerGap);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Передать"), page), 0, 0);
+    grid->setVerticalSpacing(0);
+    grid->setContentsMargins(0, 0, 0, 0);
     const auto& fields = ps::mixerChannelFields();
+    const int last = static_cast<int>(fields.size()) + 2;  // столбец 0 и last — поля слева и справа
+    addStripe(grid, 0, last + 1, true, page);
+    grid->setRowMinimumHeight(0, kHeaderHeight);
+    for (int n = 1; n <= ps::kMixerChannels; ++n) {
+        addStripe(grid, n, last + 1, false, page);
+        grid->setRowMinimumHeight(n, kRowHeight);
+    }
+    grid->setColumnMinimumWidth(0, ui::kInnerGap);
+    grid->setColumnMinimumWidth(last, ui::kInnerGap);
+    grid->addWidget(ui::captionLabel(QStringLiteral("Передать"), page), 0, 1);
     for (std::size_t i = 0; i < fields.size(); ++i) {
         grid->addWidget(ui::captionLabel(QStringLiteral("%1 (%2)").arg(qs(fields[i].titleRu), qs(fields[i].key)), page),
-                        0, static_cast<int>(i) + 1);
+                        0, static_cast<int>(i) + 2);
     }
     grid->addWidget(ui::captionLabel(QStringLiteral("Прочитано из модуля"), page), 0,
-                    static_cast<int>(fields.size()) + 1);
+                    static_cast<int>(fields.size()) + 2);
     for (int n = 1; n <= ps::kMixerChannels; ++n) {
         auto& r = m_mixer[static_cast<std::size_t>(n - 1)];
         r.send = new QCheckBox(QStringLiteral("Канал %1").arg(n), page);
         r.send->setObjectName(QStringLiteral("psMixer%1_send").arg(n));
-        grid->addWidget(r.send, n, 0);
+        grid->addWidget(r.send, n, 1);
         for (std::size_t i = 0; i < fields.size(); ++i) {
             r.editors[i] = makeEditor(fields[i], QStringLiteral("psMixer%1_%2").arg(n).arg(qs(fields[i].key)), r.send);
-            grid->addWidget(r.editors[i], n, static_cast<int>(i) + 1);
+            grid->addWidget(r.editors[i], n, static_cast<int>(i) + 2);
         }
         r.actual = new QLabel(QStringLiteral("—"), page);
         r.actual->setProperty("role", QStringLiteral("hint"));
-        grid->addWidget(r.actual, n, static_cast<int>(fields.size()) + 1);
+        grid->addWidget(r.actual, n, static_cast<int>(fields.size()) + 2);
     }
-    grid->setColumnStretch(static_cast<int>(fields.size()) + 1, 1);
+    grid->setColumnStretch(static_cast<int>(fields.size()) + 2, 1);
     grid->setRowStretch(ps::kMixerChannels + 1, 1);
 
     auto& mod = m_ui[Mixer];

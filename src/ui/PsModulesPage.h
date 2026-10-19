@@ -33,7 +33,7 @@ public:
     bool write(Module m);
     /// get_*; false — нет связи.
     bool read(Module m);
-    /// Вкладки модулей: сюда же «Установка параметров» кладёт коды решётки.
+    /// Вкладки модулей: сюда же «Настройки» кладут коды решётки.
     [[nodiscard]] QTabWidget* tabs() const { return m_tabs; }
 
 private:

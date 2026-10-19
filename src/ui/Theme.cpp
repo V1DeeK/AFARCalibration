@@ -140,6 +140,8 @@ QTabBar#mainTabBar::tab { padding: 8px 18px; margin: 6px 3px 6px 0px; border: 1p
                           border-radius: 9px; }
 QTabBar#mainTabBar::tab:selected { background: @accent@; color: #ffffff; font-weight: 600; border-color: @accent@; }
 QTabBar#mainTabBar::tab:hover:!selected { background: @hoverFill@; color: @text@; }
+/* Стрелки прокрутки у вкладок «Модулей» в узком окне — во всю свою ширину. */
+QTabBar::scroller { width: 52px; }
 QTabWidget#mainTabs::pane { border: none; background: transparent; border-radius: 0px; top: 0px; }
 QTabWidget#mainTabs::tab-bar { left: 12px; }
 QTabWidget#calibrationTabs QTabBar::tab, QTabWidget#vnaTabs QTabBar::tab { padding: 6px 7px; margin-right: 0px; font-size: 12px; }
@@ -228,6 +230,12 @@ QFrame[role="tile"][tone="ok"] { background: @okSoft@; border-color: transparent
 QFrame[role="tile"][tone="warn"] { background: @warnSoft@; border-color: transparent; }
 QFrame[role="tile"][tone="error"] { background: @errorSoft@; border-color: transparent; }
 QLabel[role="tileCaption"] { color: @muted@; font-size: 11px; }
+
+/* ---------- таблицы полей модулей: шапка, строки через одну, черта между строками ---------- */
+QFrame[role="gridHeader"] { background: @alt@; border: none; border-bottom: 1px solid @borderStrong@;
+                            border-top-left-radius: 6px; border-top-right-radius: 6px; }
+QFrame[role="gridRow"] { background: transparent; border: none; border-bottom: 1px solid @border@; }
+QFrame[role="gridStripe"] { background: @hoverFill@; border: none; border-bottom: 1px solid @border@; }
 QLabel[role="tileValue"] { font-size: 18px; font-weight: 700; }
 
 /* ---------- таблицы и списки ---------- */
