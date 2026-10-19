@@ -58,4 +58,5 @@ private:
     QLineEdit* m_rawHex = nullptr;
     QPushButton* m_rawSend = nullptr;
     QLabel* m_rawResult = nullptr;
+    int m_rawPending = -1;  ///< msg_count последней rs485_send
 };

@@ -661,6 +661,10 @@ bool ModuleState::fromJson(const nlohmann::json& o, const std::vector<ModuleFiel
     if (readInt(o, "lock", lock)) {
         s.lock = static_cast<int>(lock != 0);
     }
+    std::int64_t pres = 0;
+    if (readInt(o, "pres", pres)) {
+        s.pres = static_cast<int>(pres != 0);
+    }
     out = std::move(s);
     return true;
 }
@@ -711,7 +715,8 @@ bool Telemetry::fromStatusBytes(std::string_view bytes, Telemetry& out)
         "Цифровой модуль: температура < 125 °C", "", "", "",
         "Трансивер: связь", "Трансивер: тактирование", "Трансивер: гетеродин RX",
         "Трансивер: калибровка", "Трансивер: канал данных АЦП",
-        "Трансивер: проверка данных", "", "",
+        "Трансивер: проверка данных", "Трансивер: уровень входного сигнала",
+        "Трансивер: приём данных в память",
         "Трансивер: тактовый сигнал", "Трансивер: LOCK",
         "Трансивер: температура < 85 °C", "Трансивер: температура < 125 °C",
         "", "", "", "",
@@ -745,7 +750,9 @@ bool Telemetry::fromStatusBytes(std::string_view bytes, Telemetry& out)
     }
     for (std::size_t bit = 0; bit < names.size(); ++bit) {
         if (!names[bit].empty()) {
-            const bool ok = (t.statusBytes[bit / 8] & (1u << (bit % 8))) != 0;
+            const bool set = (t.statusBytes[bit / 8] & (1u << (bit % 8))) != 0;
+            // Биты 13–15 — флаги ошибок: 1 — неисправность (v8 таблица 5).
+            const bool ok = (bit >= 13 && bit <= 15) ? !set : set;
             t.devices.emplace_back(std::string(names[bit]), ok ? DeviceHealth::Ok : DeviceHealth::Fail);
         }
     }

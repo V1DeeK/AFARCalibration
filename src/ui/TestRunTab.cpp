@@ -1,6 +1,7 @@
 #include "TestRunTab.h"
 
 #include "PsExchangeView.h"
+#include "PsLink.h"
 #include "PsSession.h"
 #include "StressTestPanel.h"
 #include "UdpFloodGenerator.h"
@@ -250,8 +251,8 @@ QWidget* TestRunTab::buildRs485Page()
     m_rawSend->setObjectName(QStringLiteral("psRawSend"));
     ui::setButtonRole(m_rawSend, ui::ButtonRole::Primary);
     m_rawResult = ui::hintLabel(QStringLiteral("Байты уходят в линию RS-485 без изменений, включая CRC16 "
-                                               "(rs485_send, только в сервисном режиме). Ответ устройства PS "
-                                               "пока не возвращает — смотрите статус ответа и журнал."),
+                                               "(rs485_send, только в сервисном режиме). Ответные байты устройства PS "
+                                               "возвращает в поле data (v8 п. 3.6.1.1)."),
                                 page);
     m_rawResult->setObjectName(QStringLiteral("psRawResult"));
     auto* row = new QHBoxLayout;
@@ -267,9 +268,26 @@ QWidget* TestRunTab::buildRs485Page()
             return;
         }
         const int count = m_session->send(ps::msg::Rs485Send, json{{"data", hex.toStdString()}});
+        m_rawPending = count;
         m_rawResult->setText(count < 0 ? m_session->lastError()
                                        : QStringLiteral("rs485_send №%1 отправлена").arg(count));
     });
+    connect(m_session->link(), &PsLink::responseReceived, this,
+            [this](const ps::Envelope& r, ps::Status status) {
+                if (r.msg_count != m_rawPending || r.msg_type != ps::msg::Rs485Send) {
+                    return;
+                }
+                m_rawPending = -1;
+                const auto data = r.payload.find("data");
+                const QString bytes = data != r.payload.end() && data->is_string()
+                                          ? QString::fromStdString(data->get<std::string>())
+                                          : QStringLiteral("—");
+                m_rawResult->setText(status == ps::Status::Ok
+                                         ? QStringLiteral("Ответ OK, ответные байты: %1").arg(bytes)
+                                         : QStringLiteral("PS ответил %1 (%2)")
+                                               .arg(QString::fromUtf8(ps::toString(status).data()),
+                                                    QString::fromStdString(ps::statusRu(status))));
+            });
     return page;
 }
 

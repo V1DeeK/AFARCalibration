@@ -222,6 +222,7 @@ struct ModuleState {
     ModuleValues values;
     std::optional<double> temp;
     std::optional<int> lock;
+    std::optional<int> pres;  ///< только видеоприёмник (v8 таблица 33): 1 — приемлемый уровень видеосигнала
 
     /// Значения полей проверяются по fields; неизвестные поля пропускаются.
     static bool fromJson(const nlohmann::json& o, const std::vector<ModuleField>& fields,
