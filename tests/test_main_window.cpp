@@ -17,6 +17,7 @@
 #include <QAbstractSpinBox>
 #include <QComboBox>
 #include <QApplication>
+#include <QCheckBox>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QGroupBox>
@@ -329,9 +330,17 @@ TEST_CASE("Главное окно: «Тех. состояние» — толь�
     auto* tech = child<QGroupBox>(*w.window, "techBox");
     auto* boardTabs = tech->findChild<QTabWidget*>(QStringLiteral("boardParametersTabs"));
     REQUIRE(boardTabs != nullptr);
-    CHECK(boardTabs->tabText(0) == QStringLiteral("Основное"));
+    CHECK(boardTabs->tabText(0) == QStringLiteral("PS часть"));
     CHECK(boardTabs->tabText(1) == QStringLiteral("Ошибки"));
-    CHECK(boardTabs->tabText(2) == QStringLiteral("Подробно"));
+    CHECK(boardTabs->tabText(2) == QStringLiteral("Состояние"));
+    CHECK(boardTabs->tabText(3) == QStringLiteral("Подробно"));
+    // Трансивер AD9361, ПЛИС и РЧ-модули — в «Тех. состоянии», а не в «Модулях».
+    CHECK(tech->findChild<QPushButton*>(QStringLiteral("psGetTrxStatus")) != nullptr);
+    CHECK(tech->findChild<QPushButton*>(QStringLiteral("psGetPlStatus")) != nullptr);
+    CHECK(tech->findChild<QPushButton*>(QStringLiteral("psGetRfmTelemetry")) != nullptr);
+    CHECK(tech->findChild<QCheckBox*>(QStringLiteral("psPollTrx")) != nullptr);
+    auto* modules = child<QGroupBox>(*w.window, "modulesBox");
+    CHECK(modules->findChild<QPushButton*>(QStringLiteral("psGetTrxStatus")) == nullptr);
     // Телеметрия PS в «Тех. состоянии» не показывается: нет ни вкладки, ни плиток узлов.
     for (QTabWidget* tabs : tech->findChildren<QTabWidget*>()) {
         for (int i = 0; i < tabs->count(); ++i) {

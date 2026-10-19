@@ -1,5 +1,6 @@
 #include "SettingsTab.h"
 
+#include "BoardParametersPage.h"
 #include "FullScanPanel.h"
 #include "MacResolver.h"
 #include "OperationalPanel.h"
@@ -61,8 +62,6 @@ SettingsTab::SettingsTab(PsSession* session, QWidget* parent)
     modulesLayout->setContentsMargins(0, 0, 0, 0);
     m_modulesPage = new PsModulesPage(m_session->link(), modulesBox);
     m_modulesPage->tabs()->addTab(buildCodesPage(), QStringLiteral("Коды решётки"));
-    m_diagnostics = new PsDiagnosticsPage(m_session, m_modulesPage->tabs());
-    m_modulesPage->tabs()->addTab(m_diagnostics, QStringLiteral("Состояние"));
     m_osd = new PsOsdPage(m_session, m_modulesPage->tabs());
     m_modulesPage->tabs()->addTab(ui::scrollPage(m_osd, m_modulesPage->tabs()), QStringLiteral("OSD"));
     modulesLayout->addWidget(m_modulesPage);
@@ -897,12 +896,20 @@ QWidget* SettingsTab::buildTechBox()
     auto* bodyLayout = new QVBoxLayout(m_techBody);
     bodyLayout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_techBody, 1);
+    // Трансивер AD9361, ПЛИС, РЧ-модули. Пока параметров платы нет — прямо в окошке;
+    // setTechPage переносит их вкладкой «Состояние» к параметрам платы.
+    m_diagnostics = new PsDiagnosticsPage(m_session, m_techBody);
+    bodyLayout->addWidget(m_diagnostics, 1);
     return box;
 }
 
 void SettingsTab::setTechPage(QWidget* page)
 {
     page->setParent(m_techBody);
+    if (auto* board = qobject_cast<BoardParametersPage*>(page)) {
+        m_techBody->layout()->removeWidget(m_diagnostics);
+        board->insertResultTab(2, m_diagnostics, QStringLiteral("Состояние"));
+    }
     m_techBody->layout()->addWidget(page);
 }
 

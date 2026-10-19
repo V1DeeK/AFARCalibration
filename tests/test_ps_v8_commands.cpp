@@ -903,6 +903,32 @@ TEST_CASE("v8 3.6.1.16 get_trx_status: флаги таблицы 36 и темп�
     CHECK(table->item(8, 2)->text() == QStringLiteral("41.5 °C"));
 }
 
+TEST_CASE("v8 3.6.1.16 get_trx_status: опрос AD9361 по таймеру, только в SERVICE", "[v8][trx]")
+{
+    Bench b;
+    b.connect();
+    auto* page = b.parameters->diagnosticsPage();
+    page->setPolling(true, 1);
+    CHECK(child<QCheckBox>(*b.parameters, "psPollTrx")->isChecked());
+    // Вне сервисного режима опрос ждёт: PS get_trx_status не примет.
+    QTest::qWait(1300);
+    CHECK(b.server.last(ps::msg::GetTrxStatus) == nullptr);
+    b.toService();
+    REQUIRE(waitFor([&] { return b.server.last(ps::msg::GetTrxStatus) != nullptr; }, 3000));
+    const auto first = b.server.received().size();
+    REQUIRE(waitFor([&] {
+        int n = 0;
+        for (std::size_t i = first; i < b.server.received().size(); ++i) {
+            n += b.server.received()[i].msg_type == ps::msg::GetTrxStatus ? 1 : 0;
+        }
+        return n >= 1;
+    }, 3000));
+    REQUIRE(waitFor([&] { return page->table()->rowCount() == 9; }));
+    page->setPolling(false);
+    CHECK_FALSE(page->polling());
+    CHECK_FALSE(child<QCheckBox>(*b.parameters, "psPollTrx")->isChecked());
+}
+
 TEST_CASE("v8 3.6.1.17 get_pl_status: флаги таблицы 37", "[v8][pl]")
 {
     Bench b;

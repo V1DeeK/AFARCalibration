@@ -130,7 +130,7 @@ BoardParametersPage::BoardParametersPage(PsSession* session, QWidget* parent)
     m_errors->setMinimumHeight(120);
     m_errors->setWordWrap(true);
     m_errors->setSelectionMode(QAbstractItemView::NoSelection);
-    m_results->addTab(m_main, QStringLiteral("Основное"));
+    m_results->addTab(m_main, QStringLiteral("PS часть"));
     m_results->addTab(m_errors, QStringLiteral("Ошибки"));
     m_results->addTab(m_details, QStringLiteral("Подробно"));
 
@@ -166,6 +166,11 @@ BoardParametersPage::BoardParametersPage(PsSession* session, QWidget* parent)
     connect(m_session, &PsSession::modeChanged, this, &BoardParametersPage::render);
     connect(m_session, &PsSession::statusChanged, this, &BoardParametersPage::render);
     renderErrors();
+}
+
+void BoardParametersPage::insertResultTab(int index, QWidget* page, const QString& title)
+{
+    m_results->insertTab(index, page, title);
 }
 
 void BoardParametersPage::requestRead()

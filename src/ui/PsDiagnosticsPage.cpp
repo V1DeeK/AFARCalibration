@@ -4,11 +4,15 @@
 #include "PsSession.h"
 #include "UiStyle.h"
 
+#include <QCheckBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QTableWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace ps = afar::ps;
@@ -59,7 +63,7 @@ const std::vector<Flag>& plFlags()
 
 QString title(std::string_view type)
 {
-    if (type == ps::msg::GetTrxStatus) return QStringLiteral("Трансивер");
+    if (type == ps::msg::GetTrxStatus) return QStringLiteral("Трансивер AD9361");
     if (type == ps::msg::GetPlStatus) return QStringLiteral("ПЛИС");
     return QStringLiteral("РЧ-модули");
 }
@@ -79,17 +83,20 @@ PsDiagnosticsPage::PsDiagnosticsPage(PsSession* session, QWidget* parent)
     layout->setContentsMargins(ui::kGap, ui::kGap, ui::kGap, ui::kGap);
     layout->setSpacing(ui::kInnerGap);
 
-    auto* buttons = new QHBoxLayout;
-    buttons->setSpacing(ui::kInnerGap);
+    // Две колонки кнопок: окошко «Тех. состояние» узкое.
+    auto* buttons = new QGridLayout;
+    buttons->setHorizontalSpacing(ui::kInnerGap);
+    buttons->setVerticalSpacing(ui::kInnerGap);
     const struct {
         std::string_view type;
         QString text;
         QString name;
     } commands[] = {
-        {ps::msg::GetTrxStatus, QStringLiteral("Состояние трансивера"), QStringLiteral("psGetTrxStatus")},
+        {ps::msg::GetTrxStatus, QStringLiteral("Состояние AD9361"), QStringLiteral("psGetTrxStatus")},
         {ps::msg::GetPlStatus, QStringLiteral("Состояние ПЛИС"), QStringLiteral("psGetPlStatus")},
         {ps::msg::GetRfmTelemetry, QStringLiteral("Температуры РЧ-модулей"), QStringLiteral("psGetRfmTelemetry")},
     };
+    int index = 0;
     for (const auto& c : commands) {
         auto* b = new QPushButton(c.text, this);
         b->setObjectName(c.name);
@@ -97,10 +104,33 @@ PsDiagnosticsPage::PsDiagnosticsPage(PsSession* session, QWidget* parent)
         ui::setButtonRole(b, ui::ButtonRole::Secondary);
         const std::string type(c.type);
         connect(b, &QPushButton::clicked, this, [this, type] { request(type); });
-        buttons->addWidget(b);
+        buttons->addWidget(b, index / 2, index % 2);
+        ++index;
         m_buttons.push_back(b);
     }
-    buttons->addStretch(1);
+
+    auto* pollRow = new QHBoxLayout;
+    pollRow->setSpacing(ui::kInnerGap);
+    m_poll = new QCheckBox(QStringLiteral("Опрос AD9361 каждые"), this);
+    m_poll->setObjectName(QStringLiteral("psPollTrx"));
+    m_poll->setToolTip(QStringLiteral("get_trx_status по таймеру: регистры состояния и температура трансивера "
+                                      "AD9361 (v8 п. 3.6.1.16). Только в сервисном режиме."));
+    m_pollSeconds = new QSpinBox(this);
+    m_pollSeconds->setObjectName(QStringLiteral("psPollTrxSeconds"));
+    m_pollSeconds->setRange(kPollMinS, kPollMaxS);
+    m_pollSeconds->setValue(kPollDefaultS);
+    m_pollSeconds->setSuffix(QStringLiteral(" с"));
+    m_pollSeconds->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    m_pollSeconds->setFixedWidth(56);
+    pollRow->addWidget(m_poll);
+    pollRow->addWidget(m_pollSeconds);
+    pollRow->addStretch(1);
+    m_pollTimer = new QTimer(this);
+    connect(m_pollTimer, &QTimer::timeout, this, &PsDiagnosticsPage::poll);
+    connect(m_poll, &QCheckBox::toggled, this, [this](bool on) { setPolling(on, m_pollSeconds->value()); });
+    connect(m_pollSeconds, &QSpinBox::valueChanged, this, [this](int s) {
+        m_pollTimer->setInterval(s * 1000);
+    });
 
     m_table = new QTableWidget(0, 3, this);
     m_table->setObjectName(QStringLiteral("psDiagnostics"));
@@ -118,6 +148,7 @@ PsDiagnosticsPage::PsDiagnosticsPage(PsSession* session, QWidget* parent)
     m_result->setWordWrap(true);
 
     layout->addLayout(buttons);
+    layout->addLayout(pollRow);
     layout->addWidget(m_table, 1);
     layout->addWidget(m_result);
 
@@ -132,9 +163,46 @@ PsDiagnosticsPage::PsDiagnosticsPage(PsSession* session, QWidget* parent)
 
 void PsDiagnosticsPage::setAllowed(bool allowed)
 {
+    m_allowed = allowed;
     for (QPushButton* b : m_buttons) {
         b->setEnabled(allowed);
     }
+}
+
+void PsDiagnosticsPage::setPolling(bool on, int seconds)
+{
+    m_pollSeconds->setValue(seconds);
+    if (m_poll->isChecked() != on) {
+        m_poll->setChecked(on);  // toggled вернётся сюда же
+        return;
+    }
+    m_pollTimer->setInterval(m_pollSeconds->value() * 1000);
+    if (on) {
+        m_pollTimer->start();
+        poll();
+    } else {
+        m_pollTimer->stop();
+    }
+}
+
+bool PsDiagnosticsPage::polling() const
+{
+    return m_pollTimer->isActive();
+}
+
+void PsDiagnosticsPage::poll()
+{
+    // Вне сервисного режима PS get_trx_status не примет — таймер просто ждёт.
+    if (!m_allowed) {
+        return;
+    }
+    // Прошлый запрос ещё без ответа — новый не шлём, очередь не копится.
+    for (const auto& [count, type] : m_pending) {
+        if (type == ps::msg::GetTrxStatus) {
+            return;
+        }
+    }
+    request(ps::msg::GetTrxStatus);
 }
 
 bool PsDiagnosticsPage::request(std::string_view msgType)
