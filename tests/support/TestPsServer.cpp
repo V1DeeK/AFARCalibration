@@ -214,6 +214,171 @@ json TestPsServer::channelsJson() const
     return payload;
 }
 
+void TestPsServer::sendEvent(std::string_view type, json payload)
+{
+    ps::Envelope ev;
+    ev.msg_type = std::string(type);
+    ev.msg_class = ps::MsgClass::Event;
+    ev.msg_count = m_eventCount++;
+    ev.payload = std::move(payload);
+    const std::string line = ps::encodeLine(ev);
+    if (m_client) {
+        m_client->write(line.data(), static_cast<qint64>(line.size()));
+    }
+}
+
+void TestPsServer::handleOp(const ps::Envelope& cmd)
+{
+    const std::string& t = cmd.msg_type;
+    const json& in = cmd.payload;
+    if (m_mode != ps::Mode::Operational) {
+        reply(cmd, ps::Status::NotSupported);
+        return;
+    }
+    const auto azOk = [](const json& o, const char* key) {
+        const auto it = o.find(key);
+        return it == o.end() || (it->is_number() && std::fabs(it->get<double>()) <= ps::kAzimuthLimitDeg);
+    };
+    const auto oneOf = [](const json& o, const char* key, std::initializer_list<const char*> values) {
+        const auto it = o.find(key);
+        if (it == o.end()) {
+            return true;
+        }
+        if (!it->is_string()) {
+            return false;
+        }
+        for (const char* v : values) {
+            if (it->get<std::string>() == v) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto pick = [this](std::initializer_list<const char*> keys) {
+        json out = json::object();
+        for (const char* k : keys) {
+            out[k] = m_op[k];
+        }
+        return out;
+    };
+    const bool searching = m_opState == "OP_SURVEY" || m_opState == "OP_ACQUIRE" || m_opState == "OP_TRACK" ||
+                           m_opState == "OP_LOSS" || m_opState == "OP_LIMITED_SURVEY";
+
+    if (t == ps::msg::SetOpFrequency) {
+        const auto f = in.find("freq");
+        if (f == in.end() || !f->is_number_integer() || f->get<std::int64_t>() < ps::kSffFrequencyMinHz ||
+            f->get<std::int64_t>() > ps::kSffFrequencyMaxHz) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        m_op["freq"] = f->get<std::int64_t>();
+        // OP_INITIALIZATION → OP_CALIBRATION → калибровка → OP_IDLE, затем ответ.
+        m_op["cal"] = "OK";
+        m_opState = "OP_IDLE";
+        reply(cmd, ps::Status::Ok, pick({"freq"}));
+    } else if (t == ps::msg::GetOpFrequency) {
+        reply(cmd, ps::Status::Ok, pick({"freq"}));
+    } else if (t == ps::msg::SetOpPolicy) {
+        if (!oneOf(in, "acq", {"AUTO", "CONFIRM"}) || !oneOf(in, "loss", {"AUTO", "CONFIRM"})) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        for (const char* k : {"acq", "loss"}) {
+            if (in.contains(k)) {
+                m_op[k] = in.at(k);
+            }
+        }
+        reply(cmd, ps::Status::Ok, pick({"acq", "loss"}));
+    } else if (t == ps::msg::GetOpPolicy) {
+        reply(cmd, ps::Status::Ok, pick({"acq", "loss"}));
+    } else if (t == ps::msg::SetOpRay) {
+        if (!oneOf(in, "mode", {"SCAN", "FIXED"}) || !azOk(in, "az_min") || !azOk(in, "az_max") ||
+            !azOk(in, "az_fix")) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        for (const char* k : {"mode", "az_min", "az_max", "az_fix"}) {
+            if (in.contains(k)) {
+                m_op[k] = in.at(k);
+            }
+        }
+        reply(cmd, ps::Status::Ok, pick({"mode", "az_min", "az_max", "az_fix"}));
+    } else if (t == ps::msg::GetOpRay) {
+        reply(cmd, ps::Status::Ok, pick({"mode", "az_min", "az_max", "az_fix"}));
+    } else if (t == ps::msg::SetOpData) {
+        if (!in.contains("data") || !oneOf(in, "data", {"AUTO", "FPGA", "VIDEO"})) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        m_op["data"] = in.at("data");
+        reply(cmd, ps::Status::Ok, pick({"data"}));
+    } else if (t == ps::msg::GetOpData) {
+        reply(cmd, ps::Status::Ok, pick({"data"}));
+    } else if (t == ps::msg::SetOpStartCalibration) {
+        m_op["cal"] = "OK";
+        m_opState = "OP_IDLE";
+        reply(cmd, ps::Status::Ok, pick({"cal"}));
+    } else if (t == ps::msg::GetOpCalibration) {
+        reply(cmd, ps::Status::Ok, pick({"cal"}));
+    } else if (t == ps::msg::SetOpStartSurvey) {
+        if (m_opState != "OP_IDLE") {
+            reply(cmd, ps::Status::Busy);
+            return;
+        }
+        m_opState = "OP_SURVEY";
+        reply(cmd, ps::Status::Ok);
+        sendEvent(ps::msg::SendOpSurveyResult,
+                  json{{"tgt", json::array({json{{"az", 12.0}, {"w", 10.0}, {"snr", 18.5}, {"cls", "INTERF"},
+                                                 {"conf", 0.87}, {"coh", 64}, {"df", 48}},
+                                            json{{"az", -7.5}, {"w", 20.0}, {"snr", 11.0}, {"cls", "DRONE"},
+                                                 {"conf", 0.6}, {"coh", 40}, {"df", 33}}})}});
+    } else if (t == ps::msg::SetOpStartAcquire) {
+        if (!in.contains("az") || !azOk(in, "az")) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        if (!searching) {
+            reply(cmd, ps::Status::Busy);
+            return;
+        }
+        const double az = in.at("az").get<double>();
+        m_opState = "OP_TRACK";
+        reply(cmd, ps::Status::Ok, json{{"az", az}});
+        for (const char* st : {"ACQUIRE", "TRACK"}) {
+            sendEvent(ps::msg::SendOpTrackResult,
+                      json{{"st", st}, {"az_ray", az}, {"az", az + 0.4}, {"az_pred", az + 0.6}, {"az_err", 0.2},
+                           {"az_rate", 0.5}, {"w", 10.0}, {"snr", 17.9}, {"cls", "INTERF"}, {"conf", 0.91},
+                           {"coh", 70}, {"df", 55}, {"src", "FPGA"}, {"meth", "SD"}});
+        }
+    } else if (t == ps::msg::SetOpStartLoss) {
+        if (m_opState != "OP_TRACK") {
+            reply(cmd, ps::Status::Busy);
+            return;
+        }
+        m_opState = "OP_LIMITED_SURVEY";
+        reply(cmd, ps::Status::Ok);
+    } else if (t == ps::msg::SetOpStop) {
+        m_opState = "OP_IDLE";
+        reply(cmd, ps::Status::Ok);
+    } else if (t == ps::msg::SetOpStartHold) {
+        if (!in.contains("az") || !azOk(in, "az")) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        if (m_op["mode"] == "FIXED") {
+            reply(cmd, ps::Status::NotSupported);
+            return;
+        }
+        m_op["hold"] = true;
+        reply(cmd, ps::Status::Ok, json{{"az", in.at("az")}});
+    } else if (t == ps::msg::SetOpStopHold) {
+        m_op["hold"] = false;
+        reply(cmd, ps::Status::Ok);
+    } else {
+        reply(cmd, ps::Status::NotSupported);
+    }
+}
+
 void TestPsServer::handle(const ps::Envelope& cmd)
 {
     const std::string& t = cmd.msg_type;
@@ -252,7 +417,9 @@ void TestPsServer::handle(const ps::Envelope& cmd)
         return;
     }
     if (t == ps::msg::GetState) {
-        const std::string state = m_mode == ps::Mode::Idle ? (m_fault ? "FAULT" : "READY") : "";
+        const std::string state = m_mode == ps::Mode::Idle          ? (m_fault ? "FAULT" : "READY")
+                                  : m_mode == ps::Mode::Operational ? m_opState
+                                                                    : "";
         reply(cmd, ps::Status::Ok,
               json{{"mode", std::string(ps::toString(m_mode))}, {"state", state}});
         return;
@@ -274,6 +441,9 @@ void TestPsServer::handle(const ps::Envelope& cmd)
         }
         if (m_mode == ps::Mode::Service && target != ps::Mode::Service) {
             resetService();
+        }
+        if (target == ps::Mode::Operational && m_mode != ps::Mode::Operational) {
+            m_opState = "OP_INITIALIZATION";
         }
         m_mode = target;
         reply(cmd, ps::Status::Ok, json{{"mode", std::string(ps::toString(m_mode))}});
@@ -322,6 +492,11 @@ void TestPsServer::handle(const ps::Envelope& cmd)
     if (t == ps::msg::SetSffParameters || t == ps::msg::GetSffParameters || t == ps::msg::SetSffStart ||
         t == ps::msg::SetSffStop) {
         handleSff(cmd);
+        return;
+    }
+
+    if (t.rfind("set_op_", 0) == 0 || t.rfind("get_op_", 0) == 0) {
+        handleOp(cmd);
         return;
     }
 

@@ -2,12 +2,13 @@
 // программа шлёт PS, — свой тест. Команда отправляется так же, как это делает оператор
 // (кнопкой на вкладке), тестовый PS записывает, что пришло, а тест сверяет msg_type и
 // payload с таблицами документа и проверяет, что ответ показан оператору.
-// Режим OPERATIONAL (п. 3.5) — работа РМО, в программе калибровки его нет.
+// Оперативный режим (п. 3.5) — вкладка «Модули» → «Оперативный режим».
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "FullScanPanel.h"
+#include "OperationalPanel.h"
 #include "MacResolver.h"
 #include "SettingsTab.h"
 #include "PsDiagnosticsPage.h"
@@ -189,6 +190,16 @@ TEST_CASE("v8 3.2.1.2 keep_alive: при тишине в канале, payload �
     CHECK(b.session->link()->isReady());
 }
 
+TEST_CASE("v8 3.2.1.2 keep_alive: кнопка «Отправить keep_alive», payload пустой", "[v8][keep_alive]")
+{
+    Bench b;
+    CHECK_FALSE(b.button("psKeepAliveNow")->isEnabled());
+    b.connect();
+    b.click("psKeepAliveNow");
+    CHECK(b.received(ps::msg::KeepAlive) == json::object());
+    CHECK(b.session->link()->isReady());
+}
+
 TEST_CASE("v8 3.2.1.3 set_mode: кнопки SERVICE и IDLE, FULL_SCAN_FREQ из полного сканирования", "[v8][set_mode]")
 {
     Bench b;
@@ -344,6 +355,266 @@ TEST_CASE("v8 3.4.1.4 set_sff_stop: кнопка «Стоп» в режиме FU
     REQUIRE(waitFor([&] { return b.session->mode() == ps::Mode::FullScanFreq; }));
     b.click("sffStop");
     CHECK(b.received(ps::msg::SetSffStop) == json::object());
+}
+
+// ------------------------------------------------------ 3.5 оперативный режим
+
+namespace {
+
+/// Изделие в OPERATIONAL по кнопке «Перейти в оперативный».
+void toOperational(Bench& b)
+{
+    b.click("opToOperational");
+    REQUIRE(waitFor([&] { return b.session->mode() == ps::Mode::Operational; }));
+    CHECK(b.received(ps::msg::SetMode) == json{{"mode", "OPERATIONAL"}});
+    QCoreApplication::processEvents();
+}
+
+QString opState(Bench& b)
+{
+    return child<QLabel>(*b.parameters, "opState")->text();
+}
+
+}  // namespace
+
+TEST_CASE("v8 3.5: кнопки оперативного режима сами переводят изделие в OPERATIONAL", "[v8][op]")
+{
+    Bench b;
+    CHECK_FALSE(b.button("opGetFrequency")->isEnabled());
+    b.connect();
+    b.click("opGetFrequency");
+    REQUIRE(waitFor([&] { return b.server.last(ps::msg::GetOpFrequency) != nullptr; }));
+    CHECK(b.received(ps::msg::SetMode) == json{{"mode", "OPERATIONAL"}});
+    CHECK(b.session->mode() == ps::Mode::Operational);
+    CHECK(child<QLabel>(*b.parameters, "opMode")->text().contains(QStringLiteral("оперативный")));
+}
+
+TEST_CASE("v8 3.5.1.1 set_op_frequency: Гц, 4,9–6,0 ГГц, ответ после калибровки", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    child<QDoubleSpinBox>(*b.parameters, "opFreq")->setValue(4900.0);
+    b.click("opSetFrequency");
+    CHECK(b.received(ps::msg::SetOpFrequency) == json{{"freq", 4900000000LL}});
+    REQUIRE(waitFor([&] { return opState(b).contains(QStringLiteral("set_op_frequency: OK")); }));
+    CHECK(b.server.op().at("freq") == 4900000000LL);
+    CHECK(child<QLabel>(*b.parameters, "opCal")->text().contains(QStringLiteral("выполнена")));
+    // После смены состояния вложенного КА программа сама спрашивает get_state.
+    REQUIRE(waitFor([&] { return b.session->state() == QStringLiteral("OP_IDLE"); }));
+}
+
+TEST_CASE("v8 3.5.1.2 get_op_frequency: payload пустой, частота на форме", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    b.click("opGetFrequency");
+    CHECK(b.received(ps::msg::GetOpFrequency) == json::object());
+    auto* freq = child<QDoubleSpinBox>(*b.parameters, "opFreq");
+    REQUIRE(waitFor([&] { return freq->value() == Catch::Approx(4900.0); }));
+}
+
+TEST_CASE("v8 3.5.1.3 set_op_policy: acq и loss AUTO/CONFIRM", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    auto* acq = child<QComboBox>(*b.parameters, "opAcq");
+    auto* loss = child<QComboBox>(*b.parameters, "opLoss");
+    acq->setCurrentIndex(acq->findData(QStringLiteral("AUTO")));
+    loss->setCurrentIndex(loss->findData(QStringLiteral("CONFIRM")));
+    b.click("opSetPolicy");
+    CHECK(b.received(ps::msg::SetOpPolicy) == json{{"acq", "AUTO"}, {"loss", "CONFIRM"}});
+    REQUIRE(waitFor([&] { return b.server.op().at("loss") == "CONFIRM"; }));
+}
+
+TEST_CASE("v8 3.5.1.4 get_op_policy: payload пустой, политика на форме", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    auto* acq = child<QComboBox>(*b.parameters, "opAcq");
+    acq->setCurrentIndex(acq->findData(QStringLiteral("CONFIRM")));
+    b.click("opGetPolicy");
+    CHECK(b.received(ps::msg::GetOpPolicy) == json::object());
+    REQUIRE(waitFor([&] { return acq->currentData().toString() == QStringLiteral("AUTO"); }));
+}
+
+TEST_CASE("v8 3.5.1.5 set_op_ray: mode SCAN/FIXED, az_min/az_max/az_fix в ±30°", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    auto* mode = child<QComboBox>(*b.parameters, "opRayMode");
+    mode->setCurrentIndex(mode->findData(QStringLiteral("SCAN")));
+    child<QDoubleSpinBox>(*b.parameters, "opAzMin")->setValue(-15.0);
+    child<QDoubleSpinBox>(*b.parameters, "opAzMax")->setValue(10.0);
+    child<QDoubleSpinBox>(*b.parameters, "opAzFix")->setValue(0.0);
+    b.click("opSetRay");
+    CHECK(b.received(ps::msg::SetOpRay) ==
+          json{{"mode", "SCAN"}, {"az_min", -15.0}, {"az_max", 10.0}, {"az_fix", 0.0}});
+    CHECK(child<QDoubleSpinBox>(*b.parameters, "opAzMin")->minimum() == Catch::Approx(-30.0));
+    CHECK(child<QDoubleSpinBox>(*b.parameters, "opAzMax")->maximum() == Catch::Approx(30.0));
+}
+
+TEST_CASE("v8 3.5.1.6 get_op_ray: payload пустой, параметры луча на форме", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    auto* mode = child<QComboBox>(*b.parameters, "opRayMode");
+    mode->setCurrentIndex(mode->findData(QStringLiteral("FIXED")));
+    b.click("opGetRay");
+    CHECK(b.received(ps::msg::GetOpRay) == json::object());
+    REQUIRE(waitFor([&] { return mode->currentData().toString() == QStringLiteral("SCAN"); }));
+}
+
+TEST_CASE("v8 3.5.1.7 set_op_data: AUTO/FPGA/VIDEO", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    auto* data = child<QComboBox>(*b.parameters, "opData");
+    data->setCurrentIndex(data->findData(QStringLiteral("VIDEO")));
+    b.click("opSetData");
+    CHECK(b.received(ps::msg::SetOpData) == json{{"data", "VIDEO"}});
+    REQUIRE(waitFor([&] { return b.server.op().at("data") == "VIDEO"; }));
+}
+
+TEST_CASE("v8 3.5.1.8 get_op_data: payload пустой, источник на форме", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    auto* data = child<QComboBox>(*b.parameters, "opData");
+    data->setCurrentIndex(data->findData(QStringLiteral("FPGA")));
+    b.click("opGetData");
+    CHECK(b.received(ps::msg::GetOpData) == json::object());
+    REQUIRE(waitFor([&] { return data->currentData().toString() == QStringLiteral("AUTO"); }));
+}
+
+TEST_CASE("v8 3.5.1.9 set_op_start_calibration: payload пустой, cal в ответе", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    b.click("opStartCalibration");
+    CHECK(b.received(ps::msg::SetOpStartCalibration) == json::object());
+    auto* cal = child<QLabel>(*b.parameters, "opCal");
+    REQUIRE(waitFor([&] { return cal->text() == QStringLiteral("калибровка выполнена"); }));
+}
+
+TEST_CASE("v8 3.5.1.10 get_op_calibration: payload пустой, cal NO показан", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    b.click("opGetCalibration");
+    CHECK(b.received(ps::msg::GetOpCalibration) == json::object());
+    auto* cal = child<QLabel>(*b.parameters, "opCal");
+    REQUIRE(waitFor([&] { return cal->text() == QStringLiteral("калибровка не выполнена"); }));
+}
+
+TEST_CASE("v8 3.5.1.11 set_op_start_survey и 3.5.2.1 send_op_survey_result", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    b.click("opSetFrequency");
+    REQUIRE(waitFor([&] { return b.server.opState() == "OP_IDLE"; }));
+    b.click("opStartSurvey");
+    CHECK(b.received(ps::msg::SetOpStartSurvey) == json::object());
+    auto* survey = child<QTableWidget>(*b.parameters, "opSurvey");
+    REQUIRE(waitFor([&] { return survey->rowCount() == 2; }));
+    CHECK(survey->item(0, 0)->text() == QStringLiteral("12.0°"));
+    CHECK(survey->item(0, 3)->text() == QStringLiteral("помеха"));
+    CHECK(survey->item(1, 3)->text() == QStringLiteral("БПЛА"));
+    REQUIRE(waitFor([&] { return b.session->state() == QStringLiteral("OP_SURVEY"); }));
+}
+
+TEST_CASE("v8 3.5.1.12 set_op_start_acquire и 3.5.2.2 send_op_track_result", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    b.click("opSetFrequency");
+    REQUIRE(waitFor([&] { return b.server.opState() == "OP_IDLE"; }));
+    b.click("opStartSurvey");
+    auto* survey = child<QTableWidget>(*b.parameters, "opSurvey");
+    REQUIRE(waitFor([&] { return survey->rowCount() == 2; }));
+    // Двойной щелчок по найденному источнику подставляет его азимут в «Захват на».
+    emit survey->cellDoubleClicked(1, 0);
+    CHECK(child<QDoubleSpinBox>(*b.parameters, "opAcquireAz")->value() == Catch::Approx(-7.5));
+    b.click("opStartAcquire");
+    CHECK(b.received(ps::msg::SetOpStartAcquire) == json{{"az", -7.5}});
+    auto* track = child<QTableWidget>(*b.parameters, "opTrack");
+    REQUIRE(waitFor([&] { return track->rowCount() == 2; }));
+    CHECK(track->item(0, 1)->text() == QStringLiteral("сопровождение"));  // новые сверху
+    CHECK(track->item(1, 1)->text() == QStringLiteral("захват"));
+    CHECK(track->item(0, 9)->text() == QStringLiteral("FPGA"));
+    CHECK(track->item(0, 10)->text() == QStringLiteral("SD"));
+}
+
+TEST_CASE("v8 3.5.1.13 set_op_start_loss: из сопровождения в ограниченный поиск", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    b.click("opSetFrequency");
+    REQUIRE(waitFor([&] { return b.server.opState() == "OP_IDLE"; }));
+    b.click("opStartSurvey");
+    REQUIRE(waitFor([&] { return b.server.opState() == "OP_SURVEY"; }));
+    b.click("opStartAcquire");
+    REQUIRE(waitFor([&] { return b.server.opState() == "OP_TRACK"; }));
+    b.click("opStartLoss");
+    CHECK(b.received(ps::msg::SetOpStartLoss) == json::object());
+    REQUIRE(waitFor([&] { return b.session->state() == QStringLiteral("OP_LIMITED_SURVEY"); }));
+}
+
+TEST_CASE("v8 3.5.1.14 set_op_stop: payload пустой, в OP_IDLE", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    b.click("opSetFrequency");
+    REQUIRE(waitFor([&] { return b.server.opState() == "OP_IDLE"; }));
+    b.click("opStartSurvey");
+    REQUIRE(waitFor([&] { return b.server.opState() == "OP_SURVEY"; }));
+    b.click("opStop");
+    CHECK(b.received(ps::msg::SetOpStop) == json::object());
+    REQUIRE(waitFor([&] { return b.session->state() == QStringLiteral("OP_IDLE"); }));
+}
+
+TEST_CASE("v8 3.5.1.15 set_op_start_hold: az в ±30°, при FIXED — отказ виден", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    child<QDoubleSpinBox>(*b.parameters, "opHoldAz")->setValue(13.5);
+    b.click("opStartHold");
+    CHECK(b.received(ps::msg::SetOpStartHold) == json{{"az", 13.5}});
+    auto* hold = child<QLabel>(*b.parameters, "opHold");
+    REQUIRE(waitFor([&] { return hold->text().contains(QStringLiteral("13.5")); }));
+
+    auto* mode = child<QComboBox>(*b.parameters, "opRayMode");
+    mode->setCurrentIndex(mode->findData(QStringLiteral("FIXED")));
+    b.click("opSetRay");
+    REQUIRE(waitFor([&] { return b.server.op().at("mode") == "FIXED"; }));
+    b.click("opStartHold");
+    REQUIRE(waitFor([&] { return opState(b).contains(QStringLiteral("NOT_SUPPORTED")); }));
+}
+
+TEST_CASE("v8 3.5.1.16 set_op_stop_hold: payload пустой", "[v8][op]")
+{
+    Bench b;
+    b.connect();
+    toOperational(b);
+    b.click("opStopHold");
+    CHECK(b.received(ps::msg::SetOpStopHold) == json::object());
+    auto* hold = child<QLabel>(*b.parameters, "opHold");
+    REQUIRE(waitFor([&] { return hold->text() == QStringLiteral("удержание: выключено"); }));
+    CHECK_FALSE(b.server.op().at("hold").get<bool>());
 }
 
 // ------------------------------------------------- 3.6 инструментальный режим

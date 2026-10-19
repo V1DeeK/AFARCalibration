@@ -2,6 +2,7 @@
 
 #include "FullScanPanel.h"
 #include "MacResolver.h"
+#include "OperationalPanel.h"
 #include "PsDiagnosticsPage.h"
 #include "PsExchangeView.h"
 #include "PsJournalDialog.h"
@@ -69,6 +70,11 @@ SettingsTab::SettingsTab(PsSession* session, QWidget* parent)
     m_modulesPage->tabs()->addTab(m_diagnostics, QStringLiteral("Состояние"));
     m_osd = new PsOsdPage(m_session, m_modulesPage->tabs());
     m_modulesPage->tabs()->addTab(ui::scrollPage(m_osd, m_modulesPage->tabs()), QStringLiteral("OSD"));
+    m_operational = new OperationalPanel(m_session, m_modulesPage->tabs());
+    m_modulesPage->tabs()->addTab(ui::scrollPage(m_operational, m_modulesPage->tabs()),
+                                  QStringLiteral("Оперативный режим"));
+    m_modulesPage->tabs()->setTabToolTip(m_modulesPage->tabs()->count() - 1,
+                                         QStringLiteral("Команды v8 п. 3.5 — в режиме OPERATIONAL, не только в сервисном"));
     modulesLayout->addWidget(m_modulesPage);
 
     auto* scanBox = new QGroupBox(QStringLiteral("Полное сканирование"), this);
@@ -78,20 +84,20 @@ SettingsTab::SettingsTab(PsSession* session, QWidget* parent)
     m_fullScan = new FullScanPanel(m_session, scanBox);
     scanLayout->addWidget(m_fullScan);
 
-    // Сверху в ряд: подключение, тех. состояние, режим изделия и луч (последние два уже).
+    // Сверху в ряд: подключение, тех. состояние, режим изделия. Ниже «Модули», под ними
+    // «Полное сканирование» и рядом с ним «Луч». Справа журнал во всю высоту окна.
     root->addWidget(buildConnectionBox(), 0, 0);
     root->addWidget(buildTechBox(), 0, 1);
     root->addWidget(buildModeBox(), 0, 2);
-    root->addWidget(buildBeamBox(), 0, 3);
-    // Ниже слева «Модули» и под ними «Полное сканирование», справа журнал до низа окна.
-    root->addWidget(modulesBox, 1, 0, 1, 2);
+    root->addWidget(modulesBox, 1, 0, 1, 3);
     root->addWidget(scanBox, 2, 0, 1, 2);
-    root->addWidget(buildJournalBox(), 1, 2, 2, 2);
+    root->addWidget(buildBeamBox(), 2, 2);
+    root->addWidget(buildJournalBox(), 0, 3, 3, 1);
 
-    root->setColumnStretch(0, 4);
-    root->setColumnStretch(1, 5);
-    root->setColumnStretch(2, 3);
-    root->setColumnStretch(3, 3);
+    root->setColumnStretch(0, 3);
+    root->setColumnStretch(1, 4);
+    root->setColumnStretch(2, 2);
+    root->setColumnStretch(3, 5);
     root->setRowStretch(0, 0);
     root->setRowStretch(1, 3);
     root->setRowStretch(2, 2);
@@ -261,7 +267,20 @@ QWidget* SettingsTab::buildSingleMessagePage()
     keepRow->addWidget(new QLabel(QStringLiteral("keep_alive при простое канала каждые"), page));
     keepRow->addWidget(m_keepAlive);
     keepRow->addWidget(m_keepAliveHint, 1);
+    auto* keepNow = new QPushButton(QStringLiteral("Отправить keep_alive"), page);
+    keepNow->setObjectName(QStringLiteral("psKeepAliveNow"));
+    keepNow->setToolTip(QStringLiteral("keep_alive сейчас, не дожидаясь простоя канала (v8 п. 3.2.1.2)"));
+    ui::setButtonRole(keepNow, ui::ButtonRole::Secondary);
+    keepRow->addWidget(keepNow);
     layout->addLayout(keepRow);
+    connect(keepNow, &QPushButton::clicked, this, [this] {
+        if (m_session->send(ps::msg::KeepAlive) >= 0) {
+            log(QStringLiteral("keep_alive отправлена"));
+        }
+    });
+    connect(m_session, &PsSession::controlsChanged, keepNow,
+            [this, keepNow] { keepNow->setEnabled(m_session->manualAllowed()); });
+    keepNow->setEnabled(m_session->manualAllowed());
     const auto refreshKeepHint = [this] {
         const double perSecond = 1000.0 / m_keepAlive->value();
         m_keepAliveHint->setText(QStringLiteral("≈ %1 раз в секунду, нет ответа — разрыв через %2 с")
@@ -479,17 +498,13 @@ QWidget* SettingsTab::buildBeamBox()
     m_beamState->setProperty("role", QStringLiteral("hint"));
     m_beamState->setWordWrap(true);
 
-    auto* grid = new QGridLayout;
-    grid->setHorizontalSpacing(ui::kInnerGap);
-    grid->setVerticalSpacing(2);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Азимут луча"), box), 0, 0);
-    grid->addWidget(m_beamAz, 1, 0);
-    grid->addWidget(setAz, 1, 1);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Луч из таблицы"), box), 2, 0);
-    grid->addWidget(m_beamId, 3, 0);
-    grid->addWidget(setBeam, 3, 1);
-    grid->setColumnStretch(0, 1);
-    layout->addLayout(grid);
+    // Друг под другом: окошко узкое, стоит рядом с «Полным сканированием».
+    layout->addWidget(ui::captionLabel(QStringLiteral("Азимут луча"), box));
+    layout->addWidget(m_beamAz);
+    layout->addWidget(setAz);
+    layout->addWidget(ui::captionLabel(QStringLiteral("Луч из таблицы"), box));
+    layout->addWidget(m_beamId);
+    layout->addWidget(setBeam);
     layout->addWidget(getBeam);
     layout->addWidget(m_beamState);
     layout->addStretch(1);

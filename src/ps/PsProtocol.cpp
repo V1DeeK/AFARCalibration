@@ -169,8 +169,20 @@ std::string stateRu(std::string_view state)
         {"SELF_TEST", "самопроверка"},
         {"READY", "готов"},
         {"FAULT", "неисправность"},
+        // v8 таблица 11.
         {"SFF_IDLE", "ожидание команды"},
-        {"SFF_OBSERVATION", "обзор"},
+        {"SFF_FREQ", "установка частоты"},
+        {"SFF_CALIBR", "применение калибровки"},
+        {"SFF_AZIMUTH", "установка азимута"},
+        {"SFF_FFT", "вычисление мощности в подполосах"},
+        {"OP_INITIALIZATION", "установка частоты"},
+        {"OP_CALIBRATION", "калибровка каналов"},
+        {"OP_IDLE", "ожидание команды"},
+        {"OP_SURVEY", "поиск"},
+        {"OP_ACQUIRE", "захват"},
+        {"OP_TRACK", "сопровождение"},
+        {"OP_LOSS", "потеря цели"},
+        {"OP_LIMITED_SURVEY", "ограниченный поиск"},
     };
     const auto it = names.find(state);
     return it == names.end() ? std::string(state) : std::string(it->second);
@@ -1079,6 +1091,69 @@ bool SffResult::fromJson(const nlohmann::json& o, SffResult& out, std::string* e
     }
     out = std::move(r);
     return true;
+}
+
+namespace {
+
+/// Поля источника, общие для таблиц 23 и 24; без az.
+bool readTargetFields(const json& o, OpTarget& t)
+{
+    return readNumber(o, "w", t.w) && readNumber(o, "snr", t.snr) && readString(o, "cls", t.cls) &&
+           readNumber(o, "conf", t.conf) && readNumber(o, "coh", t.coh) && readNumber(o, "df", t.df);
+}
+
+}  // namespace
+
+bool OpSurveyResult::fromJson(const nlohmann::json& o, OpSurveyResult& out, std::string* error)
+{
+    const auto it = o.find("tgt");
+    if (it == o.end() || !it->is_array()) {
+        setError(error, "send_op_survey_result: нет массива tgt");
+        return false;
+    }
+    OpSurveyResult r;
+    for (const auto& item : *it) {
+        OpTarget t;
+        if (!item.is_object() || !readNumber(item, "az", t.az) || !readTargetFields(item, t)) {
+            setError(error, "send_op_survey_result: в элементе tgt нужны az, w, snr, cls, conf, coh, df");
+            return false;
+        }
+        r.tgt.push_back(std::move(t));
+    }
+    out = std::move(r);
+    return true;
+}
+
+bool OpTrackResult::fromJson(const nlohmann::json& o, OpTrackResult& out, std::string* error)
+{
+    OpTrackResult r;
+    if (!readString(o, "st", r.st) || !readNumber(o, "az_ray", r.az_ray) || !readNumber(o, "az", r.az) ||
+        !readNumber(o, "az_pred", r.az_pred) || !readNumber(o, "az_err", r.az_err) ||
+        !readNumber(o, "az_rate", r.az_rate) || !readTargetFields(o, r.target) || !readString(o, "src", r.src) ||
+        !readString(o, "meth", r.meth)) {
+        setError(error, "send_op_track_result: не хватает полей таблицы 24");
+        return false;
+    }
+    r.target.az = r.az;
+    out = std::move(r);
+    return true;
+}
+
+std::string opClassRu(std::string_view cls)
+{
+    if (cls == "DRONE") return "БПЛА";
+    if (cls == "INTERF") return "помеха";
+    if (cls == "UNKNOWN") return "неизвестно";
+    return std::string(cls);
+}
+
+std::string opTrackStateRu(std::string_view st)
+{
+    if (st == "ACQUIRE") return "захват";
+    if (st == "TRACK") return "сопровождение";
+    if (st == "LOSS") return "потеря";
+    if (st == "LIMITED_SURVEY") return "ограниченный поиск";
+    return std::string(st);
 }
 
 }  // namespace afar::ps

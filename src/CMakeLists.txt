@@ -261,6 +261,8 @@ add_library(afar_app_ui STATIC
     ui/SettingsTab.h
     ui/FullScanPanel.cpp
     ui/FullScanPanel.h
+    ui/OperationalPanel.cpp
+    ui/OperationalPanel.h
     ui/PsExchangeView.cpp
     ui/PsExchangeView.h
     ui/PsJournalDialog.cpp

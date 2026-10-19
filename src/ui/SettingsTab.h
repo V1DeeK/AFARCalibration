@@ -7,6 +7,7 @@
 #include <vector>
 
 class FullScanPanel;
+class OperationalPanel;
 class PsDiagnosticsPage;
 class PsExchangeView;
 class PsJournalDialog;
@@ -26,9 +27,10 @@ class StatTile;
 
 /// Вкладка «Настройки» по эскизу 19.10.2026 — бывшие «Подключение» и «Установка
 /// параметров». Сверху в ряд: «Подключение к плате», «Тех. состояние» (Основное,
-/// Ошибки, Подробно), «Режим изделия» и «Луч». Ниже слева «Модули» и под ними
-/// «Полное сканирование», справа во всю высоту — «Журнал» с вкладками «Журнал
-/// обмена» (счётчики и таблица), «Телеметрия», «Одиночное сообщение». Команды выполняет
+/// Ошибки, Подробно), «Режим изделия». Ниже «Модули» (в том числе «Оперативный
+/// режим»), под ними «Полное сканирование» и рядом «Луч». Справа во всю высоту —
+/// «Журнал» с вкладками «Журнал обмена» (счётчики и таблица), «Телеметрия»,
+/// «Одиночное сообщение» (там же кнопка keep_alive). Команды выполняет
 /// PS (docs/contracts/ps-ethernet-v8.md); во время серии они заблокированы.
 ///
 /// IP, MAC и порты можно править всегда, пока нет связи, — и во время попыток
@@ -60,6 +62,7 @@ public:
     [[nodiscard]] PsModulesPage* modulesPage() const { return m_modulesPage; }
     [[nodiscard]] PsDiagnosticsPage* diagnosticsPage() const { return m_diagnostics; }
     [[nodiscard]] PsOsdPage* osdPage() const { return m_osd; }
+    [[nodiscard]] OperationalPanel* operationalPanel() const { return m_operational; }
 
     /// Набор кодов 16 каналов в файле — payload set_phase_atten ({"ch": […]}).
     bool saveCodes(const QString& path, QString* error = nullptr) const;
@@ -149,6 +152,7 @@ private:
     PsModulesPage* m_modulesPage = nullptr;
     PsDiagnosticsPage* m_diagnostics = nullptr;
     PsOsdPage* m_osd = nullptr;
+    OperationalPanel* m_operational = nullptr;
 
     std::vector<QWidget*> m_serviceControls;
 };

@@ -71,8 +71,21 @@
   (`INIT`); программа переподключается и снова шлёт `hello`. Кнопка
   перезапуска спрашивает подтверждение оператора.
 
-Режим `OPERATIONAL` (`set_op_*`, `get_op_*`, события `send_op_*`) в этой
-программе не реализуется: это работа АРМ РМО, калибровке он не нужен.
+Режим `OPERATIONAL` (п. 3.5): `set_op_frequency` / `get_op_frequency`
+(`freq`, 4,9–6,0 ГГц, установка частоты сразу калибрует каналы),
+`set_op_policy` / `get_op_policy` (`acq`, `loss`: `AUTO`, `CONFIRM`),
+`set_op_ray` / `get_op_ray` (`mode` `SCAN`/`FIXED`, `az_min`, `az_max`,
+`az_fix` в ±30°), `set_op_data` / `get_op_data` (`data`: `AUTO`, `FPGA`,
+`VIDEO`), `set_op_start_calibration` / `get_op_calibration` (`cal`: `OK`,
+`NO`), `set_op_start_survey`, `set_op_start_acquire` (`az`),
+`set_op_start_loss`, `set_op_stop`, `set_op_start_hold` (`az`; при луче
+`FIXED` PS не выполняет), `set_op_stop_hold`. События:
+`send_op_survey_result` (`tgt[]`: `az`, `w`, `snr`, `cls`, `conf`, `coh`,
+`df`) и `send_op_track_result` (`st`, `az_ray`, `az`, `az_pred`, `az_err`,
+`az_rate`, `w`, `snr`, `cls`, `conf`, `coh`, `df`, `src`, `meth`). Если
+изделие не в `OPERATIONAL`, программа перед командой шлёт
+`set_mode OPERATIONAL`. После команд, меняющих вложенный КА, программа
+спрашивает `get_state`.
 
 Команды `set_adc`, `get_adc`, `set_phase_atten`, `get_phase_atten`, `set_lo`,
 `get_lo`, `set_mixer`, `get_mixer`, `set_video`, `get_video` не входят в v8.
@@ -86,7 +99,8 @@
 
 Каждой команде, которую оператор шлёт сам, соответствует своя кнопка во
 вкладке «Настройки» (кроме `rs485_send` — «Тестовый прогон»).
-`hello` и `keep_alive` программа шлёт сама. Любую команду можно отправить и
+`hello` программа шлёт сама при подключении; `keep_alive` — сама при
+простое канала и по кнопке. Любую команду можно отправить и
 вручную из «Одиночного сообщения» в журнале «Настроек».
 
 | Команда | Где | Кнопка |
@@ -108,11 +122,21 @@
 | `set_sff_parameters`, `get_sff_parameters` | Полное сканирование | «Применить параметры», «Прочитать параметры» |
 | `set_sff_start`, `set_sff_stop` | Полное сканирование | «Старт», «Стоп» |
 | `rs485_send` | Тестовый прогон | отправка HEX-строки |
+| `keep_alive` | Журнал → Одиночное сообщение | «Отправить keep_alive» |
+| `set_mode OPERATIONAL` | Модули → Оперативный режим | «Перейти в оперативный» |
+| `set_op_frequency`, `get_op_frequency` | Модули → Оперативный режим | Частота: «Установить», «Прочитать» |
+| `set_op_start_calibration`, `get_op_calibration` | Модули → Оперативный режим | Калибровка: «Калибровать», «Прочитать» |
+| `set_op_policy`, `get_op_policy` | Модули → Оперативный режим | Политика: «Записать», «Прочитать» |
+| `set_op_ray`, `get_op_ray` | Модули → Оперативный режим | Луч: «Записать», «Прочитать» |
+| `set_op_data`, `get_op_data` | Модули → Оперативный режим | Пеленг по: «Записать», «Прочитать» |
+| `set_op_start_survey`, `set_op_start_loss`, `set_op_stop` | Модули → Оперативный режим | «Поиск», «Сброс цели», «Стоп» |
+| `set_op_start_acquire` | Модули → Оперативный режим | «Захват» (азимут — двойной щелчок по результату поиска) |
+| `set_op_start_hold`, `set_op_stop_hold` | Модули → Оперативный режим | «Удерживать», «Отпустить» |
 
 ## Тесты
 
 `tests/test_ps_v8_commands.cpp` (`ctest -R ps_v8_commands`): по одному
-`TEST_CASE` на каждую команду и событие из п. 3.2–3.4 и 3.6 и отдельный на
+`TEST_CASE` на каждую команду и событие из п. 3.2–3.6 и отдельный на
 UDP-пакет таблицы 5. Тест нажимает кнопку, как оператор, сверяет
 `msg_type` и `payload`, принятые тестовым PS, с таблицами документа и
 проверяет, что ответ показан на экране. Название кейса начинается с номера

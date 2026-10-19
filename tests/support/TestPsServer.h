@@ -17,7 +17,7 @@ class QTcpSocket;
 /// Тестовый сервер на localhost для автотестов TCP и UDP. Только в tests/:
 /// в программу не входит, PS изделия делает разработчик PS. Отвечает по
 /// контракту docs/contracts/ps-json-protocol.md: hello, keep_alive,
-/// set_mode/get_state, полное сканирование (§4.6), сервисные команды v3 (с модулями §4.5), UDP-телеметрия.
+/// set_mode/get_state, полное сканирование (§4.6), оперативный режим (v8 п. 3.5), сервисные команды v3 (с модулями §4.5), UDP-телеметрия.
 /// Одно соединение; новое закрывает старое.
 class TestPsServer final : public QObject {
     Q_OBJECT
@@ -66,6 +66,10 @@ public:
     /// Параметры OSD (таблица 13) и последний отладочный текст set_osd_text; пусто после clear_osd_text.
     [[nodiscard]] const nlohmann::json& osd() const { return m_osd; }
     [[nodiscard]] const nlohmann::json& osdText() const { return m_osdText; }
+    /// Параметры оперативного режима (v8 п. 3.5): freq, acq, loss, mode, az_min, az_max,
+    /// az_fix, data, cal, hold; состояние вложенного КА — opState().
+    [[nodiscard]] const nlohmann::json& op() const { return m_op; }
+    [[nodiscard]] const std::string& opState() const { return m_opState; }
     [[nodiscard]] int selfTests() const { return m_selfTests; }
     [[nodiscard]] int resets() const { return m_resets; }
     /// Модуль не отвечает по RS-485 — HW_NOT_READY на команды §4.5.
@@ -77,6 +81,8 @@ private:
     void handle(const afar::ps::Envelope& cmd);
     void handleModule(const afar::ps::Envelope& cmd);
     void handleSff(const afar::ps::Envelope& cmd);
+    void handleOp(const afar::ps::Envelope& cmd);
+    void sendEvent(std::string_view type, nlohmann::json payload);
     void reply(const afar::ps::Envelope& cmd, afar::ps::Status status,
                nlohmann::json payload = nlohmann::json::object());
     void sendTelemetry();
@@ -117,4 +123,8 @@ private:
     int m_resets = 0;
     afar::ps::SffParams m_sff;
     quint8 m_eventCount = 0;
+    std::string m_opState = "OP_INITIALIZATION";
+    nlohmann::json m_op = {{"freq", 4900000000LL}, {"acq", "AUTO"}, {"loss", "AUTO"}, {"mode", "SCAN"},
+                           {"az_min", -30.0}, {"az_max", 30.0}, {"az_fix", 0.0}, {"data", "AUTO"},
+                           {"cal", "NO"}, {"hold", false}};
 };

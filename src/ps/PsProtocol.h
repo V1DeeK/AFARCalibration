@@ -59,6 +59,25 @@ inline constexpr std::string_view GetSffParameters = "get_sff_parameters";
 inline constexpr std::string_view SetSffStart = "set_sff_start";
 inline constexpr std::string_view SetSffStop = "set_sff_stop";
 inline constexpr std::string_view SendSffResult = "send_sff_result";
+// Оперативный режим (v8 п. 3.5).
+inline constexpr std::string_view SetOpFrequency = "set_op_frequency";
+inline constexpr std::string_view GetOpFrequency = "get_op_frequency";
+inline constexpr std::string_view SetOpPolicy = "set_op_policy";
+inline constexpr std::string_view GetOpPolicy = "get_op_policy";
+inline constexpr std::string_view SetOpRay = "set_op_ray";
+inline constexpr std::string_view GetOpRay = "get_op_ray";
+inline constexpr std::string_view SetOpData = "set_op_data";
+inline constexpr std::string_view GetOpData = "get_op_data";
+inline constexpr std::string_view SetOpStartCalibration = "set_op_start_calibration";
+inline constexpr std::string_view GetOpCalibration = "get_op_calibration";
+inline constexpr std::string_view SetOpStartSurvey = "set_op_start_survey";
+inline constexpr std::string_view SetOpStartAcquire = "set_op_start_acquire";
+inline constexpr std::string_view SetOpStartLoss = "set_op_start_loss";
+inline constexpr std::string_view SetOpStop = "set_op_stop";
+inline constexpr std::string_view SetOpStartHold = "set_op_start_hold";
+inline constexpr std::string_view SetOpStopHold = "set_op_stop_hold";
+inline constexpr std::string_view SendOpSurveyResult = "send_op_survey_result";
+inline constexpr std::string_view SendOpTrackResult = "send_op_track_result";
 inline constexpr std::string_view Telemetry = "telemetry";
 }  // namespace msg
 
@@ -330,6 +349,46 @@ struct SffResult {
     bool peak(double& power, double& azimuth) const;
     static bool fromJson(const nlohmann::json& o, SffResult& out, std::string* error = nullptr);
 };
+
+// ------------------------------------------------ оперативный режим (§3.5)
+
+/// Источник сигнала из send_op_survey_result (v8 таблица 23).
+struct OpTarget {
+    double az = 0.0;    ///< азимут, град
+    double w = 0.0;     ///< ширина спектра, МГц
+    double snr = 0.0;   ///< дБ
+    std::string cls;    ///< "DRONE", "INTERF", "UNKNOWN"
+    double conf = 0.0;  ///< достоверность классификации
+    double coh = 0.0;   ///< когерентных подполос, %
+    double df = 0.0;    ///< пригодных для пеленга подполос, %
+};
+
+/// Событие send_op_survey_result: пустой tgt — источников нет.
+struct OpSurveyResult {
+    std::vector<OpTarget> tgt;
+
+    static bool fromJson(const nlohmann::json& o, OpSurveyResult& out, std::string* error = nullptr);
+};
+
+/// Событие send_op_track_result (v8 таблица 24).
+struct OpTrackResult {
+    std::string st;  ///< "ACQUIRE", "TRACK", "LOSS", "LIMITED_SURVEY"
+    double az_ray = 0.0;
+    double az = 0.0;
+    double az_pred = 0.0;
+    double az_err = 0.0;
+    double az_rate = 0.0;  ///< град/с
+    OpTarget target;       ///< w, snr, cls, conf, coh, df; target.az == az
+    std::string src;       ///< "FPGA", "VIDEO"
+    std::string meth;      ///< "SD", "3R", "5R"
+
+    static bool fromJson(const nlohmann::json& o, OpTrackResult& out, std::string* error = nullptr);
+};
+
+/// Русская подпись класса источника: «БПЛА», «помеха», «неизвестно».
+std::string opClassRu(std::string_view cls);
+/// Русская подпись состояния из send_op_track_result.st.
+std::string opTrackStateRu(std::string_view st);
 
 /// Русская подпись идентификатора самопроверки ("power", "synth", …).
 std::string selfTestRu(std::string_view id);
