@@ -12,16 +12,16 @@ description: Сборка сообщения коммита в формате Co
 
 Типы: `feat`, `fix`, `refactor`, `test`, `docs`, `build`, `perf`, `chore`.
 
-Scope: `protocol`, `connection`, `streams`, `ui`, `map`, `auth`, `record`,
-`video`, `build`, `docs`, `tests`.
+Scope: `vna`, `ps`, `dut`, `spectrum`, `measure`, `data`, `cal`, `qc`, `report`, `sim`, `ui`,
+`core`, `build`, `docs`, `contracts`, `tests`, `tools`.
 
 Примеры:
 
 ```
-feat(streams): считать потери пакетов по каждому каналу отдельно
-fix(connection): не терять резервный адрес после обрыва CONTROL
-refactor(ui): вынести сборку панели потоков из MainWindow
-test(protocol): покрыть обрезанный кадр спектра
+feat(report): добавить тепловую карту фазовой ошибки в отчёт канала
+fix(vna): не отправлять команды при невалидном SweepConfig
+refactor(ui): вынести панель свипа из MeasureTab
+test(vna): покрыть тайм-аут ответа S2VNA
 ```
 
 Тело добавляй только если решение неочевидно: что было не так и почему выбран
@@ -49,8 +49,8 @@ test(protocol): покрыть обрезанный кадр спектра
 
 ## Чего не должно попасть в коммит
 
-`build/`, `*.exe`, `*.dll`, `*.a`, `*.o`, `*.log`, `.cursor/workspace/`,
-`maps/*.mbtiles`, реальные адреса стендов и пароли в `station.ini`.
+`build/`, `dist/`, `*.exe`, `*.dll`, `*.a`, `*.o`, `*.log`, `.cursor/workspace/`,
+каталоги серий с измерениями, боевые IP стенда и пароли.
 
 Перед коммитом проверь `git status`: если в индексе есть что-то из этого
 списка — сначала скажи об этом, потом действуй.

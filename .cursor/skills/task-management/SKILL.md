@@ -26,13 +26,13 @@ disable-model-invocation: true
 
 | ID | Что | Файлы | Статус | Примечание |
 |----|-----|-------|--------|------------|
-| PROTO-001 | Разбор кадра триангуляции | protocol/pf60_protocol.cpp | ✅ | тест protocol зелёный |
-| UI-002 | Показ триангуляции на карте | src/map/items/TriangulationItem.cpp | 🔄 | |
-| DOC-003 | Обновить контракт | protocol/documentation/current_protocol.md | ⏳ | |
+| VNA-001 | Чтение активного комплекта калибровки | src/vna/C2220Vna.cpp | ✅ | тест c2220_driver зелёный |
+| UI-002 | Показ комплекта на этапе «2 Калибровка VNA» | src/ui/MeasureTab.cpp | 🔄 | |
+| DOC-003 | Обновить контракт | docs/contracts/vna-c2220-scpi.md | ⏳ | |
 
 ## Журнал
-- 09:42 PROTO-001: worker внёс правку, test-runner 5/5 зелёных
-- 09:55 PROTO-001: reviewer без критичных замечаний, закрыто
+- 09:42 VNA-001: worker внёс правку, test-runner 5/5 зелёных
+- 09:55 VNA-001: reviewer без критичных замечаний, закрыто
 - 09:58 UI-002: worker начал
 
 ## Открытые вопросы

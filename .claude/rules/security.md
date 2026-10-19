@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/vna/**"
+  - "src/ps/**"
   - "src/dut/**"
   - "src/data/**"
   - "src/report/**"
@@ -28,7 +29,15 @@ if (values.size() != 2 * sweep.points) throw VnaProtocolError(...);
 
 - Ни одной SCPI-записи при невалидном `SweepConfig`: проверка до I/O.
 - Только команды из `docs/contracts/vna-c2220-scpi.md`.
-- Команды контроллера изделия не выдумываются; при отказе — `set_safe_state`.
+- Команды PS — только из `docs/contracts/ps-json-protocol.md`; при отказе —
+  `set_safe_state` (att 63, фаза 0).
+
+## Сообщения PS
+
+Строки TCP и датаграммы UDP от PS — недоверенные. Предел длины строки
+(1 МиБ), проверка типа и диапазона каждого поля, ответ сверяется с
+`msg_type`/`msg_count` команды. Статус не `OK` — ошибка, а не повод считать
+код установленным.
 
 ## Данные серии
 

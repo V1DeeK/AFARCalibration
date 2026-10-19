@@ -13,7 +13,7 @@ disable-model-invocation: true
 
 ## Фаза 1. План
 
-Запусти `planner`. Получишь список задач вида `PROTO-001` с файлами, критерием
+Запусти `planner`. Получишь список задач вида `VNA-001`, `PS-002` с файлами, критерием
 готовности и зависимостями.
 
 Покажи план пользователю и дождись подтверждения, прежде чем писать код.
@@ -31,7 +31,7 @@ disable-model-invocation: true
 worker|hw-contracts → test-runner → [debugger, если упало] → reviewer → [worker, если критично]
 ```
 
-- Задачи на SCPI/S2VNA, `IVna`/`IDutController`, контракты обмена —
+- Задачи на SCPI/S2VNA, протокол PS, `IVna`/`IDutController`, контракты обмена —
   субагент `hw-contracts`. Остальное — `worker`.
 - В задании: номер задачи, файлы, что сделать, критерий готовности.
 - `test-runner` собирает и гоняет `ctest`.
@@ -49,7 +49,7 @@ worker|hw-contracts → test-runner → [debugger, если упало] → revi
 
 1. Полный прогон: `ctest --test-dir build --output-on-failure`.
 2. `senior-reviewer`, если работа затронула границы слоёв или добавила модуль.
-3. `security-auditor`, если работа затронула `src/vna/`, `src/dut/`,
+3. `security-auditor`, если работа затронула `src/vna/`, `src/ps/`, `src/dut/`,
    `src/data/`, `src/report/` или `include/afar/`.
 4. `documenter` — обновить контракт, описание протокола, README и отчёт
    в `docs/reports/`.
@@ -60,7 +60,8 @@ worker|hw-contracts → test-runner → [debugger, если упало] → revi
 
 - план требует изменить контракт в `docs/contracts/`, автомат состояний
   т. 8.4 или требование ТЗ;
-- задача требует команд контроллера изделия, которых нет в документации;
+- задача требует команд PS, которых нет в `ps-json-protocol.md`, имитатора PS
+  или прямого RS-485;
 - два круга починки не дали зелёных тестов;
 - задача требует трогать тулчейн, версию Qt или `build/`;
 - `senior-reviewer` говорит, что задача упирается в архитектуру.
