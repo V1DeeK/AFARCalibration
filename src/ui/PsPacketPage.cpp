@@ -67,6 +67,21 @@ json templateFor(std::string_view type)
     if (type == ps::msg::SetVideo) {
         return json{{"en_vid", 1}, {"att_mode", 1}, {"freq", 5'800'000'000LL}, {"att1", 6.0}};
     }
+    if (type == ps::msg::SetOsd) {
+        ps::OsdParams osd;
+        osd.en = 1;
+        osd.standard = "PAL";
+        osd.src = "AUTO";
+        osd.fields = std::vector<std::string>(ps::osdFieldIds().begin(), ps::osdFieldIds().end());
+        osd.hos = 0;
+        osd.vos = 0;
+        return osd.toJson();
+    }
+    if (type == ps::msg::SetOsdText) {
+        json p;
+        ps::osdTextPayload(2, 1, "TEST LO 5800 MHZ", false, p);
+        return p;
+    }
     return json::object();
 }
 
@@ -95,7 +110,8 @@ PsPacketPage::PsPacketPage(PsSession* session, QWidget* parent)
           ps::msg::GetRfmTelemetry, ps::msg::GetTrxStatus, ps::msg::GetPlStatus,
           ps::msg::SetBeamAzimuth, ps::msg::SetBeam, ps::msg::GetBeam,
           ps::msg::Rs485Send, ps::msg::SetLo, ps::msg::GetLo, ps::msg::SetMixer, ps::msg::GetMixer,
-          ps::msg::SetVideo, ps::msg::GetVideo}) {
+          ps::msg::SetVideo, ps::msg::GetVideo, ps::msg::SetOsd, ps::msg::GetOsd,
+          ps::msg::SetOsdText, ps::msg::ClearOsdText, ps::msg::SetStartTest, ps::msg::SetReset}) {
         m_type->addItem(qs(t));
     }
     m_type->setEditable(true);  // можно ввести и msg_type, которого нет в контракте

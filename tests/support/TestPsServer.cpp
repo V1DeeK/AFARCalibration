@@ -279,6 +279,44 @@ void TestPsServer::handle(const ps::Envelope& cmd)
         return;
     }
 
+    // OSD — в любом режиме (v8 п. 3.3.1).
+    if (t == ps::msg::SetOsd || t == ps::msg::GetOsd) {
+        if (t == ps::msg::SetOsd) {
+            ps::OsdParams p;
+            if (!ps::OsdParams::fromJson(in, p) || in.contains("los")) {
+                reply(cmd, ps::Status::InvalidArgument);
+                return;
+            }
+            m_osd.update(p.toJson());
+        }
+        json out = m_osd;
+        out["los"] = 0;
+        reply(cmd, ps::Status::Ok, out);
+        return;
+    }
+    // Самопроверка и перезапуск — только в IDLE/READY (v8 п. 3.2).
+    if (t == ps::msg::SetStartTest || t == ps::msg::SetReset) {
+        if (m_mode != ps::Mode::Idle) {
+            reply(cmd, ps::Status::NotSupported);
+            return;
+        }
+        if (t == ps::msg::SetStartTest) {
+            ++m_selfTests;
+            reply(cmd, ps::Status::Ok);
+            return;
+        }
+        ++m_resets;
+        reply(cmd, ps::Status::Ok);
+        // Ответ ушёл — перезапуск: TCP закрывается, после него снова нужен hello.
+        m_helloDone = false;
+        m_tlmTimer.stop();
+        if (m_client) {
+            m_client->flush();
+            m_client->disconnectFromHost();
+        }
+        return;
+    }
+
     if (t == ps::msg::SetSffParameters || t == ps::msg::GetSffParameters || t == ps::msg::SetSffStart ||
         t == ps::msg::SetSffStop) {
         handleSff(cmd);
@@ -291,7 +329,8 @@ void TestPsServer::handle(const ps::Envelope& cmd)
         t == ps::msg::GetBeam || t == ps::msg::Rs485Send || t == ps::msg::SetLo ||
         t == ps::msg::GetLo || t == ps::msg::SetMixer || t == ps::msg::GetMixer ||
         t == ps::msg::SetVideo || t == ps::msg::GetVideo || t == ps::msg::GetRfmTelemetry ||
-        t == ps::msg::GetTrxStatus || t == ps::msg::GetPlStatus;
+        t == ps::msg::GetTrxStatus || t == ps::msg::GetPlStatus || t == ps::msg::SetOsdText ||
+        t == ps::msg::ClearOsdText;
     if (!serviceCommand) {
         reply(cmd, ps::Status::NotSupported);
         return;
@@ -320,6 +359,23 @@ void TestPsServer::handle(const ps::Envelope& cmd)
         reply(cmd, ps::Status::Ok, json{{"spi_ok", 1}, {"bbpll_lock", 1}, {"rx_lo_lock", 1},
                                          {"cal_done", 1}, {"if_ok", 1}, {"pn_err", 0},
                                          {"adc_ovr", 0}, {"dma_ovf", 0}, {"temp", 41.5}});
+    } else if (t == ps::msg::SetOsdText) {
+        json p;
+        const auto row = in.find("row");
+        const auto col = in.find("col");
+        const auto text = in.find("text");
+        if (row == in.end() || !row->is_number_integer() || col == in.end() || !col->is_number_integer() ||
+            text == in.end() || !text->is_string() ||
+            !ps::osdTextPayload(row->get<int>(), col->get<int>(), text->get<std::string>(),
+                                m_osd.value("std", "PAL") == "NTSC", p)) {
+            reply(cmd, ps::Status::InvalidArgument);
+            return;
+        }
+        m_osdText = p;
+        reply(cmd, ps::Status::Ok, p);
+    } else if (t == ps::msg::ClearOsdText) {
+        m_osdText = json::object();
+        reply(cmd, ps::Status::Ok);
     } else if (t == ps::msg::GetPlStatus) {
         reply(cmd, ps::Status::Ok, json{{"adc_overrun", 0}, {"fft0_error", 0}, {"fft1_error", 0}});
     } else if (t == ps::msg::SetBeamAzimuth) {

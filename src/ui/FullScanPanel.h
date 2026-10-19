@@ -46,6 +46,7 @@ private:
     QDoubleSpinBox* m_azFrom = nullptr;
     QDoubleSpinBox* m_azTo = nullptr;
     QPushButton* m_apply = nullptr;
+    QPushButton* m_read = nullptr;
     QPushButton* m_start = nullptr;
     QPushButton* m_stop = nullptr;
     QLabel* m_state = nullptr;
