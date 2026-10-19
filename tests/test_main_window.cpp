@@ -249,12 +249,20 @@ TEST_CASE("VNA probe button starts a hidden S2VNA and finishes without hanging",
     CHECK(std::any_of(diagnostics.begin(), diagnostics.end(), [](QLabel* label) {
         return label->text().contains(QStringLiteral("S2VNA запускается скрыто"));
     }));
-    REQUIRE(waitFor([&] {
+    const bool completed = waitFor([&] {
         return !warning.isEmpty() || std::any_of(diagnostics.begin(), diagnostics.end(), [](QLabel* label) {
-                   return label->text().contains(QStringLiteral("Связь OK:"));
+                   return label->objectName() == QStringLiteral("dataSourceBadge")
+                       && label->text().contains(QStringLiteral("24111049"));
                });
-    }, 50000));
+    }, 50000);
+    REQUIRE(completed);
     dismissWarning.stop();
+    INFO(warning.toStdString());
+    REQUIRE(warning.isEmpty());
+    CHECK(std::any_of(diagnostics.begin(), diagnostics.end(), [](QLabel* label) {
+        return label->objectName() == QStringLiteral("dataSourceBadge")
+            && label->text().contains(QStringLiteral("24111049"));
+    }));
 }
 
 TEST_CASE("VNA switch connects, disconnects and reconnects the demo stand", "[ui][window]")
@@ -320,6 +328,36 @@ TEST_CASE("Измерение S-параметров: управление на�
     auto* connections = child<QWidget>(*w.window, "ConnectionBar");
     CHECK_FALSE(connections->isAncestorOf(controls));
     CHECK(controls->mapTo(w.window.get(), QPoint()).x() > plot->mapTo(w.window.get(), QPoint()).x());
+}
+
+TEST_CASE("Настройка частоты открывается рядом с подключением и сворачивается кликом",
+          "[ui][window][measurement]")
+{
+    app();
+    Window w;
+    w.openTab(1);
+    auto* tabs = child<QTabWidget>(*w.window, "connectionTabs");
+    auto* calibration = child<QTabWidget>(*w.window, "calibrationTabs");
+    auto* frequency = child<QDoubleSpinBox>(*w.window, "frequencyStart");
+    REQUIRE(tabs->count() == 4);
+    CHECK(tabs->tabText(3) == QStringLiteral("Настройка частоты"));
+    CHECK(tabs->widget(3)->isAncestorOf(frequency));
+    CHECK(calibration->indexOf(tabs->widget(3)) == -1);
+
+    QPushButton* openSettings = nullptr;
+    for (auto* button : w.window->findChildren<QPushButton*>()) {
+        if (button->text() == QStringLiteral("Настройки частоты, точек и ПЧ")) {
+            openSettings = button;
+            break;
+        }
+    }
+    REQUIRE(openSettings != nullptr);
+    openSettings->click();
+    CHECK(tabs->currentIndex() == 3);
+    CHECK(tabs->maximumHeight() == QWIDGETSIZE_MAX);
+    auto* tabBar = tabs->tabBar();
+    QMetaObject::invokeMethod(tabBar, "tabBarClicked", Qt::DirectConnection, Q_ARG(int, 3));
+    CHECK(tabs->maximumHeight() <= tabBar->sizeHint().height() + 2);
 }
 
 TEST_CASE("Главное окно: «Тех. состояние» — только параметры платы, «Одна команда» без «Журнала»", "[ui][window]")
@@ -451,19 +489,49 @@ TEST_CASE("Спектр запрашивает SERVICE и адрес PS посл
     child<QPushButton>(*w.window, "psConnect")->click();
     REQUIRE(waitFor([&] { return w.session->link()->isReady() && w.session->modeKnown(); }));
     CHECK(server.mode() == afar::ps::Mode::Idle);
+    CHECK(w.engine->state().ps_control_connected.load());
+    CHECK_FALSE(w.engine->state().ps_service_mode.load());
 
     w.openTab(2);
     REQUIRE(waitFor([&] { return server.mode() == afar::ps::Mode::Service; }));
+    REQUIRE(waitFor([&] { return w.engine->state().ps_service_mode.load(); }));
     REQUIRE(waitFor([&] { return w.engine->state().connect_requested.load(); }));
     {
         std::lock_guard<std::mutex> lock(w.engine->state().connection_mutex);
         CHECK(w.engine->state().pluto_ip == "ip:127.0.0.1");
     }
 
+    // После первого успеха и последующего обрыва IQ вкладка должна переподключиться.
+    auto* retryTimer = child<QTimer>(*w.window, "spectrumConnectTimer");
+    retryTimer->setInterval(20);
+    w.engine->state().connect_requested.store(false);
+    w.engine->state().is_connected.store(true);
+    REQUIRE(waitFor([&] { return retryTimer->isActive(); }));
+    QTest::qWait(50);
+    w.engine->state().is_connected.store(false);
+    REQUIRE(waitFor([&] { return w.engine->state().connect_requested.load(); }));
+
     w.openTab(0);
     child<QPushButton>(*w.window, "psToIdle")->click();
     REQUIRE(waitFor([&] { return server.mode() == afar::ps::Mode::Idle; }));
+    REQUIRE(waitFor([&] { return !w.engine->state().ps_service_mode.load(); }));
+    CHECK(w.engine->state().ps_control_connected.load());
     CHECK(w.engine->state().disconnect_requested.load());
+}
+
+TEST_CASE("Спектр не сохраняет неизвестную частоту как нулевую", "[ui][spectrum]")
+{
+    app();
+    QSettings().setValue(QStringLiteral("spectrum/center_freq_hz"), qulonglong{104'200'000});
+    AppState state;
+    {
+        SpectrumOpenGLWidget widget(state);
+        state.ps_iio_read_only.store(true);
+        state.center_freq_hz.store(0);
+    }
+    CHECK(QSettings().value(QStringLiteral("spectrum/center_freq_hz")).toULongLong()
+          == 104'200'000ULL);
+    QSettings().remove(QStringLiteral("spectrum/center_freq_hz"));
 }
 
 TEST_CASE("Главное окно: кнопка справа от вкладок переключает светлую и тёмную тему", "[ui][window][theme]")

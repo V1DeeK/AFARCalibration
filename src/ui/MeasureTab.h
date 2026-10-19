@@ -104,8 +104,9 @@ public:
     [[nodiscard]] int ifbwHz() const;
     [[nodiscard]] double powerDbm() const;
     [[nodiscard]] int averages() const;
-    /// Вкладки «Калибровка ВАЦ», «Линейность», «Перебор кодов», LUT и «Валидация».
+    /// Вкладки «Калибровка ВАЦ», «Линейность», LUT и «Валидация».
     [[nodiscard]] QTabWidget* calibrationPanel() const { return m_calTabs; }
+    [[nodiscard]] QWidget* sweepPanel() const { return m_sweepPage; }
     [[nodiscard]] QString reportDeviceName() const;
     [[nodiscard]] QString reportDeviceSerial() const;
     [[nodiscard]] QString reportOperatorName() const;
@@ -121,8 +122,9 @@ signals:
     void measureNowRequested();
     void exportTwoPortRequested();
     /// CAL-UI: 0 = one-port OSL, 1 = two-port SOLT; step — enum как int; port 1|2 (для two-port игнор).
-    void calibrateStepRequested(int kind, int step, int port);
+    void calibrateStepRequested(int kind, int step, int port, int subclass);
     void selectCalibrationKitRequested(int index);
+    void sweepSettingsRequested();
 
 private slots:
     void onFreqSpinChanged();
@@ -199,6 +201,9 @@ private:
     QComboBox* m_calKind = nullptr;
     QComboBox* m_calPort = nullptr;
     QSpinBox* m_calKit = nullptr;
+    QLabel* m_calKitStatus = nullptr;
+    QComboBox* m_calOpenPort1 = nullptr;
+    QComboBox* m_calOpenPort2 = nullptr;
     QLabel* m_calPortLabel = nullptr;
     QLabel* m_calSteps = nullptr;
     QLabel* m_soltStepLabel = nullptr;
@@ -230,6 +235,7 @@ private:
     QLabel* m_lutPlotCaption = nullptr;
 
     QTabWidget* m_calTabs = nullptr;
+    QWidget* m_sweepPage = nullptr;
 
     std::array<QVector<double>, 6> m_graphFreqGhz;
     std::array<QVector<double>, 6> m_graphMag;

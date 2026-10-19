@@ -119,7 +119,7 @@ private slots:
     void updateCycleButtons(int state);
     void onMeasureNow();
     void onExportTwoPort();
-    void onCalibrateStep(int kind, int step, int port);
+    void onCalibrateStep(int kind, int step, int port, int subclass);
 
 private:
     void loadExampleDefaults();

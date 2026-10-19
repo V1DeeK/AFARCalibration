@@ -93,9 +93,9 @@ public slots:
                        const QString& comment,
                        bool operatorAccepted);
     /// CAL-UI: шаг TwoPortCalibrationStep как int (Begin…Apply).
-    void calibrateTwoPort(int step);
+    void calibrateTwoPort(int step, int subclass);
     /// CAL-UI: шаг OnePortCalibrationStep как int + порт 1|2.
-    void calibrateOnePort(int step, int port);
+    void calibrateOnePort(int step, int port, int subclass);
     /// Выбор подтверждённого документацией комплекта мер S2VNA 1..64.
     void selectCalibrationKit(int index);
     void shutdown();

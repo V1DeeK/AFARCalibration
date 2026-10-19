@@ -40,6 +40,8 @@ public:
     std::string current_calibration_kit_id();
     /// Выбрать один из комплектов мер S2VNA 1..64 и вернуть его номер/метку.
     std::string select_calibration_kit(int index);
+    /// Подкласс мер (1=OPEN-M, 2=OPEN-F для комплекта 6650F27).
+    void select_calibration_subclass(int subclass);
     /// Включена ли коррекция на активном канале S2VNA.
     bool correction_enabled();
     void calibrate_one_port(OnePortCalibrationStep step, int port) override;

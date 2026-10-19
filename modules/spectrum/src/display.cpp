@@ -318,7 +318,9 @@ void SpectrumRenderer::render_psd_pane(const char* title, const std::vector<floa
     ImPlot::SetNextAxesLimits(freq_start, freq_stop, DBM_MIN, DBM_MAX, ImPlotCond_Always);
 
     if (ImPlot::BeginPlot(title, { plot_w, plot_h }, ImPlotFlags_NoInputs)) {
-        ImPlot::SetupAxes(text("Частота (МГц)", "Frequency (MHz)"),
+        ImPlot::SetupAxes(state_.ps_iio_read_only.load() && state_.center_freq_hz.load() == 0
+                              ? text("Отстройка от центра (МГц)", "Offset from center (MHz)")
+                              : text("Частота (МГц)", "Frequency (MHz)"),
                           text("Мощность (дБм)", "Power (dBm)"));
         ImPlot::SetupAxisLimits(ImAxis_X1, freq_start, freq_stop, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, DBM_MIN, DBM_MAX, ImPlotCond_Always);
@@ -444,7 +446,9 @@ void SpectrumRenderer::render_waterfall_pane(const char* title, const std::vecto
 
     if (ImPlot::BeginPlot(title, { plot_w, plot_h },
                           ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText | ImPlotFlags_NoInputs)) {
-        ImPlot::SetupAxes(text("Частота (МГц)", "Frequency (MHz)"), nullptr,
+        ImPlot::SetupAxes(state_.ps_iio_read_only.load() && state_.center_freq_hz.load() == 0
+                              ? text("Отстройка от центра (МГц)", "Offset from center (MHz)")
+                              : text("Частота (МГц)", "Frequency (MHz)"), nullptr,
                           ImPlotAxisFlags_None,
                           ImPlotAxisFlags_NoDecorations);
         ImPlot::SetupAxisLimits(ImAxis_X1, freq_start, freq_stop, ImPlotCond_Always);
@@ -714,18 +718,31 @@ void SpectrumRenderer::render_status_bar() {
 
     ImGui::PushStyleColor(ImGuiCol_Text, connected ? ImVec4(0.35f, 0.9f, 0.35f, 1.0f)
                                                    : ImVec4(0.9f, 0.4f, 0.4f, 1.0f));
+    const bool psConnected = state_.ps_control_connected.load();
+    const bool service = state_.ps_service_mode.load();
     ImGui::TextUnformatted(connected
-        ? text("● ПОДКЛЮЧЕНО", "● CONNECTED")
-        : text("● НЕТ ПОДКЛЮЧЕНИЯ", "● DISCONNECTED"));
+        ? text("● IQ ПОДКЛЮЧЁН", "● IQ CONNECTED")
+        : psConnected && service
+            ? text("● PS НА СВЯЗИ · IQ НЕТ (проверьте iiod :30431)",
+                   "● PS CONNECTED · NO IQ (check iiod :30431)")
+        : psConnected
+            ? text("● PS НА СВЯЗИ · ОЖИДАНИЕ SERVICE", "● PS CONNECTED · WAITING FOR SERVICE")
+            : text("● НЕТ ПОДКЛЮЧЕНИЯ К PS / IQ", "● PS / IQ DISCONNECTED"));
     ImGui::PopStyleColor();
 
     ImGui::SameLine();
-    ImGui::Text(text("|  %.3f МГц   %.1f Мвыб/с   БПФ %d   Кадров %d",
-                     "|  %.3f MHz   %.1f MSPS   FFT %d   Frames %d"),
-                static_cast<double>(state_.center_freq_hz.load()) / 1e6,
-                static_cast<float>(state_.sample_rate_hz.load()) / 1e6f,
-                state_.fft_size.load(),
-                state_.total_frames.load());
+    if (state_.ps_iio_read_only.load() && state_.center_freq_hz.load() == 0) {
+        ImGui::Text(text("|  Центр RF не считан   %.1f Мвыб/с   БПФ %d   Кадров %d",
+                         "|  RF center unavailable   %.1f MSPS   FFT %d   Frames %d"),
+                    static_cast<float>(state_.sample_rate_hz.load()) / 1e6f,
+                    state_.fft_size.load(), state_.total_frames.load());
+    } else {
+        ImGui::Text(text("|  %.3f МГц   %.1f Мвыб/с   БПФ %d   Кадров %d",
+                         "|  %.3f MHz   %.1f MSPS   FFT %d   Frames %d"),
+                    static_cast<double>(state_.center_freq_hz.load()) / 1e6,
+                    static_cast<float>(state_.sample_rate_hz.load()) / 1e6f,
+                    state_.fft_size.load(), state_.total_frames.load());
+    }
 
     if (playing) {
         ImGui::SameLine();

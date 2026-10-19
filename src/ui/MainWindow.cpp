@@ -171,6 +171,9 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     calLayout->setContentsMargins(0, 0, 0, 0);
     calLayout->addWidget(m_measure->calibrationPanel());
     m_connections->setMiddleWidget(calBox);
+    m_connections->setSweepWidget(m_measure->sweepPanel());
+    connect(m_measure, &MeasureTab::sweepSettingsRequested,
+            m_connections, &ConnectionBar::showSweepSettings);
     // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Настройки».
     m_settingsTab->addTechSection(m_connections->scpiPanel());
 
@@ -222,8 +225,17 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     connect(m_tabs, &QTabWidget::currentChanged, this,
             [tabKey](int index) { QSettings().setValue(tabKey, index); });
     m_spectrumConnectTimer = new QTimer(this);
+    m_spectrumConnectTimer->setObjectName(QStringLiteral("spectrumConnectTimer"));
     m_spectrumConnectTimer->setInterval(3000);
-    connect(m_spectrumConnectTimer, &QTimer::timeout, this, &MainWindow::updateSpectrumFromPs);
+    connect(m_spectrumConnectTimer, &QTimer::timeout, this, [this] {
+        if (m_psSession->link()->isReady() && !m_psSession->modeKnown()) {
+            m_psSession->send(afar::ps::msg::GetState);
+        }
+        if (m_psSession->modeKnown() && m_psSession->mode() == afar::ps::Mode::Idle) {
+            m_spectrumServiceRequested = false;
+        }
+        updateSpectrumFromPs();
+    });
     connect(m_tabs, &QTabWidget::currentChanged, this, &MainWindow::updateSpectrumFromPs);
     connect(m_psSession, &PsSession::modeChanged, this, &MainWindow::updateSpectrumFromPs);
     connect(m_psSession->link(), &PsLink::stateChanged, this, &MainWindow::updateSpectrumFromPs);
@@ -372,6 +384,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
 void MainWindow::updateSpectrumFromPs()
 {
     const bool ready = m_psSession->link()->isReady();
+    auto& spectrum = m_spectrumEngine->state();
+    spectrum.ps_control_connected.store(ready);
+    spectrum.ps_service_mode.store(ready && m_psSession->modeKnown()
+                                   && m_psSession->mode() == afar::ps::Mode::Service);
     const bool spectrumTab = m_tabs->currentWidget() == m_spectrumPage;
     if (m_spectrumConnectedFromPs
         && (!ready || (m_psSession->modeKnown()
@@ -386,6 +402,9 @@ void MainWindow::updateSpectrumFromPs()
         }
         return;
     }
+    if (!m_spectrumConnectTimer->isActive()) {
+        m_spectrumConnectTimer->start();
+    }
     if (!m_psSession->modeKnown()) {
         return;
     }
@@ -394,6 +413,8 @@ void MainWindow::updateSpectrumFromPs()
             m_spectrumServiceRequested = true;
             if (m_psSession->send(afar::ps::msg::SetMode, {{"mode", "SERVICE"}}) >= 0) {
                 statusBar()->showMessage(QStringLiteral("Спектр: перевод платы в сервисный режим…"));
+            } else {
+                m_spectrumServiceRequested = false;
             }
         }
         return;
@@ -401,7 +422,6 @@ void MainWindow::updateSpectrumFromPs()
     if (m_psSession->mode() != afar::ps::Mode::Service) {
         return;
     }
-    auto& spectrum = m_spectrumEngine->state();
     spectrum.ps_iio_read_only.store(true);
     const std::string uri = "ip:" + m_psSession->link()->host().toStdString();
     {
@@ -420,12 +440,7 @@ void MainWindow::updateSpectrumFromPs()
         statusBar()->showMessage(QStringLiteral("Спектр: подключение к %1…")
                                      .arg(m_psSession->link()->host()));
     }
-    if (!m_spectrumConnectTimer->isActive()) {
-        m_spectrumConnectTimer->start();
-    }
-    if (spectrum.is_connected.load()) {
-        m_spectrumConnectTimer->stop();
-    }
+    // Оставляем опрос активным: поток IQ может оборваться после успешного подключения.
 }
 
 MainWindow::~MainWindow()
@@ -590,15 +605,14 @@ void MainWindow::onExportTwoPort()
         Qt::QueuedConnection);
 }
 
-void MainWindow::onCalibrateStep(int kind, int step, int port)
+void MainWindow::onCalibrateStep(int kind, int step, int port, int subclass)
 {
-    onApplyVnaSettings();
     if (kind == 0) {
         QMetaObject::invokeMethod(m_worker, "calibrateOnePort", Qt::QueuedConnection,
-                                  Q_ARG(int, step), Q_ARG(int, port));
+                                  Q_ARG(int, step), Q_ARG(int, port), Q_ARG(int, subclass));
     } else {
         QMetaObject::invokeMethod(m_worker, "calibrateTwoPort", Qt::QueuedConnection,
-                                  Q_ARG(int, step));
+                                  Q_ARG(int, step), Q_ARG(int, subclass));
     }
 }
 
@@ -965,7 +979,7 @@ void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
     }
     const bool knownWrongSource = idnOrError.contains(QStringLiteral("Demo Mode"),
                                                        Qt::CaseInsensitive);
-    if (!ok && !knownWrongSource && m_autoProbePending && m_autoProbeTimer.elapsed() < 45000
+    if (!ok && m_autoProbePending && m_autoProbeTimer.elapsed() < 45000
         && m_s2vnaRuntime.ownedProcessRunning()) {
         m_connections->setDiagnostic(QStringLiteral("Ожидание S2VNA и C2220… %1")
                                          .arg(idnOrError));
@@ -981,6 +995,7 @@ void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
     m_measureAfterProbe = false;
     refreshDataSourceBadge(ok, idnOrError);
     if (ok) {
+        m_s2vnaRuntime.hideOwnedWindow();
         m_connections->setDiagnostic(QStringLiteral("Связь OK: %1").arg(idnOrError));
         statusBar()->showMessage(QStringLiteral("VNA IDN: %1").arg(idnOrError), 8000);
         if (measureAfterSuccess) {

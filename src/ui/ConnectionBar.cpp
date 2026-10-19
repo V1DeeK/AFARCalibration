@@ -79,6 +79,15 @@ public:
         connect(this, &QTabWidget::currentChanged, this, [this]() { updateGeometry(); });
     }
 
+    void expandTab(int index)
+    {
+        setCurrentIndex(index);
+        m_openIndex = index;
+        m_expanded = true;
+        setMaximumHeight(QWIDGETSIZE_MAX);
+        updateGeometry();
+    }
+
     QSize sizeHint() const override
     {
         QSize preferred = QTabWidget::sizeHint();
@@ -102,6 +111,18 @@ private:
 void ConnectionBar::setMiddleWidget(QWidget* widget)
 {
     m_panels->addTab(widget, QStringLiteral("Калибровка ВАЦ"));
+}
+
+void ConnectionBar::setSweepWidget(QWidget* widget)
+{
+    m_panels->addTab(widget, QStringLiteral("Настройка частоты"));
+}
+
+void ConnectionBar::showSweepSettings()
+{
+    if (m_panels->count() > 3) {
+        static_cast<SharedPanelTabs*>(m_panels)->expandTab(3);
+    }
 }
 
 ConnectionBar::ConnectionBar(QWidget* parent)

@@ -197,7 +197,8 @@ void SpectrumOpenGLWidget::saveSettings() const {
     }
     settings.setValue(QStringLiteral("sample_rate_hz"), state_.sample_rate_hz.load());
     settings.setValue(QStringLiteral("bandwidth_hz"), state_.bandwidth_hz.load());
-    settings.setValue(QStringLiteral("center_freq_hz"), QVariant::fromValue(state_.center_freq_hz.load()));
+    if (!state_.ps_iio_read_only.load() || state_.center_freq_hz.load() != 0)
+        settings.setValue(QStringLiteral("center_freq_hz"), QVariant::fromValue(state_.center_freq_hz.load()));
     settings.setValue(QStringLiteral("fft_size"), state_.fft_size.load());
     settings.setValue(QStringLiteral("rf_port"), state_.rf_port_idx.load());
     settings.setValue(QStringLiteral("channel_mode"), static_cast<int>(state_.chan_mode.load()));

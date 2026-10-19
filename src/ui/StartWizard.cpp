@@ -369,7 +369,7 @@ void StartWizard::buildPages()
         page->setTitle(QStringLiteral("7. Мощность и опасные режимы"));
         auto* layout = new QVBoxLayout(page);
         auto* lab = new QLabel(
-            QStringLiteral("Мощность берётся из вкладки «Перебор кодов». "
+            QStringLiteral("Мощность берётся из вкладки «Настройка частоты». "
                            "Direct access и принудительный safe_state — только инженерный профиль."),
             page);
         lab->setWordWrap(true);

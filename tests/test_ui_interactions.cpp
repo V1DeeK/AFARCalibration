@@ -141,13 +141,15 @@ TEST_CASE("VNA timeouts have no UI and keep their defaults", "[ui]")
     REQUIRE(bar.vnaSweepTimeoutMs() == 30000);
 }
 
-TEST_CASE("connection, controller and calibration share one tab area", "[ui]")
+TEST_CASE("connection, controller, calibration and sweep settings share one tab area", "[ui]")
 {
     auto& app = application();
     ConnectionBar bar;
     auto* calibration = new QWidget(&bar);
     calibration->setObjectName(QStringLiteral("calibrationBox"));
     bar.setMiddleWidget(calibration);
+    auto* sweep = new QWidget(&bar);
+    bar.setSweepWidget(sweep);
     bar.show();
     app.processEvents();
 
@@ -155,15 +157,17 @@ TEST_CASE("connection, controller and calibration share one tab area", "[ui]")
     auto* connection = bar.findChild<QWidget*>(QStringLiteral("vnaConnectionBox"));
     auto* controller = bar.findChild<QWidget*>(QStringLiteral("stateBox"));
     REQUIRE(tabs != nullptr);
-    REQUIRE(tabs->count() == 3);
+    REQUIRE(tabs->count() == 4);
     CHECK(tabs->tabText(0) == QStringLiteral("Подключение"));
     CHECK(tabs->tabText(1) == QStringLiteral("Контроллер"));
     CHECK(tabs->tabText(2) == QStringLiteral("Калибровка ВАЦ"));
+    CHECK(tabs->tabText(3) == QStringLiteral("Настройка частоты"));
     REQUIRE(connection != nullptr);
     REQUIRE(controller != nullptr);
     CHECK(connection->isVisible());
     CHECK_FALSE(controller->isVisible());
     CHECK_FALSE(calibration->isVisible());
+    CHECK_FALSE(sweep->isVisible());
 
     auto* tabBar = tabs->findChild<QTabBar*>();
     REQUIRE(tabBar != nullptr);
@@ -181,6 +185,15 @@ TEST_CASE("connection, controller and calibration share one tab area", "[ui]")
     CHECK_FALSE(connection->isVisible());
     CHECK(controller->isVisible());
     CHECK_FALSE(calibration->isVisible());
+
+    bar.showSweepSettings();
+    app.processEvents();
+    CHECK(tabs->currentIndex() == 3);
+    CHECK(tabs->maximumHeight() == QWIDGETSIZE_MAX);
+    CHECK(sweep->isVisible());
+    QMetaObject::invokeMethod(tabBar, "tabBarClicked", Qt::DirectConnection, Q_ARG(int, 3));
+    app.processEvents();
+    CHECK(tabs->maximumHeight() <= tabBar->sizeHint().height() + 2);
 
     tabs->setCurrentIndex(1);
     app.processEvents();
@@ -453,19 +466,20 @@ TEST_CASE("two-port mode, center-span entry and report action are explicit", "[u
     REQUIRE(tab.findChild<QListWidget*>(QStringLiteral("measurementStages")) == nullptr);
     auto* calTabs = tab.calibrationPanel();
     REQUIRE(calTabs != nullptr);
-    REQUIRE(calTabs->count() == 6);
+    REQUIRE(calTabs->count() == 5);
     QStringList titles;
     for (int i = 0; i < calTabs->count(); ++i) {
         titles << calTabs->tabText(i);
     }
     REQUIRE(titles == QStringList{QStringLiteral("Калибровка"), QStringLiteral("Линейность"),
-                                  QStringLiteral("Перебор кодов"), QStringLiteral("Прямая LUT"),
+                                  QStringLiteral("Прямая LUT"),
                                   QStringLiteral("Обратная LUT"), QStringLiteral("Валидация")});
     tab.setStageHighlight(4);  // этап 5 «Прямая LUT»
-    REQUIRE(calTabs->currentIndex() == 3);
+    REQUIRE(calTabs->currentIndex() == 2);
+    REQUIRE(tab.sweepPanel() != nullptr);
 
     tab.applyRunConfigDefaults(1.26e9, 1.35e9, 201, 1000, -20.0, 8);
-    auto* entryMode = tab.findChild<QComboBox*>(QStringLiteral("frequencyEntryMode"));
+    auto* entryMode = tab.sweepPanel()->findChild<QComboBox*>(QStringLiteral("frequencyEntryMode"));
     auto* center = tab.findChild<QDoubleSpinBox*>(QStringLiteral("frequencyCenter"));
     auto* span = tab.findChild<QDoubleSpinBox*>(QStringLiteral("frequencySpan"));
     REQUIRE(entryMode != nullptr);
@@ -486,6 +500,16 @@ TEST_CASE("two-port mode, center-span entry and report action are explicit", "[u
     REQUIRE(calKit != nullptr);
     REQUIRE(calKit->minimum() == 1);
     REQUIRE(calKit->maximum() == 64);
+    REQUIRE(calKit->value() == 28);
+    auto* openPort1 = tab.findChild<QComboBox*>(QStringLiteral("calOpenPort1"));
+    auto* openPort2 = tab.findChild<QComboBox*>(QStringLiteral("calOpenPort2"));
+    REQUIRE(openPort1 != nullptr);
+    REQUIRE(openPort2 != nullptr);
+    REQUIRE(openPort1->currentData().toInt() == 2);
+    REQUIRE(openPort2->currentData().toInt() == 2);
+    openPort2->setCurrentIndex(0);
+    REQUIRE(openPort2->currentData().toInt() == 1);
+    REQUIRE(openPort1->currentData().toInt() == 2);
 
     auto* format = tab.findChild<QComboBox*>(QStringLiteral("graphDisplayFormat"));
     auto* exportButton = tab.findChild<QPushButton*>(QStringLiteral("exportTwoPortReport"));

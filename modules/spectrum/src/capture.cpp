@@ -235,8 +235,8 @@ bool PlutoCaptureThread::open_device() {
     phy_dev_ = iio_context_find_device(ctx_, "ad9361-phy");
     rx_dev_  = iio_context_find_device(ctx_, "cf-ad9361-lpc");
 
-    if (!phy_dev_ || !rx_dev_) {
-        cerr << "[pluto] failed to find AD9361 devices\n";
+    if (!rx_dev_ || (!phy_dev_ && !state_.ps_iio_read_only.load())) {
+        cerr << "[pluto] failed to find required IIO devices\n";
         return false;
     }
 
@@ -263,13 +263,13 @@ bool PlutoCaptureThread::configure_device() {
     // Каналы ищем сразу после инверсии и до первой записи: указатели живут в
     // контексте libiio и переинициализацию чипа переживают, а вот всё, что
     // настраивается ниже, без них — тихий no-op.
-    phy_chn0_ = iio_device_find_channel(phy_dev_, "voltage0", false);
-    phy_chn1_ = iio_device_find_channel(phy_dev_, "voltage1", false);
+    phy_chn0_ = phy_dev_ ? iio_device_find_channel(phy_dev_, "voltage0", false) : nullptr;
+    phy_chn1_ = phy_dev_ ? iio_device_find_channel(phy_dev_, "voltage1", false) : nullptr;
 
     if (read_only) {
         long long actual_fs = 0;
-        if ((!phy_chn0_ || iio_channel_attr_read_longlong(phy_chn0_, "sampling_frequency", &actual_fs) < 0) &&
-            iio_device_attr_read_longlong(rx_dev_, "sampling_frequency", &actual_fs) < 0) {
+        if (iio_device_attr_read_longlong(rx_dev_, "sampling_frequency", &actual_fs) < 0 &&
+            (!phy_chn0_ || iio_channel_attr_read_longlong(phy_chn0_, "sampling_frequency", &actual_fs) < 0)) {
             cerr << "[pluto] read-only IQ: sampling_frequency unavailable\n";
             return false;
         }
@@ -284,13 +284,15 @@ bool PlutoCaptureThread::configure_device() {
                 state_.bandwidth_hz.store(static_cast<uint32_t>(actual_bw));
             }
         }
-        auto* lo = iio_device_find_channel(phy_dev_, "altvoltage0", true);
+        auto* lo = phy_dev_ ? iio_device_find_channel(phy_dev_, "altvoltage0", true) : nullptr;
         long long actual_lo = 0;
-        if (!lo || iio_channel_attr_read_longlong(lo, "frequency", &actual_lo) < 0 || actual_lo <= 0) {
-            cerr << "[pluto] read-only IQ: receiver frequency unavailable\n";
-            return false;
+        if (lo && iio_channel_attr_read_longlong(lo, "frequency", &actual_lo) == 0 && actual_lo > 0) {
+            current_freq_ = static_cast<uint64_t>(actual_lo);
+        } else {
+            // Сервер SERVICE гарантирует IQ и fs, но не абсолютную частоту LO.
+            current_freq_ = 0;
+            cerr << "[pluto] read-only IQ: RF center unavailable, showing baseband offset\n";
         }
-        current_freq_ = static_cast<uint64_t>(actual_lo);
         state_.center_freq_hz.store(current_freq_);
     } else {
 

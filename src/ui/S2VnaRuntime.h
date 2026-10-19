@@ -18,6 +18,7 @@ public:
 
     [[nodiscard]] StartResult ensureRunningHidden(int socketPort);
     [[nodiscard]] bool ownedProcessRunning() const;
+    void hideOwnedWindow();
     void stopOwned();
 
 private:

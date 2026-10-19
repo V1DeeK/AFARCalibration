@@ -686,7 +686,7 @@ void MeasureWorker::exportTwoPort(const QString& basePath,
                                QStringLiteral("Touchstone и PDF сохранены"));
 }
 
-void MeasureWorker::calibrateTwoPort(int step)
+void MeasureWorker::calibrateTwoPort(int step, int subclass)
 {
     if (!m_vna || !m_orch) {
         emit calibrateTwoPortFinished(false, step, QStringLiteral("VNA не сконфигурирован"));
@@ -711,7 +711,20 @@ void MeasureWorker::calibrateTwoPort(int step)
         emit calibrateTwoPortFinished(false, step, QStringLiteral("Неизвестный шаг SOLT"));
         return;
     }
+    if (subclass < 1 || subclass > 8) {
+        emit calibrateTwoPortFinished(false, step, QStringLiteral("Некорректный подкласс мер"));
+        return;
+    }
     std::string diag;
+    if (m_c2220 && step >= static_cast<int>(TwoPortCalibrationStep::OpenPort1)
+        && step <= static_cast<int>(TwoPortCalibrationStep::LoadPort2)) {
+        try {
+            m_c2220->select_calibration_subclass(subclass);
+        } catch (const std::exception& ex) {
+            emit calibrateTwoPortFinished(false, step, QString::fromUtf8(ex.what()));
+            return;
+        }
+    }
     const bool ok = m_orch->calibrateTwoPortStep(
         static_cast<TwoPortCalibrationStep>(step), diag);
     emitConnection();
@@ -721,7 +734,7 @@ void MeasureWorker::calibrateTwoPort(int step)
                        : QString::fromStdString(diag));
 }
 
-void MeasureWorker::calibrateOnePort(int step, int port)
+void MeasureWorker::calibrateOnePort(int step, int port, int subclass)
 {
     if (!m_vna || !m_orch) {
         emit calibrateOnePortFinished(false, step, QStringLiteral("VNA не сконфигурирован"));
@@ -749,7 +762,20 @@ void MeasureWorker::calibrateOnePort(int step, int port)
         emit calibrateOnePortFinished(false, step, QStringLiteral("Порт должен быть 1 или 2"));
         return;
     }
+    if (subclass < 1 || subclass > 8) {
+        emit calibrateOnePortFinished(false, step, QStringLiteral("Некорректный подкласс мер"));
+        return;
+    }
     std::string diag;
+    if (m_c2220 && step >= static_cast<int>(OnePortCalibrationStep::Open)
+        && step <= static_cast<int>(OnePortCalibrationStep::Load)) {
+        try {
+            m_c2220->select_calibration_subclass(subclass);
+        } catch (const std::exception& ex) {
+            emit calibrateOnePortFinished(false, step, QString::fromUtf8(ex.what()));
+            return;
+        }
+    }
     const bool ok = m_orch->calibrateOnePortStep(
         static_cast<OnePortCalibrationStep>(step), port, diag);
     emitConnection();

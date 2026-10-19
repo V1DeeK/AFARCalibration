@@ -63,6 +63,8 @@ struct AppState {
     // закрывает контекст libiio и сбрасывает обратно.
     std::atomic<bool>     disconnect_requested{ false };
     std::atomic<bool>     is_connected     { false };
+    std::atomic<bool>     ps_control_connected{ false };
+    std::atomic<bool>     ps_service_mode{ false };
     // При подключении через PS сервер IQ доступен только для чтения (протокол v8).
     std::atomic<bool>     ps_iio_read_only { false };
 

@@ -407,6 +407,25 @@ std::string C2220Vna::select_calibration_kit(int index)
     return current_calibration_kit_id();
 }
 
+void C2220Vna::select_calibration_subclass(int subclass)
+{
+    require_connected("select_calibration_subclass");
+    if (subclass < 1 || subclass > 8) {
+        throw std::runtime_error("C2220Vna: calibration subclass must be in range 1..8");
+    }
+    write_cmd("SENS:CORR:COLL:SUBC " + std::to_string(subclass));
+    const std::string observed = trim_scpi_text(query("SENS:CORR:COLL:SUBC?"));
+    int reported = 0;
+    try {
+        reported = std::stoi(observed);
+    } catch (const std::exception&) {
+        throw std::runtime_error("C2220Vna: invalid calibration subclass readback: " + observed);
+    }
+    if (reported != subclass) {
+        throw std::runtime_error("C2220Vna: calibration subclass readback mismatch: " + observed);
+    }
+}
+
 bool C2220Vna::correction_enabled()
 {
     require_connected("correction_enabled");

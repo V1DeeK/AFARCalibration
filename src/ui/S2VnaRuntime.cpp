@@ -70,6 +70,16 @@ BOOL CALLBACK requestClose(HWND window, LPARAM processId)
     return TRUE;
 }
 
+BOOL CALLBACK hideWindow(HWND window, LPARAM processId)
+{
+    DWORD owner = 0;
+    GetWindowThreadProcessId(window, &owner);
+    if (owner == static_cast<DWORD>(processId)) {
+        ShowWindow(window, SW_HIDE);
+    }
+    return TRUE;
+}
+
 bool socketPortFree(int port)
 {
     QTcpServer socket;
@@ -83,6 +93,15 @@ S2VnaRuntime::~S2VnaRuntime()
 {
 #ifdef Q_OS_WIN
     stopOwned();
+#endif
+}
+
+void S2VnaRuntime::hideOwnedWindow()
+{
+#ifdef Q_OS_WIN
+    if (ownedProcessRunning()) {
+        EnumWindows(hideWindow, static_cast<LPARAM>(m_processId));
+    }
 #endif
 }
 
@@ -154,8 +173,9 @@ S2VnaRuntime::StartResult S2VnaRuntime::ensureRunningHidden(int socketPort)
     const QFileInfo file(executable);
     std::wstring application = QDir::toNativeSeparators(file.absoluteFilePath()).toStdWString();
     std::wstring workDir = QDir::toNativeSeparators(file.absolutePath()).toStdWString();
+    // В S2VNA 26.2.3 /visible:off не подключает USB-прибор; скрываем окно после IDN.
     std::wstring command = L"\"" + application + L"\" /SocketServer:on /SocketPort:"
-        + std::to_wstring(socketPort) + L" /visible:off /simulate:off";
+        + std::to_wstring(socketPort) + L" /visible:on /simulate:off";
 
     const HANDLE job = CreateJobObjectW(nullptr, nullptr);
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};

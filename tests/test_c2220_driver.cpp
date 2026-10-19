@@ -5,6 +5,7 @@
 #include "C2220Vna.h"
 #include "ScpiSocketTransport.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -83,6 +84,7 @@ class ScpiTcpStub {
 public:
     std::string idn{"PLANAR,C2220,STUB001,1.0"};
     int directAccess{0};  // 0/1 ответ на SYST:REC:DIR:ACC?
+    std::atomic<int> calibrationSubclass{1};
 
     void start()
     {
@@ -283,6 +285,14 @@ private:
         }
         if (cmd == "SENS:CORR:COLL:CKIT:LAB?") {
             reply(s, "\"85032F\"");
+            return;
+        }
+        if (cmd.rfind("SENS:CORR:COLL:SUBC ", 0) == 0) {
+            calibrationSubclass = std::stoi(cmd.substr(20));
+            return;
+        }
+        if (cmd == "SENS:CORR:COLL:SUBC?") {
+            reply(s, std::to_string(calibrationSubclass.load()));
             return;
         }
         if (cmd == "SENS:CORR:STAT?") {
@@ -631,6 +641,30 @@ TEST_CASE("C2220Vna selects a documented S2VNA calibration kit", "[c2220]")
     REQUIRE(stub.saw_exact("SENS:CORR:COLL:CKIT 1"));
     REQUIRE_THROWS_AS(vna.select_calibration_kit(0), std::runtime_error);
     REQUIRE_THROWS_AS(vna.select_calibration_kit(65), std::runtime_error);
+}
+
+TEST_CASE("C2220Vna selects and verifies the calibration subclass before SOLT", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    REQUIRE_NOTHROW(vna.select_calibration_subclass(2));
+    REQUIRE_NOTHROW(vna.calibrate_two_port(TwoPortCalibrationStep::OpenPort1));
+    REQUIRE_NOTHROW(vna.select_calibration_subclass(1));
+    REQUIRE_NOTHROW(vna.calibrate_two_port(TwoPortCalibrationStep::OpenPort2));
+    REQUIRE_THROWS_AS(vna.select_calibration_subclass(0), std::runtime_error);
+    REQUIRE_THROWS_AS(vna.select_calibration_subclass(9), std::runtime_error);
+
+    const auto commands = stub.commands();
+    const auto pos = [&commands](const std::string& command) {
+        return std::find(commands.begin(), commands.end(), command) - commands.begin();
+    };
+    REQUIRE(pos("SENS:CORR:COLL:SUBC 2") < pos("SENS:CORR:COLL:OPEN 1"));
+    REQUIRE(pos("SENS:CORR:COLL:SUBC 1") < pos("SENS:CORR:COLL:OPEN 2"));
+    REQUIRE(pos("SENS:CORR:COLL:SUBC?") < pos("SENS:CORR:COLL:OPEN 1"));
 }
 
 TEST_CASE("C2220Vna calibrate_one_port SOLT1 sequence against stub", "[c2220]")

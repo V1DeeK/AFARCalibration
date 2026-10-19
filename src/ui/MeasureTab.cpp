@@ -86,12 +86,12 @@ MeasureTab::MeasureTab(QWidget* parent)
     // Калибровка и подготовка серии — третья страница верхней области.
     m_calTabs = new QTabWidget(this);
     m_calTabs->setObjectName(QStringLiteral("calibrationTabs"));
-    // Все шесть вкладок всегда видны: тесной рамке уступает ширина карточки (страница прокручивается), а не кнопки вкладок.
+    // Вкладки этапов остаются внутри карточки калибровки; настройки свипа вынесены выше.
     m_calTabs->setUsesScrollButtons(false);
     m_calTabs->tabBar()->setElideMode(Qt::ElideNone);
     m_calTabs->addTab(makeCalPage(), QStringLiteral("Калибровка"));
     m_calTabs->addTab(makeLinearityPage(), QStringLiteral("Линейность"));
-    m_calTabs->addTab(makeSweepPage(), QStringLiteral("Перебор кодов"));
+    m_sweepPage = makeSweepPage();
     m_calTabs->addTab(makeDirectPage(), QStringLiteral("Прямая LUT"));
     m_calTabs->addTab(makeInversePage(), QStringLiteral("Обратная LUT"));
     m_calTabs->addTab(makeValidationPage(), QStringLiteral("Валидация"));
@@ -129,10 +129,13 @@ QWidget* MeasureTab::makeCalPage()
     m_calKit = new QSpinBox(page);
     m_calKit->setObjectName(QStringLiteral("vnaCalibrationKit"));
     m_calKit->setRange(1, 64);
+    m_calKit->setValue(28);
+    m_calKit->setToolTip(QStringLiteral("В установленной S2VNA комплект 6650F27 соответствует №28; после выбора проверьте ответ прибора."));
     auto* applyKit = new QPushButton(QStringLiteral("Выбрать комплект"), page);
     applyKit->setObjectName(QStringLiteral("selectVnaCalibrationKit"));
     kitRow->addWidget(m_calKit);
     kitRow->addWidget(applyKit);
+    kitRow->addWidget(new QLabel(QStringLiteral("6650F27-F: №28"), page));
     kitRow->addStretch(1);
     connect(applyKit, &QPushButton::clicked, this, [this] {
         const auto answer = QMessageBox::question(
@@ -143,6 +146,9 @@ QWidget* MeasureTab::makeCalPage()
             emit selectCalibrationKitRequested(m_calKit->value());
         }
     });
+    m_calKitStatus = new QLabel(QStringLiteral("Комплект в S2VNA: не считан"), page);
+    m_calKitStatus->setObjectName(QStringLiteral("vnaCalibrationKitStatus"));
+    m_calKitStatus->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
     auto* kindRow = new QHBoxLayout();
     auto* kindLabel = new QLabel(QStringLiteral("Тип калибровки:"), page);
@@ -171,6 +177,28 @@ QWidget* MeasureTab::makeCalPage()
     m_calPort->addItem(QStringLiteral("Порт 2"), 2);
     portRow->addWidget(m_calPortLabel);
     portRow->addWidget(m_calPort, 1);
+
+    auto* openRow = new QHBoxLayout();
+    openRow->addWidget(new QLabel(QStringLiteral("Меры порта 1:"), page));
+    m_calOpenPort1 = new QComboBox(page);
+    m_calOpenPort1->setObjectName(QStringLiteral("calOpenPort1"));
+    m_calOpenPort1->addItem(QStringLiteral("OPEN-M (подкласс 1)"), 1);
+    m_calOpenPort1->addItem(QStringLiteral("OPEN-F (подкласс 2)"), 2);
+    m_calOpenPort1->setCurrentIndex(1);
+    openRow->addWidget(m_calOpenPort1);
+    openRow->addWidget(new QLabel(QStringLiteral("Меры порта 2:"), page));
+    m_calOpenPort2 = new QComboBox(page);
+    m_calOpenPort2->setObjectName(QStringLiteral("calOpenPort2"));
+    m_calOpenPort2->addItem(QStringLiteral("OPEN-M (подкласс 1)"), 1);
+    m_calOpenPort2->addItem(QStringLiteral("OPEN-F (подкласс 2)"), 2);
+    m_calOpenPort2->setCurrentIndex(1);
+    openRow->addWidget(m_calOpenPort2);
+    openRow->addStretch(1);
+    auto* subclassNote = new QLabel(
+        QStringLiteral("Для 6650F27: OPEN-M = подкласс 1, OPEN-F = подкласс 2. "
+                       "Выбор применяется также к SHORT и LOAD соответствующего порта."), page);
+    subclassNote->setWordWrap(true);
+    subclassNote->setObjectName(QStringLiteral("hintLabel"));
 
     m_calSteps = new QLabel(page);
     m_calSteps->setObjectName(QStringLiteral("calibrationSteps"));
@@ -208,9 +236,12 @@ QWidget* MeasureTab::makeCalPage()
     transportNote->hide();
     page->setToolTip(transportNote->text());
     layout->addLayout(kitRow);
+    layout->addWidget(m_calKitStatus);
     layout->addLayout(kindRow);
     layout->addWidget(m_calKindHint);
     layout->addLayout(portRow);
+    layout->addLayout(openRow);
+    layout->addWidget(subclassNote);
     layout->addWidget(m_calSteps);
     layout->addWidget(m_soltStepLabel);
     layout->addWidget(m_soltHint);
@@ -499,7 +530,7 @@ QWidget* MeasureTab::makeGraphsPage()
     auto* openSweepSettings = new QPushButton(
         QStringLiteral("Настройки частоты, точек и ПЧ"), side);
     connect(openSweepSettings, &QPushButton::clicked, this,
-            [this] { setStageHighlight(3); });
+            &MeasureTab::sweepSettingsRequested);
 
     m_graphDataStatus = new QLabel(QStringLiteral("Реальные данные прибора ещё не получены"), side);
     m_graphDataStatus->setWordWrap(true);
@@ -1000,8 +1031,11 @@ void MeasureTab::applyRunConfigDefaults(double fStartHz,
 
 void MeasureTab::setStageHighlight(int stageIndex0)
 {
-    // Этапы 2…7 — вкладки калибровочной панели; 1 (подключения) и 8 (графики) своих вкладок не имеют.
-    const int tab = stageIndex0 - 1;
+    // Настройки свипа теперь живут в верхней панели и не открываются автоматически при смене этапа.
+    if (stageIndex0 == 3) {
+        return;
+    }
+    const int tab = stageIndex0 > 3 ? stageIndex0 - 2 : stageIndex0 - 1;
     if (tab >= 0 && tab < m_calTabs->count()) {
         m_calTabs->setCurrentIndex(tab);
     }
@@ -1122,6 +1156,11 @@ void MeasureTab::setSparamsCurves(const QVector<double>& freqGhz,
 void MeasureTab::setVnaCalibrationIdHint(const QString& id)
 {
     m_vnaCalId = id.trimmed();
+    if (m_calKitStatus) {
+        m_calKitStatus->setText(m_vnaCalId.isEmpty()
+                                    ? QStringLiteral("Комплект в S2VNA: не считан")
+                                    : QStringLiteral("Комплект в S2VNA: %1").arg(m_vnaCalId));
+    }
     refreshCalPageText();
 }
 
@@ -1278,18 +1317,27 @@ void MeasureTab::onSoltConfirmClicked()
     if (m_soltBusy || m_soltStep > apply) {
         return;
     }
+    const int kind = isOnePortCal() ? 0 : 1;
+    const int port = m_calPort ? m_calPort->currentData().toInt() : 1;
+    const int standardPort = kind == 0 ? port : (m_soltStep >= 4 && m_soltStep <= 6 ? 2 : 1);
+    const auto* selectedOpen = standardPort == 1 ? m_calOpenPort1 : m_calOpenPort2;
+    const int subclass = selectedOpen->currentData().toInt();
+    const bool isStandard = kind == 0 ? m_soltStep >= 1 && m_soltStep <= 3
+                                      : m_soltStep >= 1 && m_soltStep <= 6;
     const auto answer = QMessageBox::question(
         this, QStringLiteral("Подтверждение шага калибровки"),
-        QStringLiteral("Выполнить шаг:\n%1?").arg(calStepTitle(m_soltStep)),
+        QStringLiteral("Выполнить шаг:\n%1%2?")
+            .arg(calStepTitle(m_soltStep),
+                 isStandard ? QStringLiteral("\nВыбрано для порта %1: %2")
+                                  .arg(standardPort).arg(selectedOpen->currentText())
+                            : QString()),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (answer != QMessageBox::Yes) {
         return;
     }
     m_soltBusy = true;
     refreshSoltUi();
-    const int kind = isOnePortCal() ? 0 : 1;
-    const int port = m_calPort ? m_calPort->currentData().toInt() : 1;
-    emit calibrateStepRequested(kind, m_soltStep, port);
+    emit calibrateStepRequested(kind, m_soltStep, port, subclass);
 }
 
 void MeasureTab::onSoltResetClicked()

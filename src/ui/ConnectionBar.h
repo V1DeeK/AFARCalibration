@@ -18,6 +18,8 @@ class ConnectionBar final : public QFrame {
 public:
     /// Третья страница общей области рядом с подключением и контроллером.
     void setMiddleWidget(QWidget* widget);
+    void setSweepWidget(QWidget* widget);
+    void showSweepSettings();
     /// Очередь ошибок SCPI; MainWindow переносит её в «Тех. состояние».
     [[nodiscard]] QWidget* scpiPanel() const { return m_scpiPanel; }
     explicit ConnectionBar(QWidget* parent = nullptr);
