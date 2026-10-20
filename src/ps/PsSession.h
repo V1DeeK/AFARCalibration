@@ -86,6 +86,12 @@ public:
     /// Отправить команду. msg_count или -1 (причина — lastError() и message()).
     int send(std::string_view msgType, const nlohmann::json& payload = nlohmann::json::object());
 
+    /// set_mode с учётом таблицы 1 протокола: в SERVICE — только из IDLE,
+    /// в FULL_SCAN_FREQ и OPERATIONAL — из IDLE или друг из друга. Если прямого
+    /// перехода нет, сначала уходит set_mode IDLE, после ответа OK — set_mode target.
+    /// msg_count первой команды или -1.
+    int requestMode(afar::ps::Mode target);
+
     [[nodiscard]] bool modeKnown() const { return m_modeKnown; }
     [[nodiscard]] afar::ps::Mode mode() const { return m_mode; }
     [[nodiscard]] QString state() const { return m_state; }
@@ -144,6 +150,7 @@ private:
     bool m_checkRunning = false;
     bool m_modeKnown = false;
     afar::ps::Mode m_mode = afar::ps::Mode::Idle;
+    std::optional<afar::ps::Mode> m_modeAfterIdle;  ///< цель requestMode, ждём выхода в IDLE
     QString m_state;
     std::optional<afar::ps::Telemetry> m_telemetry;
     QVector<LogLine> m_log;

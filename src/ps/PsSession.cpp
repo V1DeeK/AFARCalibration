@@ -299,6 +299,7 @@ void PsSession::onLinkState(PsLink::State state)
     switch (state) {
     case PsLink::State::Disconnected:
         m_modeKnown = false;
+        m_modeAfterIdle.reset();
         m_state.clear();
         emit modeChanged();
         if (!m_link->lastError().isEmpty()) {
@@ -398,8 +399,27 @@ void PsSession::setMode(ps::Mode mode, const QString& state)
     }
 }
 
+int PsSession::requestMode(ps::Mode target)
+{
+    const auto modeJson = [](ps::Mode m) { return json{{"mode", std::string(ps::toString(m))}}; };
+    m_modeAfterIdle.reset();
+    const bool direct = !m_modeKnown || m_mode == ps::Mode::Idle || m_mode == target || target == ps::Mode::Idle ||
+                        (target != ps::Mode::Service && m_mode != ps::Mode::Service);
+    if (direct) {
+        return send(ps::msg::SetMode, modeJson(target));
+    }
+    const int count = send(ps::msg::SetMode, modeJson(ps::Mode::Idle));
+    if (count >= 0) {
+        m_modeAfterIdle = target;
+    }
+    return count;
+}
+
 void PsSession::onResponse(const ps::Envelope& r, ps::Status status)
 {
+    if (r.msg_type == ps::msg::SetMode && status != ps::Status::Ok) {
+        m_modeAfterIdle.reset();
+    }
     if (status != ps::Status::Ok) {
         emit message(QStringLiteral("%1: %2 (%3)")
                          .arg(qs(r.msg_type), QString::fromStdString(ps::statusRu(status)),
@@ -418,6 +438,12 @@ void PsSession::onResponse(const ps::Envelope& r, ps::Status status)
         if (it != r.payload.end() && it->is_string() && ps::parseMode(it->get<std::string>(), mode)) {
             m_state.clear();
             setMode(mode, QString());
+            // Переход через IDLE (таблица 1): IDLE достигнут — теперь в целевой режим.
+            if (mode == ps::Mode::Idle && m_modeAfterIdle) {
+                const ps::Mode target = *m_modeAfterIdle;
+                m_modeAfterIdle.reset();
+                send(ps::msg::SetMode, json{{"mode", std::string(ps::toString(target))}});
+            }
         }
         m_link->sendCommand(ps::msg::GetState);
     } else if (r.msg_type == ps::msg::SetSffParameters || r.msg_type == ps::msg::GetSffParameters) {

@@ -412,6 +412,32 @@ TEST_CASE("v8 3.5: кнопки оперативного режима сами �
     CHECK(child<QLabel>(*b.parameters, "psMode")->text().contains(QStringLiteral("оперативный")));
 }
 
+TEST_CASE("Таблица 1: из SERVICE в OPERATIONAL и FULL_SCAN_FREQ — через IDLE", "[v8][set_mode]")
+{
+    Bench b;
+    b.connect();
+    b.toService();
+    const auto before = b.server.received().size();
+    b.click("opGetFrequency");
+    REQUIRE(waitFor([&] { return b.server.last(ps::msg::GetOpFrequency) != nullptr; }));
+    std::vector<std::string> modes;
+    for (std::size_t i = before; i < b.server.received().size(); ++i) {
+        const ps::Envelope& e = b.server.received()[i];
+        if (e.msg_type == ps::msg::SetMode) {
+            modes.push_back(e.payload.at("mode").get<std::string>());
+        }
+    }
+    CHECK(modes == std::vector<std::string>{"IDLE", "OPERATIONAL"});
+    CHECK(b.session->mode() == ps::Mode::Operational);
+
+    b.click("psToIdle");
+    REQUIRE(waitFor([&] { return b.session->mode() == ps::Mode::Idle; }));
+    b.toService();
+    b.click("sffRead");
+    REQUIRE(waitFor([&] { return b.server.last(ps::msg::GetSffParameters) != nullptr; }));
+    CHECK(b.session->mode() == ps::Mode::FullScanFreq);
+}
+
 TEST_CASE("v8 3.5.1.1 set_op_frequency: Гц, 4,9–6,0 ГГц, ответ после калибровки", "[v8][op]")
 {
     Bench b;

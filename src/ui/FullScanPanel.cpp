@@ -192,7 +192,7 @@ void FullScanPanel::inScanMode(std::function<void()> action)
     }
     m_afterModeChange = std::move(action);
     m_state->setText(QStringLiteral("Перевожу изделие в режим «Полное сканирование»…"));
-    if (m_session->send(ps::msg::SetMode, json{{"mode", "FULL_SCAN_FREQ"}}) < 0) {
+    if (m_session->requestMode(ps::Mode::FullScanFreq) < 0) {
         m_afterModeChange = nullptr;
         m_state->setText(m_session->lastError());
     }

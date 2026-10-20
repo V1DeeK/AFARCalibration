@@ -441,7 +441,11 @@ void TestPsServer::handle(const ps::Envelope& cmd)
             reply(cmd, ps::Status::HwNotReady);
             return;
         }
-        if (target == ps::Mode::Service && m_mode != ps::Mode::Idle && m_mode != ps::Mode::Service) {
+        // Таблица 1: SERVICE — только из IDLE; FULL_SCAN_FREQ и OPERATIONAL — из IDLE
+        // или друг из друга. Статус отказа документ не задаёт — отвечаем INVALID_ARGUMENT.
+        const bool fromService = m_mode == ps::Mode::Service && target != ps::Mode::Service && target != ps::Mode::Idle;
+        const bool toService = target == ps::Mode::Service && m_mode != ps::Mode::Idle && m_mode != ps::Mode::Service;
+        if (fromService || toService) {
             reply(cmd, ps::Status::InvalidArgument);
             return;
         }

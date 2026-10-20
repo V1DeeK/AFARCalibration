@@ -368,7 +368,7 @@ void OperationalPanel::inOpMode(std::function<void()> action)
     }
     m_afterModeChange = std::move(action);
     m_state->setText(QStringLiteral("Перевожу изделие в оперативный режим…"));
-    if (m_session->send(ps::msg::SetMode, json{{"mode", "OPERATIONAL"}}) < 0) {
+    if (m_session->requestMode(ps::Mode::Operational) < 0) {
         m_afterModeChange = nullptr;
         m_state->setText(m_session->lastError());
     }
