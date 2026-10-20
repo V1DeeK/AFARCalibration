@@ -377,6 +377,22 @@ void toOperational(Bench& b)
     QCoreApplication::processEvents();
 }
 
+/// Частота задана, калибровка прошла — КА в OP_IDLE.
+void toOpIdle(Bench& b)
+{
+    toOperational(b);
+    b.click("opSetFrequency");
+    REQUIRE(waitFor([&] { return b.server.opState() == "OP_IDLE"; }));
+}
+
+/// Поиск запущен — КА в OP_SURVEY: здесь принимаются захват, стоп и удержание.
+void toOpSurvey(Bench& b)
+{
+    toOpIdle(b);
+    b.click("opStartSurvey");
+    REQUIRE(waitFor([&] { return b.server.opState() == "OP_SURVEY"; }));
+}
+
 QString opState(Bench& b)
 {
     return child<QLabel>(*b.parameters, "opState")->text();
@@ -506,6 +522,11 @@ TEST_CASE("v8 3.5.1.9 set_op_start_calibration: payload пустой, cal в о�
     Bench b;
     b.connect();
     toOperational(b);
+    // Таблица 4: калибровка — только из OP_IDLE; до установки частоты PS ответит BUSY.
+    b.click("opStartCalibration");
+    REQUIRE(waitFor([&] { return opState(b).contains(QStringLiteral("BUSY")); }));
+    b.click("opSetFrequency");
+    REQUIRE(waitFor([&] { return b.server.opState() == "OP_IDLE"; }));
     b.click("opStartCalibration");
     CHECK(b.received(ps::msg::SetOpStartCalibration) == json::object());
     auto* cal = child<QLabel>(*b.parameters, "opCal");
@@ -597,7 +618,7 @@ TEST_CASE("v8 3.5.1.15 set_op_start_hold: az в ±30°, при FIXED — отк�
 {
     Bench b;
     b.connect();
-    toOperational(b);
+    toOpSurvey(b);
     child<QDoubleSpinBox>(*b.parameters, "opHoldAz")->setValue(13.5);
     b.click("opStartHold");
     CHECK(b.received(ps::msg::SetOpStartHold) == json{{"az", 13.5}});
@@ -616,7 +637,7 @@ TEST_CASE("v8 3.5.1.16 set_op_stop_hold: payload пустой", "[v8][op]")
 {
     Bench b;
     b.connect();
-    toOperational(b);
+    toOpSurvey(b);
     b.click("opStopHold");
     CHECK(b.received(ps::msg::SetOpStopHold) == json::object());
     auto* hold = child<QLabel>(*b.parameters, "opHold");
@@ -945,12 +966,11 @@ TEST_CASE("v8 3.6.1.17 get_pl_status: флаги таблицы 37", "[v8][pl]")
 
 // --------------------------------------------- 2 канал технического состояния
 
-TEST_CASE("v8 таблица 5: 10 байт UDP, биты 13–15 — флаги ошибок", "[v8][udp]")
+TEST_CASE("Таблица 5: 10 байт UDP, 1 — исправно, биты 14–15 — резерв", "[v8][udp]")
 {
     Bench b;
-    QByteArray bytes(10, char(0xff));
-    bytes[1] = char(0x1f);  // всё исправно
-    b.server.setStatusBytes(bytes);
+    // FF FF FF FF FF FF FF FF FF FF — всё исправно.
+    b.server.setStatusBytes(QByteArray(10, char(0xff)));
     b.connect();
     REQUIRE(waitFor([&] { return b.session->telemetry().has_value(); }));
     for (const auto& [name, health] : b.session->telemetry()->devices) {
@@ -958,11 +978,11 @@ TEST_CASE("v8 таблица 5: 10 байт UDP, биты 13–15 — флаги
         CHECK(health == ps::DeviceHealth::Ok);
     }
 
-    // Бит 14 «уровень входного сигнала» = 1 — неисправность; бит 8 «связь» = 0 — тоже.
+    // Бит 8 «связь» = 0 и бит 13 «проверка канала данных» = 0 — неисправность;
+    // бит 14 = 0 — резерв, его нет в списке.
     ps::Telemetry t;
     std::string raw(10, char(0xff));
-    raw[1] = char(0x1f | 0x40);
-    raw[1] = static_cast<char>(static_cast<unsigned char>(raw[1]) & ~0x01u);
+    raw[1] = static_cast<char>(0xff & ~0x01u & ~0x20u & ~0x40u);
     REQUIRE(ps::Telemetry::fromStatusBytes(raw, t));
     const auto health = [&](const std::string& name) {
         for (const auto& [n, h] : t.devices) {
@@ -974,8 +994,12 @@ TEST_CASE("v8 таблица 5: 10 байт UDP, биты 13–15 — флаги
         return ps::DeviceHealth::NotChecked;
     };
     CHECK(health("Трансивер: связь") == ps::DeviceHealth::Fail);
-    CHECK(health("Трансивер: уровень входного сигнала") == ps::DeviceHealth::Fail);
-    CHECK(health("Трансивер: приём данных в память") == ps::DeviceHealth::Ok);
+    CHECK(health("Трансивер: проверка данных") == ps::DeviceHealth::Fail);
+    CHECK(health("Трансивер: канал данных АЦП") == ps::DeviceHealth::Ok);
+    for (const auto& [n, h] : t.devices) {
+        CHECK(n.find("уровень входного сигнала") == std::string::npos);
+        CHECK(n.find("приём данных в память") == std::string::npos);
+    }
     CHECK(health("Самопроверка: калибровочные таблицы") == ps::DeviceHealth::Ok);
     CHECK_FALSE(ps::Telemetry::fromStatusBytes(std::string(9, '\0'), t));
 }

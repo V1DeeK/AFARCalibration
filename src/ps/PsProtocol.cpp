@@ -727,8 +727,7 @@ bool Telemetry::fromStatusBytes(std::string_view bytes, Telemetry& out)
         "Цифровой модуль: температура < 125 °C", "", "", "",
         "Трансивер: связь", "Трансивер: тактирование", "Трансивер: гетеродин RX",
         "Трансивер: калибровка", "Трансивер: канал данных АЦП",
-        "Трансивер: проверка данных", "Трансивер: уровень входного сигнала",
-        "Трансивер: приём данных в память",
+        "Трансивер: проверка данных", "", "",
         "Трансивер: тактовый сигнал", "Трансивер: LOCK",
         "Трансивер: температура < 85 °C", "Трансивер: температура < 125 °C",
         "", "", "", "",
@@ -762,9 +761,9 @@ bool Telemetry::fromStatusBytes(std::string_view bytes, Telemetry& out)
     }
     for (std::size_t bit = 0; bit < names.size(); ++bit) {
         if (!names[bit].empty()) {
-            const bool set = (t.statusBytes[bit / 8] & (1u << (bit % 8))) != 0;
-            // Биты 13–15 — флаги ошибок: 1 — неисправность (v8 таблица 5).
-            const bool ok = (bit >= 13 && bit <= 15) ? !set : set;
+            // Все биты: 1 — исправно (таблица 5 протокола Пеленг-FPV-49-60, в. 1);
+            // биты 14 и 15 — резерв.
+            const bool ok = (t.statusBytes[bit / 8] & (1u << (bit % 8))) != 0;
             t.devices.emplace_back(std::string(names[bit]), ok ? DeviceHealth::Ok : DeviceHealth::Fail);
         }
     }

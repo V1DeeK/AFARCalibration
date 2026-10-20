@@ -263,6 +263,24 @@ void TestPsServer::handleOp(const ps::Envelope& cmd)
     };
     const bool searching = m_opState == "OP_SURVEY" || m_opState == "OP_ACQUIRE" || m_opState == "OP_TRACK" ||
                            m_opState == "OP_LOSS" || m_opState == "OP_LIMITED_SURVEY";
+    // Таблица 4: в каких состояниях вложенного КА выполняется команда. Не принятая
+    // в OP_INITIALIZATION и OP_CALIBRATION — BUSY, в остальных — NOT_SUPPORTED.
+    bool accepted = true;
+    if (t == ps::msg::SetOpFrequency) {
+        accepted = m_opState == "OP_INITIALIZATION" || m_opState == "OP_IDLE";
+    } else if (t == ps::msg::SetOpStartCalibration || t == ps::msg::SetOpStartSurvey) {
+        accepted = m_opState == "OP_IDLE";
+    } else if (t == ps::msg::SetOpStartLoss) {
+        accepted = m_opState == "OP_TRACK";
+    } else if (t == ps::msg::SetOpStartAcquire || t == ps::msg::SetOpStop || t == ps::msg::SetOpStartHold ||
+               t == ps::msg::SetOpStopHold) {
+        accepted = searching;
+    }
+    if (!accepted) {
+        const bool busy = m_opState == "OP_INITIALIZATION" || m_opState == "OP_CALIBRATION";
+        reply(cmd, busy ? ps::Status::Busy : ps::Status::NotSupported);
+        return;
+    }
 
     if (t == ps::msg::SetOpFrequency) {
         const auto f = in.find("freq");
@@ -321,10 +339,6 @@ void TestPsServer::handleOp(const ps::Envelope& cmd)
     } else if (t == ps::msg::GetOpCalibration) {
         reply(cmd, ps::Status::Ok, pick({"cal"}));
     } else if (t == ps::msg::SetOpStartSurvey) {
-        if (m_opState != "OP_IDLE") {
-            reply(cmd, ps::Status::Busy);
-            return;
-        }
         m_opState = "OP_SURVEY";
         reply(cmd, ps::Status::Ok);
         sendEvent(ps::msg::SendOpSurveyResult,
@@ -337,10 +351,6 @@ void TestPsServer::handleOp(const ps::Envelope& cmd)
             reply(cmd, ps::Status::InvalidArgument);
             return;
         }
-        if (!searching) {
-            reply(cmd, ps::Status::Busy);
-            return;
-        }
         const double az = in.at("az").get<double>();
         m_opState = "OP_TRACK";
         reply(cmd, ps::Status::Ok, json{{"az", az}});
@@ -351,10 +361,6 @@ void TestPsServer::handleOp(const ps::Envelope& cmd)
                            {"coh", 70}, {"df", 55}, {"src", "FPGA"}, {"meth", "SD"}});
         }
     } else if (t == ps::msg::SetOpStartLoss) {
-        if (m_opState != "OP_TRACK") {
-            reply(cmd, ps::Status::Busy);
-            return;
-        }
         m_opState = "OP_LIMITED_SURVEY";
         reply(cmd, ps::Status::Ok);
     } else if (t == ps::msg::SetOpStop) {
@@ -706,11 +712,8 @@ void TestPsServer::sendTelemetry()
     if (!m_helloDone || m_tlmPort == 0 || m_tlmOff) {
         return;
     }
-    // Всё исправно: биты 13–15 — флаги ошибок, у исправного изделия они 0 (v8 таблица 5).
+    // Всё исправно: все биты 1, резервные тоже (таблица 5).
     QByteArray packet = m_statusBytes.isEmpty() ? QByteArray(10, char(0xff)) : m_statusBytes;
-    if (m_statusBytes.isEmpty()) {
-        packet[1] = char(0x1f);
-    }
     if (m_fault) {
         packet[9] = char(0x7f); // бит 79: самопроверка калибровочных таблиц
     }

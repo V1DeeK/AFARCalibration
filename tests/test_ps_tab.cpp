@@ -1031,7 +1031,6 @@ TEST_CASE("Тех. состояние: отказы PS и неисправнос
 
     // Неисправность из UDP-пакета технического состояния: бит 75 — «Самопроверка: RS-485».
     QByteArray bytes(10, static_cast<char>(0xff));
-    bytes[1] = static_cast<char>(0x1f);  // биты 13–15 — флаги ошибок, 0 = исправно
     bytes[9] = static_cast<char>(0xf7);
     server.setStatusBytes(bytes);
     REQUIRE(waitFor([&] { return page.errors().filter(QStringLiteral("UDP: Самопроверка: RS-485")).size() == 1; }));
