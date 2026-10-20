@@ -155,6 +155,12 @@ FullScanPanel::FullScanPanel(PsSession* session, QWidget* parent)
             action();
         }
     });
+    connect(m_session, &PsSession::modeRequestRefused, this, [this](const QString& reason) {
+        if (m_afterModeChange) {
+            m_afterModeChange = nullptr;
+            m_state->setText(reason);
+        }
+    });
     connect(m_session, &PsSession::sffChanged, this, [this] {
         refreshParams();
         refreshResults();

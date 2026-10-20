@@ -162,6 +162,11 @@ std::string modeRu(Mode v)
     return {};
 }
 
+bool respondsAfterOperation(std::string_view msgType) noexcept
+{
+    return msgType == msg::SetStartTest || msgType == msg::SetOpFrequency || msgType == msg::SetOpStartCalibration;
+}
+
 std::string stateRu(std::string_view state)
 {
     static const std::map<std::string_view, std::string_view> names = {

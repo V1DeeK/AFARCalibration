@@ -378,11 +378,11 @@ QWidget* SettingsTab::buildModeBox()
     layout->addStretch(1);
 
     connect(m_toService, &QPushButton::clicked, this,
-            [this] { send(ps::msg::SetMode, json{{"mode", "SERVICE"}}); });
+            [this] { m_session->requestMode(ps::Mode::Service); });
     connect(m_toOperational, &QPushButton::clicked, this,
-            [this] { send(ps::msg::SetMode, json{{"mode", "OPERATIONAL"}}); });
+            [this] { m_session->requestMode(ps::Mode::Operational); });
     connect(m_toIdle, &QPushButton::clicked, this,
-            [this] { send(ps::msg::SetMode, json{{"mode", "IDLE"}}); });
+            [this] { m_session->requestMode(ps::Mode::Idle); });
     connect(m_getState, &QPushButton::clicked, this, [this] { send(ps::msg::GetState); });
     connect(m_selfTest, &QPushButton::clicked, this, &SettingsTab::startSelfTest);
     connect(m_reset, &QPushButton::clicked, this, [this] {

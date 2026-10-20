@@ -124,6 +124,7 @@ private:
     afar::ps::SffParams m_sff;
     quint8 m_eventCount = 0;
     std::string m_opState = "OP_INITIALIZATION";
+    std::string m_sffState = "SFF_IDLE";  ///< SFF_FREQ — обзор идёт, до set_sff_stop
     nlohmann::json m_op = {{"freq", 4900000000LL}, {"acq", "AUTO"}, {"loss", "AUTO"}, {"mode", "SCAN"},
                            {"az_min", -30.0}, {"az_max", 30.0}, {"az_fix", 0.0}, {"data", "AUTO"},
                            {"cal", "NO"}, {"hold", false}};

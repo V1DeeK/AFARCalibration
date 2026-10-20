@@ -185,6 +185,7 @@ void TestPsServer::handleSff(const ps::Envelope& cmd)
         return;
     }
     reply(cmd, ps::Status::Ok);
+    m_sffState = t == ps::msg::SetSffStart ? "SFF_FREQ" : "SFF_IDLE";
     if (t == ps::msg::SetSffStart) {
         // Один обзор: три частоты, на каждой — три азимута сектора.
         for (int i = 0; i < 3; ++i) {
@@ -425,7 +426,8 @@ void TestPsServer::handle(const ps::Envelope& cmd)
     if (t == ps::msg::GetState) {
         const std::string state = m_mode == ps::Mode::Idle          ? (m_fault ? "FAULT" : "READY")
                                   : m_mode == ps::Mode::Operational ? m_opState
-                                                                    : "";
+                                  : m_mode == ps::Mode::FullScanFreq ? m_sffState
+                                                                     : "";
         reply(cmd, ps::Status::Ok,
               json{{"mode", std::string(ps::toString(m_mode))}, {"state", state}});
         return;
@@ -448,6 +450,20 @@ void TestPsServer::handle(const ps::Envelope& cmd)
         if (fromService || toService) {
             reply(cmd, ps::Status::InvalidArgument);
             return;
+        }
+        // Из FULL_SCAN_FREQ — только в SFF_IDLE, из OPERATIONAL — в OP_INITIALIZATION
+        // и OP_IDLE (рисунки 3, 4, таблица 4).
+        if (target != m_mode && m_mode == ps::Mode::FullScanFreq && m_sffState != "SFF_IDLE") {
+            reply(cmd, ps::Status::Busy);
+            return;
+        }
+        if (target != m_mode && m_mode == ps::Mode::Operational && m_opState != "OP_INITIALIZATION" &&
+            m_opState != "OP_IDLE") {
+            reply(cmd, m_opState == "OP_CALIBRATION" ? ps::Status::Busy : ps::Status::NotSupported);
+            return;
+        }
+        if (target == ps::Mode::FullScanFreq && m_mode != ps::Mode::FullScanFreq) {
+            m_sffState = "SFF_IDLE";
         }
         if (m_mode == ps::Mode::Service && target != ps::Mode::Service) {
             resetService();

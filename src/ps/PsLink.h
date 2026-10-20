@@ -27,8 +27,9 @@ public:
     struct Timeouts {
         int keepAliveIdleMs = 5000;  ///< keep_alive при отсутствии обмена
         int commandMs = 2000;        ///< ответ на команду
-        /// Ответ на set_start_test приходит после самопроверки (v8 п. 3.2); её длительность
-        /// документ не задаёт.
+        /// Ответ на set_start_test, set_op_frequency и set_op_start_calibration приходит
+        /// после самопроверки или калибровки каналов (ps::respondsAfterOperation);
+        /// длительность документ не задаёт.
         int selfTestMs = 60000;
         int connectMs = 3000;        ///< HW-VNA-04 по аналогии: 3 с на соединение
         int reconnectMs = 3000;

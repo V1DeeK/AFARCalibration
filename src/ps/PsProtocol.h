@@ -97,6 +97,11 @@ std::string statusRu(Status v);
 std::string modeRu(Mode v);
 std::string stateRu(std::string_view state);
 
+/// Ответ приходит после долгой операции изделия, а не сразу: set_start_test (после
+/// самопроверки, п. 3.2.1.5), set_op_frequency и set_op_start_calibration (после
+/// калибровки каналов, п. 3.5.1.1 и 3.5.1.9). Ждать их столько же, сколько самопроверку.
+bool respondsAfterOperation(std::string_view msgType) noexcept;
+
 /// Совместимы версии с одинаковой старшей цифрой (§3).
 bool versionsCompatible(std::string_view a, std::string_view b);
 

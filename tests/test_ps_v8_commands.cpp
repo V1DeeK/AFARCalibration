@@ -438,6 +438,59 @@ TEST_CASE("Таблица 1: из SERVICE в OPERATIONAL и FULL_SCAN_FREQ — �
     CHECK(b.session->mode() == ps::Mode::FullScanFreq);
 }
 
+TEST_CASE("Смена режима — только из состояния ожидания вложенного КА", "[v8][set_mode]")
+{
+    Bench b;
+    b.connect();
+    toOpSurvey(b);
+    // В OP_SURVEY уйти из OPERATIONAL нельзя (таблица 4): set_mode не уходит, причина видна.
+    const auto sentModes = [&] {
+        int n = 0;
+        for (const auto& e : b.server.received()) {
+            n += e.msg_type == ps::msg::SetMode ? 1 : 0;
+        }
+        return n;
+    };
+    const int before = sentModes();
+    QString refused;
+    QObject::connect(b.session.get(), &PsSession::modeRequestRefused, [&](const QString& r) { refused = r; });
+    b.click("psToIdle");
+    REQUIRE(waitFor([&] { return !refused.isEmpty(); }));
+    CHECK(refused.contains(QStringLiteral("«Стоп»")));
+    CHECK(sentModes() == before);
+    CHECK(b.session->mode() == ps::Mode::Operational);
+    // После «Стоп» (OP_IDLE) — можно.
+    b.click("opStop");
+    REQUIRE(waitFor([&] { return b.session->state() == QStringLiteral("OP_IDLE"); }));
+    b.click("psToIdle");
+    REQUIRE(waitFor([&] { return b.session->mode() == ps::Mode::Idle; }));
+
+    // Полное сканирование идёт — из FULL_SCAN_FREQ тоже не уходим до «Стоп».
+    b.click("sffStart");
+    REQUIRE(waitFor([&] { return b.server.last(ps::msg::SetSffStart) != nullptr; }));
+    refused.clear();
+    b.click("opGetFrequency");
+    REQUIRE(waitFor([&] { return !refused.isEmpty(); }));
+    CHECK(b.session->mode() == ps::Mode::FullScanFreq);
+    b.click("sffStop");
+    REQUIRE(waitFor([&] { return b.server.last(ps::msg::SetSffStop) != nullptr; }));
+    b.click("opGetFrequency");
+    REQUIRE(waitFor([&] { return b.server.last(ps::msg::GetOpFrequency) != nullptr; }));
+    CHECK(b.session->mode() == ps::Mode::Operational);
+}
+
+TEST_CASE("Самопроверка и калибровка каналов: ответ ждём 60 с, не 2 с", "[v8][timeouts]")
+{
+    CHECK(ps::respondsAfterOperation(ps::msg::SetStartTest));
+    CHECK(ps::respondsAfterOperation(ps::msg::SetOpFrequency));
+    CHECK(ps::respondsAfterOperation(ps::msg::SetOpStartCalibration));
+    CHECK_FALSE(ps::respondsAfterOperation(ps::msg::GetOpCalibration));
+    CHECK_FALSE(ps::respondsAfterOperation(ps::msg::SetOpStartSurvey));
+    PsLink link;
+    CHECK(link.timeouts().selfTestMs == 60000);
+    CHECK(link.timeouts().commandMs < link.timeouts().selfTestMs);
+}
+
 TEST_CASE("v8 3.5.1.1 set_op_frequency: Гц, 4,9–6,0 ГГц, ответ после калибровки", "[v8][op]")
 {
     Bench b;

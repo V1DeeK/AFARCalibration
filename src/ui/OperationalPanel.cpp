@@ -122,6 +122,13 @@ OperationalPanel::OperationalPanel(PsSession* session, QWidget* parent)
     connect(m_session->link(), &PsLink::responseReceived, this, &OperationalPanel::onResponse);
     connect(m_session->link(), &PsLink::eventReceived, this, &OperationalPanel::onEvent);
     connect(m_session, &PsSession::controlsChanged, this, &OperationalPanel::refreshControls);
+    connect(m_session, &PsSession::modeRequestRefused, this, [this](const QString& reason) {
+        if (m_afterModeChange) {
+            m_afterModeChange = nullptr;
+            m_state->setText(reason);
+            ui::setTone(m_state, ui::Tone::Error);
+        }
+    });
     connect(m_session, &PsSession::modeChanged, this, [this] {
         refreshControls();
         if (m_afterModeChange && m_session->modeKnown() && m_session->mode() == ps::Mode::Operational) {

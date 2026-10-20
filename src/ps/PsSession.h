@@ -86,11 +86,16 @@ public:
     /// Отправить команду. msg_count или -1 (причина — lastError() и message()).
     int send(std::string_view msgType, const nlohmann::json& payload = nlohmann::json::object());
 
-    /// set_mode с учётом таблицы 1 протокола: в SERVICE — только из IDLE,
-    /// в FULL_SCAN_FREQ и OPERATIONAL — из IDLE или друг из друга. Если прямого
+    /// set_mode только по переходам протокола. Таблица 1: в SERVICE — только из IDLE,
+    /// в FULL_SCAN_FREQ и OPERATIONAL — из IDLE или друг из друга; если прямого
     /// перехода нет, сначала уходит set_mode IDLE, после ответа OK — set_mode target.
-    /// msg_count первой команды или -1.
+    /// Режим меняется только из состояния ожидания вложенного КА: READY, SFF_IDLE,
+    /// OP_INITIALIZATION или OP_IDLE (рисунки 2–4, таблица 4). Если известное состояние
+    /// другое, сначала уточняется get_state; не ожидание и после него — отказ с
+    /// причиной в lastError() и message(). msg_count первой команды или -1.
     int requestMode(afar::ps::Mode target);
+    /// Можно ли сейчас уйти из текущего режима; why — что сделать оператору.
+    [[nodiscard]] bool canLeaveMode(QString* why = nullptr) const;
 
     [[nodiscard]] bool modeKnown() const { return m_modeKnown; }
     [[nodiscard]] afar::ps::Mode mode() const { return m_mode; }
@@ -112,6 +117,8 @@ signals:
     void statusChanged();
     /// Сменились режим или состояние изделия.
     void modeChanged();
+    /// requestMode отказал: переход не по протоколу или вложенный КА не в ожидании.
+    void modeRequestRefused(const QString& reason);
     void telemetryChanged();
     void frameAppended(const PsSession::LogLine& line);
     void logCleared();
@@ -139,6 +146,7 @@ private:
     void appendLog(const LogLine& line);
     void setMode(afar::ps::Mode mode, const QString& state);
     void refuse(const QString& text);
+    int requestModeNow(afar::ps::Mode target, bool stateFresh);
 
     PsLink* m_link = nullptr;
     MacResolver* m_resolver = nullptr;
@@ -151,6 +159,7 @@ private:
     bool m_modeKnown = false;
     afar::ps::Mode m_mode = afar::ps::Mode::Idle;
     std::optional<afar::ps::Mode> m_modeAfterIdle;  ///< цель requestMode, ждём выхода в IDLE
+    std::optional<afar::ps::Mode> m_modeAfterState;  ///< цель requestMode, ждём ответа get_state
     QString m_state;
     std::optional<afar::ps::Telemetry> m_telemetry;
     QVector<LogLine> m_log;

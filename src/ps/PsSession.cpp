@@ -300,6 +300,7 @@ void PsSession::onLinkState(PsLink::State state)
     case PsLink::State::Disconnected:
         m_modeKnown = false;
         m_modeAfterIdle.reset();
+        m_modeAfterState.reset();
         m_state.clear();
         emit modeChanged();
         if (!m_link->lastError().isEmpty()) {
@@ -399,10 +400,65 @@ void PsSession::setMode(ps::Mode mode, const QString& state)
     }
 }
 
+bool PsSession::canLeaveMode(QString* why) const
+{
+    if (!m_modeKnown || m_state.isEmpty()) {
+        return true;
+    }
+    const QString st = m_state.toUpper();
+    QString reason;
+    switch (m_mode) {
+    case ps::Mode::Idle:
+        if (st != QStringLiteral("READY")) {
+            reason = QStringLiteral("изделие в %1 — режим меняется только из READY")
+                         .arg(QString::fromStdString(ps::stateRu(st.toStdString())));
+        }
+        break;
+    case ps::Mode::FullScanFreq:
+        if (st != QStringLiteral("SFF_IDLE")) {
+            reason = QStringLiteral("идёт полное сканирование — сначала «Стоп»");
+        }
+        break;
+    case ps::Mode::Operational:
+        if (st == QStringLiteral("OP_CALIBRATION")) {
+            reason = QStringLiteral("идёт калибровка каналов — дождитесь её конца");
+        } else if (st != QStringLiteral("OP_INITIALIZATION") && st != QStringLiteral("OP_IDLE")) {
+            reason = QStringLiteral("идёт поиск или сопровождение — сначала «Стоп» оперативного режима");
+        }
+        break;
+    case ps::Mode::Service:
+        break;
+    }
+    if (why) {
+        *why = reason;
+    }
+    return reason.isEmpty();
+}
+
 int PsSession::requestMode(ps::Mode target)
 {
-    const auto modeJson = [](ps::Mode m) { return json{{"mode", std::string(ps::toString(m))}}; };
+    return requestModeNow(target, false);
+}
+
+int PsSession::requestModeNow(ps::Mode target, bool stateFresh)
+{
     m_modeAfterIdle.reset();
+    m_modeAfterState.reset();
+    QString why;
+    if (!canLeaveMode(&why)) {
+        if (!stateFresh) {
+            // Состояние могло смениться без нас (обзор закончился, цель потеряна) — уточняем.
+            const int count = send(ps::msg::GetState);
+            if (count >= 0) {
+                m_modeAfterState = target;
+            }
+            return count;
+        }
+        refuse(QStringLiteral("Режим не сменён: %1").arg(why));
+        emit modeRequestRefused(m_lastError);
+        return -1;
+    }
+    const auto modeJson = [](ps::Mode m) { return json{{"mode", std::string(ps::toString(m))}}; };
     const bool direct = !m_modeKnown || m_mode == ps::Mode::Idle || m_mode == target || target == ps::Mode::Idle ||
                         (target != ps::Mode::Service && m_mode != ps::Mode::Service);
     if (direct) {
@@ -419,6 +475,11 @@ void PsSession::onResponse(const ps::Envelope& r, ps::Status status)
 {
     if (r.msg_type == ps::msg::SetMode && status != ps::Status::Ok) {
         m_modeAfterIdle.reset();
+        emit modeRequestRefused(QStringLiteral("Режим не сменён: PS ответил %1 (%2)")
+                                    .arg(qs(ps::toString(status)), QString::fromStdString(ps::statusRu(status))));
+    }
+    if (r.msg_type == ps::msg::GetState && status != ps::Status::Ok) {
+        m_modeAfterState.reset();
     }
     if (status != ps::Status::Ok) {
         emit message(QStringLiteral("%1: %2 (%3)")
@@ -431,6 +492,11 @@ void PsSession::onResponse(const ps::Envelope& r, ps::Status status)
         ps::StateInfo info;
         if (ps::StateInfo::fromJson(r.payload, info, &error)) {
             setMode(info.mode, QString::fromStdString(info.state));
+        }
+        if (m_modeAfterState) {
+            const ps::Mode target = *m_modeAfterState;
+            m_modeAfterState.reset();
+            requestModeNow(target, true);
         }
     } else if (r.msg_type == ps::msg::SetMode) {
         ps::Mode mode{};
@@ -445,6 +511,9 @@ void PsSession::onResponse(const ps::Envelope& r, ps::Status status)
                 send(ps::msg::SetMode, json{{"mode", std::string(ps::toString(target))}});
             }
         }
+        m_link->sendCommand(ps::msg::GetState);
+    } else if (r.msg_type == ps::msg::SetSffStart || r.msg_type == ps::msg::SetSffStop) {
+        // SFF_IDLE ↔ SFF_FREQ: от состояния зависит, можно ли менять режим.
         m_link->sendCommand(ps::msg::GetState);
     } else if (r.msg_type == ps::msg::SetSffParameters || r.msg_type == ps::msg::GetSffParameters) {
         ps::SffParams p;
