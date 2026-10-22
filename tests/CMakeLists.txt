@@ -18,6 +18,12 @@ afar_enable_warnings(test_spectrum_widget)
 add_test(NAME spectrum_widget COMMAND test_spectrum_widget)
 set_tests_properties(spectrum_widget PROPERTIES TIMEOUT 15)
 
+# Кадр платы ППКХ4 (вкладка «Настройка 1 канала»).
+add_executable(test_ppkh4_frame test_ppkh4_frame.cpp)
+target_link_libraries(test_ppkh4_frame PRIVATE Catch2::Catch2WithMain afar_ppkh4_frame)
+afar_enable_warnings(test_ppkh4_frame)
+add_test(NAME ppkh4_frame COMMAND test_ppkh4_frame)
+
 # Переносимость Linux/macOS/Windows: числа без локали, телеметрия процесса.
 add_executable(test_portability test_portability.cpp)
 target_link_libraries(test_portability PRIVATE Catch2::Catch2WithMain afar_core)

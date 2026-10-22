@@ -198,6 +198,32 @@ target_include_directories(afar_ps PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ps)
 target_link_libraries(afar_ps PUBLIC afar_ps_protocol Qt6::Network)
 afar_enable_warnings(afar_ps)
 
+# Плата ППКХ4 (вкладка «Настройка 1 канала», docs/contracts/ppkh4-usb-cdc.md):
+# кадр без Qt и связь по виртуальному COM-порту. Без Qt Serial Port связь
+# собирается, но не открывается — вкладка об этом пишет.
+add_library(afar_ppkh4_frame STATIC
+    ppkh4/Ppkh4Frame.cpp
+    ppkh4/Ppkh4Frame.h
+)
+target_include_directories(afar_ppkh4_frame PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ppkh4)
+afar_enable_warnings(afar_ppkh4_frame)
+
+find_package(Qt6 QUIET COMPONENTS SerialPort)
+add_library(afar_ppkh4 STATIC
+    ppkh4/Ppkh4Link.cpp
+    ppkh4/Ppkh4Link.h
+)
+set_target_properties(afar_ppkh4 PROPERTIES AUTOMOC ON)
+target_include_directories(afar_ppkh4 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ppkh4)
+target_link_libraries(afar_ppkh4 PUBLIC afar_ppkh4_frame Qt6::Core)
+if(TARGET Qt6::SerialPort)
+    target_link_libraries(afar_ppkh4 PRIVATE Qt6::SerialPort)
+    target_compile_definitions(afar_ppkh4 PRIVATE AFAR_HAVE_SERIALPORT)
+else()
+    message(WARNING "Qt Serial Port не найден: вкладка «Настройка 1 канала» не сможет открыть COM-порт")
+endif()
+afar_enable_warnings(afar_ppkh4)
+
 # IDutController через PS изделия: блокирующий драйвер для рабочего потока.
 add_library(afar_dut_ps STATIC
     dut/PsDutController.cpp
@@ -283,6 +309,8 @@ add_library(afar_app_ui STATIC
     ui/PsPacketPage.h
     ui/PsServiceCheckPage.cpp
     ui/PsServiceCheckPage.h
+    ui/SingleChannelPanel.cpp
+    ui/SingleChannelPanel.h
 )
 target_include_directories(afar_app_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -312,6 +340,7 @@ target_link_libraries(afar_app_ui PUBLIC
     afar_qc
     afar_ps
     afar_dut_ps
+    afar_ppkh4
 )
 if(WIN32)
     target_link_libraries(afar_app_ui PUBLIC Psapi)

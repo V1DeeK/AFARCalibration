@@ -34,12 +34,12 @@ CMake-имя проекта: `AfarRxCalibrationStudio`. Основная ОС с
 ## Зависимости для конфигурации
 
 1. **CMake 3.22+**, **Ninja** и **Git** (первый `cmake -S` качает Catch2 и nlohmann_json).
-2. Компилятор C++20, **Qt 6** (Widgets, Gui, OpenGLWidgets) и библиотеки модуля «Анализатор спектра» — **libiio** и **FFTW3** (libad9361 необязателен):
+2. Компилятор C++20, **Qt 6** (Widgets, Gui, OpenGLWidgets; SerialPort — для вкладки «Настройка 1 канала», необязателен) и библиотеки модуля «Анализатор спектра» — **libiio** и **FFTW3** (libad9361 необязателен):
 
 | ОС | Установка | `CMAKE_PREFIX_PATH` |
 |----|-----------|---------------------|
-| Windows | MSYS2 UCRT64: `pacman -S mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,qt6-base,fftw,libiio,libxml2}` | `C:/msys64/ucrt64` |
-| Linux (Ubuntu 24.04+) | `sudo apt install build-essential cmake ninja-build qt6-base-dev libgl1-mesa-dev libiio-dev libfftw3-dev` | не нужен |
+| Windows | MSYS2 UCRT64: `pacman -S mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,qt6-base,qt6-serialport,fftw,libiio,libxml2}` | `C:/msys64/ucrt64` |
+| Linux (Ubuntu 24.04+) | `sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-serialport-dev libgl1-mesa-dev libiio-dev libfftw3-dev` | не нужен |
 | macOS | `brew install cmake ninja qt fftw` и `tools/build-libiio.sh` (libiio в Homebrew нет; ставится в `~/.local/afar-deps`), плюс Xcode Command Line Tools | `$(brew --prefix qt);$(brew --prefix);$HOME/.local/afar-deps` |
 
 Живой C1220/C2220 для сборки и обычного `ctest` не нужен: приёмка AT-01…AT-11 на имитаторах и TCP-stub. Прибор нужен для измерений на стенде и для аппаратной части AT-01.
