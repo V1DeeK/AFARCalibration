@@ -339,8 +339,10 @@ TEST_CASE("Настройка частоты открывается рядом �
     auto* tabs = child<QTabWidget>(*w.window, "connectionTabs");
     auto* calibration = child<QTabWidget>(*w.window, "calibrationTabs");
     auto* frequency = child<QDoubleSpinBox>(*w.window, "frequencyStart");
-    REQUIRE(tabs->count() == 4);
+    REQUIRE(tabs->count() == 5);
     CHECK(tabs->tabText(3) == QStringLiteral("Настройка частоты"));
+    CHECK(tabs->tabText(4) == QStringLiteral("Настройка 1 канала"));
+    CHECK(tabs->widget(4)->objectName() == QStringLiteral("singleChannelPanel"));
     CHECK(tabs->widget(3)->isAncestorOf(frequency));
     CHECK(calibration->indexOf(tabs->widget(3)) == -1);
 

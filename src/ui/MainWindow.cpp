@@ -3,6 +3,7 @@
 #include "AcceptanceAtTab.h"
 #include "CodeMatrixTab.h"
 #include "ConnectionBar.h"
+#include "SingleChannelPanel.h"
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
 #include "BoardParametersPage.h"
@@ -172,6 +173,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     calLayout->addWidget(m_measure->calibrationPanel());
     m_connections->setMiddleWidget(calBox);
     m_connections->setSweepWidget(m_measure->sweepPanel());
+    m_connections->setSingleChannelWidget(new SingleChannelPanel(root));
     connect(m_measure, &MeasureTab::sweepSettingsRequested,
             m_connections, &ConnectionBar::showSweepSettings);
     // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Настройки».
