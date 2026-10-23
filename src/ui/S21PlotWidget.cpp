@@ -381,14 +381,44 @@ void S21PlotWidget::paintPanel(QPainter& p,
         }
         const auto first = std::lower_bound(fx.cbegin(), fx.cend(), x0);
         const auto last = std::upper_bound(fx.cbegin(), fx.cend(), x1);
-        poly.reserve(std::distance(first, last));
+        const qsizetype visible = std::distance(first, last);
+        poly.reserve(std::min<qsizetype>(visible, 2 * plot.width() + 2));
+        const auto append = [&](qsizetype index) {
+            poly << QPointF(plot.left() + ((fx[index] - x0) / dx) * plot.width(),
+                            plot.bottom() - ((fy[index] - yMin) / dy) * plot.height());
+        };
+        if (visible > 2 * plot.width()) {
+            int bucket = -1;
+            qsizetype minIndex = -1;
+            qsizetype maxIndex = -1;
+            const auto flush = [&] {
+                if (minIndex < 0) return;
+                append(std::min(minIndex, maxIndex));
+                if (minIndex != maxIndex) append(std::max(minIndex, maxIndex));
+            };
+            for (auto it = first; it != last; ++it) {
+                const qsizetype index = std::distance(fx.cbegin(), it);
+                if (!std::isfinite(fy[index])) continue;
+                const int nextBucket = std::clamp(
+                    static_cast<int>(((*it - x0) / dx) * plot.width()), 0, plot.width());
+                if (nextBucket != bucket) {
+                    flush();
+                    bucket = nextBucket;
+                    minIndex = maxIndex = index;
+                } else {
+                    if (fy[index] < fy[minIndex]) minIndex = index;
+                    if (fy[index] > fy[maxIndex]) maxIndex = index;
+                }
+            }
+            flush();
+            return poly;
+        }
         for (auto it = first; it != last; ++it) {
             const qsizetype index = std::distance(fx.cbegin(), it);
             if (!std::isfinite(fy[index])) {
                 continue;
             }
-            poly << QPointF(plot.left() + ((*it - x0) / dx) * plot.width(),
-                            plot.bottom() - ((fy[index] - yMin) / dy) * plot.height());
+            append(index);
         }
         return poly;
     };

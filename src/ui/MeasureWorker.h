@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DutSimulator.h"
+#include "C2220Vna.h"
 #include "MeasurementOrchestrator.h"
 #include "PsDutController.h"
 #include "TwoPortExport.h"
@@ -15,11 +16,11 @@
 #include <mutex>
 #include <optional>
 
-class C2220Vna;
 class IScpiTransport;
 class IVna;
 class QTimer;
 class ScpiSocketTransport;
+class QTemporaryDir;
 
 /// Worker измерения в QThread: prepare/start/pause/stop + stepOnce без блокировки GUI.
 class MeasureWorker final : public QObject {
@@ -55,6 +56,20 @@ public slots:
     /// connect + *IDN? через оркестратор (Idle), не напрямую IVna.
     void probeVna();
     void disconnectVna();
+    void enterNativeGraph();
+    void leaveNativeGraph();
+    void readNativeTraces();
+    void configureNativeGraph(const QStringList& parameters,
+                              const QStringList& formats,
+                              bool separate);
+    void autoScaleNativeGraph();
+    void changeNativeMarkerCount(int operation);
+    void readNativeMarkers();
+    void loadNativeState(const QString& path);
+    void undoNativeState();
+    void applyNativeSweep(double fStartHz, double fStopHz, int points,
+                          int ifbwHz, double powerDbm, int averages);
+    void applyNativeOperatingState(bool rfOutput, bool correction);
     /// UI-ERR-001: имитатор — push_instrument_error + drain в GUI-очередь.
     void simulateScpiError();
     /// GAP-WIZ-001: короткий пробный съём кодов через оркестратор (Idle).
@@ -114,6 +129,19 @@ signals:
     void prepareFinished(bool ok, const QString& diagnostics);
     void probeFinished(bool ok, const QString& idnOrError);
     void vnaDisconnected();
+    void nativeGraphStateChanged(const QStringList& parameters,
+                                 const QStringList& formats,
+                                 int layout,
+                                 const QString& error);
+    void nativeMarkersChanged(const QStringList& lines,
+                              const QStringList& keys,
+                              const QVector<double>& values,
+                              const QVector<double>& frequenciesGhz);
+    void nativeStateLoaded(bool ok, const QString& message);
+    void nativeStateUndoAvailable(bool available);
+    void nativeSweepSettingsChanged(double fStartHz, double fStopHz, int points,
+                                    int ifbwHz, double powerDbm, int averages);
+    void nativeOperatingStateChanged(bool rfOutput, bool correction);
     void vnaCalibrationDetected(const QString& calibrationId, bool correctionEnabled);
     void probeCodesFinished(bool ok, const QString& message);
     void measureNowFinished(bool ok, const QString& message);
@@ -203,6 +231,7 @@ private slots:
 
 private:
     void rebuildVna();
+    C2220Vna* nativeControlsVna();
     [[nodiscard]] IVna* activeVna();
     /// PS изделия при CtrlPs, иначе демо-контроллер.
     [[nodiscard]] IDutController* activeDut();
@@ -243,6 +272,11 @@ private:
     mutable std::mutex m_transportMutex;
     std::unique_ptr<ScpiSocketTransport> m_socket;
     std::unique_ptr<C2220Vna> m_c2220;
+    std::unique_ptr<ScpiSocketTransport> m_nativeSocket;
+    std::unique_ptr<C2220Vna> m_nativeC2220;
+    std::optional<C2220Vna::TriggerState> m_nativeTriggerBefore;
+    std::unique_ptr<QTemporaryDir> m_nativeStateBackupDir;
+    QString m_nativeUndoPath;
     IVna* m_vna{nullptr};
 
     DutSimulator m_dut;

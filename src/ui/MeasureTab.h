@@ -3,6 +3,7 @@
 #include <QStringList>
 #include <QVector>
 #include <QWidget>
+#include <QHash>
 #include <array>
 
 class QCheckBox;
@@ -19,7 +20,9 @@ class QPushButton;
 class QSpinBox;
 class QStackedWidget;
 class QTabWidget;
+class QVBoxLayout;
 class S21PlotWidget;
+class S2VnaGraphHost;
 
 /// Вкладка «Измерение» (UI-02 / UI-004): этапы слева переключают центр.
 class MeasureTab final : public QWidget {
@@ -96,6 +99,21 @@ public:
     void setMeasureNowEnabled(bool enabled);
     void setTwoPortExportEnabled(bool enabled);
     void setTwoPortExportInProgress(bool inProgress);
+    void setSingleChannelControls(QWidget* controls);
+    void stopEmbeddedGraph();
+    void showEmbeddedGraph();
+    void setNativeGraphState(const QStringList& parameters,
+                             const QStringList& formats,
+                             int layout);
+    void setNativeMarkerValues(const QStringList& lines,
+                               const QStringList& keys,
+                               const QVector<double>& values,
+                               const QVector<double>& frequenciesGhz);
+    void setNativeStateLoading(bool loading);
+    void setNativeStateUndoAvailable(bool available);
+    void setInstrumentSweepSettings(double fStartHz, double fStopHz, int points,
+                                    int ifbwHz, double powerDbm, int averages);
+    void setNativeOperatingState(bool rfOutput, bool correction);
     void onCalibrateStepFinished(bool ok, int step, const QString& message);
 
     [[nodiscard]] double fStartHz() const;
@@ -118,8 +136,19 @@ public:
     }
 
 signals:
-    /// UI-MEAS-001: разовый съём без серии.
-    void measureNowRequested();
+    void captureForReportRequested();
+    void nativeGraphShown();
+    void nativeGraphHidden();
+    void nativeGraphConfigurationRequested(const QStringList& parameters,
+                                           const QStringList& formats,
+                                           bool separate);
+    void nativeAutoScaleRequested();
+    void nativeMarkerCountChangeRequested(int operation);
+    void nativeMarkerRefreshRequested();
+    void nativeStateFileRequested();
+    void nativeStateUndoRequested();
+    void nativeSweepSettingsApplyRequested();
+    void nativeOperatingStateApplyRequested(bool rfOutput, bool correction);
     void exportTwoPortRequested();
     /// CAL-UI: 0 = one-port OSL, 1 = two-port SOLT; step — enum как int; port 1|2 (для two-port игнор).
     void calibrateStepRequested(int kind, int step, int port, int subclass);
@@ -146,9 +175,8 @@ private:
     QWidget* makeInversePage();
     QWidget* makeValidationPage();
     QWidget* makeGraphsPage();
-    void refreshGraphsPage();
+    void refreshGraphsPage(bool applySelectedFormat = false);
     void refreshMarkerTerminal();
-    void addGraphMarker(double freqGhz);
     void calculateGraphExpression();
     void markSweepSettingsChanged();
     [[nodiscard]] double graphOperandValue(const QString& token, bool* ok) const;
@@ -163,6 +191,8 @@ private:
     [[nodiscard]] int calApplyStep() const;
     [[nodiscard]] int calStepCount() const;
     [[nodiscard]] bool isOnePortCal() const;
+
+    QVBoxLayout* m_graphSideLayout = nullptr;
 
 
     QComboBox* m_frequencyEntryMode = nullptr;
@@ -183,6 +213,8 @@ private:
     QComboBox* m_ifbwUnit = nullptr;
     QDoubleSpinBox* m_power = nullptr;
     QSpinBox* m_averages = nullptr;
+    QCheckBox* m_nativeRfOutput = nullptr;
+    QCheckBox* m_nativeCorrection = nullptr;
 
     double m_fStartHz = 1.246e9;
     double m_fStopHz = 1.346e9;
@@ -241,8 +273,14 @@ private:
     std::array<QVector<double>, 6> m_graphMag;
     std::array<QVector<double>, 6> m_graphPhase;
     std::array<QPushButton*, 6> m_graphTraceButtons{};
-    std::array<S21PlotWidget*, 4> m_graphPlots{};
-    QGridLayout* m_graphGrid = nullptr;
+    QStackedWidget* m_graphStack = nullptr;
+    S2VnaGraphHost* m_s2vnaGraphHost = nullptr;
+    QPushButton* m_nativeGraphButton = nullptr;
+    QPushButton* m_nativeStateButton = nullptr;
+    QPushButton* m_nativeStateUndoButton = nullptr;
+    bool m_nativeUndoAvailable = false;
+    bool m_nativeStateBusy = false;
+    bool m_syncNativeGraphUi = false;
     QPushButton* m_graphMode = nullptr;
     QComboBox* m_graphDisplayFormat = nullptr;
     QPushButton* m_graphMarkerMode = nullptr;
@@ -251,7 +289,11 @@ private:
     QLineEdit* m_graphExpression = nullptr;
     QVector<double> m_graphMarkers;
     QStringList m_graphCalculations;
+    QStringList m_nativeMarkerLines;
+    QHash<QString, double> m_nativeMarkerOperands;
     bool m_graphSeparate = false;
+    QStringList m_nativeAppliedParameters;
+    QStringList m_nativeAppliedFormats;
 
     QString m_vnaCalId;
     bool m_calOk = false;

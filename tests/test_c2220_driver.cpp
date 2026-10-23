@@ -6,6 +6,7 @@
 #include "ScpiSocketTransport.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -85,6 +86,16 @@ public:
     std::string idn{"PLANAR,C2220,STUB001,1.0"};
     int directAccess{0};  // 0/1 ответ на SYST:REC:DIR:ACC?
     std::atomic<int> calibrationSubclass{1};
+    std::atomic<int> triggerSourceBus{1};
+    std::atomic<int> continuous{0};
+    int nativeTraceCount{1};
+    std::array<std::string, 6> nativeParameters{"S11", "S21", "S12", "S22", "S11", "S22"};
+    std::array<std::string, 6> nativeFormats{"MLOG", "MLOG", "MLOG", "MLOG", "SWR", "SWR"};
+    std::array<int, 6> nativeMarkerCounts{};
+    int nativeLayout{1};
+    std::string stateSaveType{"CST"};
+    int rfOutput{1};
+    int correction{1};
 
     void start()
     {
@@ -225,6 +236,104 @@ private:
     void handle(const std::string& cmd, StubSocket s)
     {
         record(cmd);
+        if (cmd == "MMEM:STOR:STYP?") {
+            reply(s, stateSaveType);
+            return;
+        }
+        if (cmd.rfind("MMEM:STOR:STYP ", 0) == 0) {
+            stateSaveType = cmd.substr(15);
+            return;
+        }
+        if (cmd.rfind("MMEM:STOR:STAT \"", 0) == 0) return;
+        if (cmd == "OUTP?") { reply(s, std::to_string(rfOutput)); return; }
+        if (cmd == "OUTP ON" || cmd == "OUTP OFF") {
+            rfOutput = cmd == "OUTP ON";
+            return;
+        }
+        if (cmd == "SENS:CORR:STAT ON" || cmd == "SENS:CORR:STAT OFF") {
+            correction = cmd == "SENS:CORR:STAT ON";
+            return;
+        }
+        if (cmd.rfind("MMEM:LOAD:STAT \"", 0) == 0) {
+            nativeTraceCount = 4;
+            nativeLayout = 7;
+            return;
+        }
+        if (cmd == "CALC1:PAR:COUN?") {
+            reply(s, std::to_string(nativeTraceCount));
+            return;
+        }
+        if (cmd.rfind("CALC1:PAR:COUN ", 0) == 0) {
+            nativeTraceCount = std::stoi(cmd.substr(15));
+            return;
+        }
+        if (cmd == "DISP:WIND1:SPL?") {
+            reply(s, std::to_string(nativeLayout));
+            return;
+        }
+        if (cmd.rfind("DISP:WIND1:SPL ", 0) == 0) {
+            nativeLayout = std::stoi(cmd.substr(15));
+            return;
+        }
+        for (int i = 1; i <= 6; ++i) {
+            const std::string prefix = "CALC1:PAR" + std::to_string(i) + ":DEF";
+            if (cmd == prefix + "?") {
+                reply(s, nativeParameters[static_cast<std::size_t>(i - 1)]);
+                return;
+            }
+            if (cmd.rfind(prefix + " ", 0) == 0) {
+                nativeParameters[static_cast<std::size_t>(i - 1)] = cmd.substr(prefix.size() + 1);
+                return;
+            }
+            const std::string format = "CALC1:TRAC" + std::to_string(i) + ":FORM";
+            if (cmd == format + "?") {
+                reply(s, nativeFormats[static_cast<std::size_t>(i - 1)]);
+                return;
+            }
+            if (cmd.rfind(format + " ", 0) == 0) {
+                nativeFormats[static_cast<std::size_t>(i - 1)] = cmd.substr(format.size() + 1);
+                return;
+            }
+            if (cmd == "DISP:WIND1:TRAC" + std::to_string(i) + ":Y:AUTO") return;
+            const std::string marker = "CALC1:TRAC" + std::to_string(i) + ":MARK";
+            if (cmd == marker + "16:STAT?") {
+                reply(s, "0");
+                return;
+            }
+            if (cmd == marker + ":COUN?") {
+                reply(s, std::to_string(nativeMarkerCounts[static_cast<std::size_t>(i - 1)]));
+                return;
+            }
+            if (cmd.rfind(marker + ":COUN ", 0) == 0) {
+                nativeMarkerCounts[static_cast<std::size_t>(i - 1)] =
+                    std::stoi(cmd.substr(marker.size() + 6));
+                return;
+            }
+            if (cmd.rfind(marker, 0) == 0 && cmd.ends_with(":X?")) {
+                reply(s, "1300000000");
+                return;
+            }
+            if (cmd.rfind(marker, 0) == 0 && cmd.ends_with(":Y?")) {
+                reply(s, "-12.5,0");
+                return;
+            }
+        }
+        if (cmd == "TRIG:SOUR?") {
+            reply(s, triggerSourceBus ? "BUS" : "INT");
+            return;
+        }
+        if (cmd == "INIT:CONT?") {
+            reply(s, continuous ? "1" : "0");
+            return;
+        }
+        if (cmd == "TRIG:SOUR BUS" || cmd == "TRIG:SOUR INT") {
+            triggerSourceBus = (cmd == "TRIG:SOUR BUS");
+            return;
+        }
+        if (cmd == "INIT:CONT ON" || cmd == "INIT:CONT OFF") {
+            continuous = (cmd == "INIT:CONT ON");
+            return;
+        }
 
         if (cmd == "*IDN?") {
             reply(s, idn);
@@ -296,7 +405,7 @@ private:
             return;
         }
         if (cmd == "SENS:CORR:STAT?") {
-            reply(s, "1");
+            reply(s, std::to_string(correction));
             return;
         }
         if (cmd == "CALC:PAR:DEF?") {
@@ -412,6 +521,143 @@ TEST_CASE("AT-01 C2220Vna identify via TCP stub", "[c2220]")
     REQUIRE(fields.model == "C2220");
     REQUIRE(fields.serial == "STUB001");
     REQUIRE(fields.firmware == "1.0");
+}
+
+TEST_CASE("C2220Vna reuses an open socket during repeated live sweeps", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+    vna.connect();
+    const auto commands = stub.commands();
+    REQUIRE(std::count(commands.begin(), commands.end(), "SYST:REC:DIR:ACC?") == 1);
+    REQUIRE(vna.identify().find("C2220") != std::string::npos);
+}
+
+TEST_CASE("C2220Vna native graph restores the prior trigger", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    const auto previous = vna.enable_native_continuous();
+    REQUIRE(previous.source == "BUS");
+    REQUIRE_FALSE(previous.continuous);
+    for (int i = 0; i < 50 && !stub.saw_exact("TRIG:SOUR INT"); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(stub.saw_exact("INIT:CONT ON"));
+    REQUIRE(stub.saw_exact("TRIG:SOUR INT"));
+    REQUIRE(stub.continuous == 1);
+    REQUIRE(stub.triggerSourceBus == 0);
+
+    vna.restore_native_trigger(previous);
+    for (int i = 0; i < 50 && !stub.saw_exact("INIT:CONT OFF"); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(stub.saw_exact("TRIG:SOUR BUS"));
+    REQUIRE(stub.saw_exact("INIT:CONT OFF"));
+    REQUIRE(stub.continuous == 0);
+    REQUIRE(stub.triggerSourceBus == 1);
+}
+
+TEST_CASE("C2220Vna restores S2VNA state and changes one native trace", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    const std::vector<std::string> oneTrace{"S11"};
+    REQUIRE(vna.native_trace_parameters() == oneTrace);
+    REQUIRE_THROWS(vna.set_native_trace_parameter(2, SParameter::S21));
+    REQUIRE_THROWS(vna.load_state("bad\"name.sta"));
+
+    vna.load_state("C:\\states\\21102026.sta");
+    REQUIRE(stub.saw_exact("MMEM:LOAD:STAT \"C:\\states\\21102026.sta\""));
+    const std::vector<std::string> fourTraces{"S11", "S21", "S12", "S22"};
+    REQUIRE(vna.native_trace_parameters() == fourTraces);
+    vna.set_native_trace_parameter(3, SParameter::S22);
+    REQUIRE(stub.saw_exact("CALC1:PAR3:DEF S22"));
+    const std::vector<std::string> changedTraces{"S11", "S21", "S22", "S22"};
+    REQUIRE(vna.native_trace_parameters() == changedTraces);
+}
+
+TEST_CASE("C2220Vna controls S2VNA trace layout formats and markers", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+
+    vna.configure_native_graph({{SParameter::S11, "MLOG"},
+                                {SParameter::S21, "PHAS"},
+                                {SParameter::S22, "SWR"}}, true);
+    const auto state = vna.native_graph_state();
+    REQUIRE(state.parameters == std::vector<std::string>{"S11", "S21", "S22"});
+    REQUIRE(state.formats == std::vector<std::string>{"MLOG", "PHAS", "SWR"});
+    REQUIRE(state.layout == 4);
+    REQUIRE(stub.saw_exact("CALC1:PAR:COUN 3"));
+    REQUIRE(stub.saw_exact("CALC1:TRAC3:FORM SWR"));
+    REQUIRE(stub.saw_exact("DISP:WIND1:SPL 4"));
+    REQUIRE_THROWS(vna.configure_native_graph({{SParameter::S21, "SWR"}}, false));
+
+    vna.configure_native_graph({{SParameter::S11, "MLOG"},
+                                {SParameter::S21, "MLOG"}}, false);
+    REQUIRE(vna.native_graph_state().layout == 1);
+    vna.restore_native_graph_state(state);
+    const auto restored = vna.native_graph_state();
+    REQUIRE(restored.parameters == state.parameters);
+    REQUIRE(restored.formats == state.formats);
+    REQUIRE(restored.layout == state.layout);
+    vna.auto_scale_native_graph();
+    REQUIRE(stub.saw_exact("DISP:WIND1:TRAC3:Y:AUTO"));
+    vna.set_native_marker_count(1, 2);
+    REQUIRE(vna.native_marker_count(1) == 2);
+    const auto markers = vna.native_markers(1);
+    REQUIRE(markers.size() == 2);
+    REQUIRE(markers[0].frequency_hz == Approx(1.3e9));
+    REQUIRE(markers[0].value == Approx(-12.5));
+}
+
+TEST_CASE("C2220Vna backs up full state and applies native sweep without changing traces", "[c2220]")
+{
+    ScpiTcpStub stub;
+    stub.start();
+    ScpiSocketTransport transport("127.0.0.1", stub.port());
+    C2220Vna vna(transport);
+    vna.connect();
+    vna.save_state("C:\\states\\before.sta");
+    REQUIRE(stub.saw_exact("MMEM:STOR:STYP CDST"));
+    REQUIRE(stub.saw_exact("MMEM:STOR:STAT \"C:\\states\\before.sta\""));
+    REQUIRE(stub.saw_exact("MMEM:STOR:STYP CST"));
+
+    SweepConfig requested{};
+    requested.f_start_hz = 4'900'000'000ULL;
+    requested.f_stop_hz = 6'000'000'000ULL;
+    requested.points = 5501;
+    requested.ifbw_hz = 5000;
+    requested.power_dbm = -40.0;
+    requested.averages = 1;
+    (void)vna.apply_native_sweep(requested);
+    REQUIRE(stub.saw_exact("SENS:FREQ:STAR 4900000000"));
+    REQUIRE(stub.saw_exact("SENS:SWE:POIN 5501"));
+    REQUIRE(stub.saw_exact("SOUR:POW -40"));
+    REQUIRE_FALSE(stub.saw_exact("TRIG:SOUR BUS"));
+    const auto flags = vna.native_operating_state();
+    REQUIRE(flags.rf_output);
+    REQUIRE(flags.correction);
+    const auto off = vna.set_native_operating_state(false, false);
+    REQUIRE_FALSE(off.rf_output);
+    REQUIRE_FALSE(off.correction);
+    REQUIRE(stub.saw_exact("OUTP OFF"));
+    REQUIRE(stub.saw_exact("SENS:CORR:STAT OFF"));
 }
 
 TEST_CASE("parse_scpi_idn splits manufacturer,model,serial,firmware", "[c2220]")

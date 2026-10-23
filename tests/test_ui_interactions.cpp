@@ -22,6 +22,7 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPointF>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
@@ -357,6 +358,23 @@ TEST_CASE("plot wheel zooms and reset restores the full range", "[ui]")
     REQUIRE(plot.visibleSpanFraction() == Catch::Approx(1.0));
 }
 
+TEST_CASE("dense live trace renders without drawing every sample", "[ui][plot]")
+{
+    (void)application();
+    S21PlotWidget plot;
+    plot.resize(800, 500);
+    QVector<double> frequency(100001), magnitude(100001, -30.0), phase(100001, 0.0);
+    for (qsizetype i = 0; i < frequency.size(); ++i) {
+        frequency[i] = 1.0 + static_cast<double>(i) / 100000.0;
+    }
+    magnitude[50000] = -1.0;
+    plot.setCurves(frequency, magnitude, phase);
+    QImage image(plot.size(), QImage::Format_ARGB32);
+    plot.render(&image);
+    CHECK_FALSE(image.isNull());
+    CHECK(plot.traceCount() == 1);
+}
+
 TEST_CASE("plot overlays traces and requests multiple markers", "[ui]")
 {
     (void)application();
@@ -408,52 +426,72 @@ TEST_CASE("automatic plot markers calculate minimum maximum and average", "[ui]"
     REQUIRE(statistics.averageFrequencyGhz == Catch::Approx(1.075));
 }
 
-TEST_CASE("partial instrument trace does not erase other S-parameters", "[ui]")
+TEST_CASE("native S2VNA controls select traces formats and layout", "[ui]")
 {
     (void)application();
     MeasureTab tab;
+    QVector<QStringList> parameters;
+    QVector<QStringList> formats;
+    QVector<bool> separate;
+    QObject::connect(&tab, &MeasureTab::nativeGraphConfigurationRequested, &tab,
+                     [&](const QStringList& p, const QStringList& f, bool s) {
+                         parameters << p;
+                         formats << f;
+                         separate << s;
+                     });
     for (const auto* name : {"S11", "S21", "S12", "S22"}) {
         const auto* button = tab.findChild<QPushButton*>(
             QStringLiteral("graphTrace%1").arg(QString::fromLatin1(name)));
         REQUIRE(button != nullptr);
         REQUIRE(button->isChecked());
     }
-    const QVector<double> oldAxis{1.0, 1.1, 1.2};
-    const QVector<double> oldMag{-10.0, -11.0, -12.0};
-    const QVector<double> oldPhase{0.0, 1.0, 2.0};
-    tab.setSparamsCurves(oldAxis,
-                         oldMag, oldPhase,
-                         oldMag, oldPhase,
-                         oldMag, oldPhase,
-                         oldMag, oldPhase);
-    auto* plot = tab.findChild<S21PlotWidget*>(QStringLiteral("graphPlot0"));
-    REQUIRE(plot != nullptr);
-    REQUIRE(plot->traceCount() == 4);
-
-    const QVector<double> newAxis{2.0, 2.1, 2.2, 2.3};
-    const QVector<double> newMag{-20.0, -21.0, -22.0, -23.0};
-    const QVector<double> newPhase{3.0, 4.0, 5.0, 6.0};
-    tab.setSparamsCurves(newAxis,
-                         {}, {},
-                         {}, {},
-                         newMag, newPhase,
-                         {}, {});
-
     auto* s11 = tab.findChild<QPushButton*>(QStringLiteral("graphTraceS11"));
-    auto* s21 = tab.findChild<QPushButton*>(QStringLiteral("graphTraceS21"));
-    auto* s12 = tab.findChild<QPushButton*>(QStringLiteral("graphTraceS12"));
     REQUIRE(s11 != nullptr);
-    REQUIRE(s21 != nullptr);
-    REQUIRE(s12 != nullptr);
-    REQUIRE(plot != nullptr);
+    s11->click();
+    REQUIRE(parameters.size() == 1);
+    CHECK(parameters.last()
+          == QStringList{QStringLiteral("S21"), QStringLiteral("S12"), QStringLiteral("S22")});
+    auto* format = tab.findChild<QComboBox*>(QStringLiteral("graphDisplayFormat"));
+    REQUIRE(format != nullptr);
+    format->setCurrentIndex(format->findData(QStringLiteral("PHAS")));
+    REQUIRE(formats.size() == 2);
+    CHECK(formats.last()
+          == QStringList{QStringLiteral("PHAS"), QStringLiteral("PHAS"),
+                         QStringLiteral("PHAS")});
+    auto* layout = tab.findChild<QPushButton*>(QStringLiteral("nativeTogetherButton"));
+    REQUIRE(layout != nullptr);
+    layout->click();
+    REQUIRE(separate.size() == 3);
+    CHECK(separate.last());
+    tab.setNativeGraphState({QStringLiteral("S11"), QStringLiteral("S21")},
+                            {QStringLiteral("MLOG"), QStringLiteral("MLOG")}, 1);
+    CHECK(parameters.size() == 3);
+    CHECK(layout->text() == QStringLiteral("Отдельно"));
+    tab.setNativeGraphState({QStringLiteral("S11"), QStringLiteral("S21")},
+                            {QStringLiteral("MLOG"), QStringLiteral("PHAS")}, 1);
+    CHECK(format->currentIndex() == -1);
+    layout->click();
+    REQUIRE(formats.size() == 4);
+    CHECK(formats.last() == QStringList{QStringLiteral("MLOG"), QStringLiteral("PHAS")});
+}
 
-    s21->setChecked(false);
-    s11->setChecked(true);
-    REQUIRE(plot->primaryPointCount() == oldAxis.size());
-
-    s11->setChecked(false);
-    s12->setChecked(true);
-    REQUIRE(plot->primaryPointCount() == newAxis.size());
+TEST_CASE("native marker values feed the terminal and calculator", "[ui]")
+{
+    (void)application();
+    MeasureTab tab;
+    tab.setNativeMarkerValues({QStringLiteral("M1 · S21 · 1.3 ГГц: -12.5 дБ")},
+                              {QStringLiteral("M1.FREQ"), QStringLiteral("M1.S21.DB")},
+                              {1.3, -12.5}, {1.3});
+    CHECK(tab.graphMarkerFrequenciesGhz() == QVector<double>{1.3});
+    auto* terminal = tab.findChild<QPlainTextEdit*>(QStringLiteral("graphMarkerTerminal"));
+    REQUIRE(terminal != nullptr);
+    CHECK(terminal->toPlainText().contains(QStringLiteral("-12.5 дБ")));
+    auto* expression = tab.findChild<QLineEdit*>(QStringLiteral("graphCalculatorExpression"));
+    REQUIRE(expression != nullptr);
+    // Вычисление использует только текущие значения, считанные из S2VNA.
+    expression->setText(QStringLiteral("M1.S21.DB - 10"));
+    QMetaObject::invokeMethod(expression, "returnPressed", Qt::DirectConnection);
+    CHECK(terminal->toPlainText().contains(QStringLiteral("-22.5")));
 }
 
 TEST_CASE("two-port mode, center-span entry and report action are explicit", "[ui]")
@@ -514,7 +552,7 @@ TEST_CASE("two-port mode, center-span entry and report action are explicit", "[u
     auto* format = tab.findChild<QComboBox*>(QStringLiteral("graphDisplayFormat"));
     auto* exportButton = tab.findChild<QPushButton*>(QStringLiteral("exportTwoPortReport"));
     REQUIRE(format != nullptr);
-    REQUIRE(format->count() >= 5);
+    REQUIRE(format->count() == 4);
     REQUIRE(exportButton != nullptr);
     REQUIRE_FALSE(exportButton->isEnabled());
     tab.setTwoPortExportEnabled(true);

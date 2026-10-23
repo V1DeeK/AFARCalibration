@@ -109,16 +109,78 @@ QString SingleChannelPanel::sendCommand() const
     return QString::fromStdString(send_command(m_format, m_phCode, m_atCode));
 }
 
+QWidget* SingleChannelPanel::createQuickControls()
+{
+    auto* box = new QGroupBox(QStringLiteral("Настройка 1 канала"));
+    box->setObjectName(QStringLiteral("quickSingleChannelControls"));
+    box->setToolTip(QStringLiteral(
+        "Использует соединение с ППКХ4 из верхней вкладки «Настройка 1 канала». "
+        "Без подключения значения меняются только на экране."));
+    auto* layout = new QVBoxLayout(box);
+    layout->addWidget(new QLabel(QStringLiteral("Фаза"), box));
+    m_quickPhRange = new QSlider(Qt::Horizontal, box);
+    m_quickPhRange->setObjectName(QStringLiteral("quickChannelPhaseSlider"));
+    layout->addWidget(m_quickPhRange);
+    auto* phaseSteps = new QHBoxLayout();
+    auto* phaseDown = new QPushButton(QStringLiteral("−1 шаг"), box);
+    phaseDown->setObjectName(QStringLiteral("quickChannelPhaseDown"));
+    auto* phaseUp = new QPushButton(QStringLiteral("+1 шаг"), box);
+    phaseUp->setObjectName(QStringLiteral("quickChannelPhaseUp"));
+    phaseSteps->addWidget(phaseDown);
+    phaseSteps->addWidget(phaseUp);
+    layout->addLayout(phaseSteps);
+    m_quickPhDeg = new QDoubleSpinBox(box);
+    m_quickPhDeg->setObjectName(QStringLiteral("quickChannelPhaseValue"));
+    m_quickPhDeg->setDecimals(3);
+    m_quickPhDeg->setSuffix(QStringLiteral("°"));
+    layout->addWidget(m_quickPhDeg);
+    layout->addWidget(new QLabel(QStringLiteral("Аттенюация"), box));
+    m_quickAtRange = new QSlider(Qt::Horizontal, box);
+    m_quickAtRange->setObjectName(QStringLiteral("quickChannelAttenSlider"));
+    layout->addWidget(m_quickAtRange);
+    auto* attenSteps = new QHBoxLayout();
+    auto* attenDown = new QPushButton(QStringLiteral("−0.5 дБ"), box);
+    attenDown->setObjectName(QStringLiteral("quickChannelAttenDown"));
+    auto* attenUp = new QPushButton(QStringLiteral("+0.5 дБ"), box);
+    attenUp->setObjectName(QStringLiteral("quickChannelAttenUp"));
+    attenSteps->addWidget(attenDown);
+    attenSteps->addWidget(attenUp);
+    layout->addLayout(attenSteps);
+    m_quickAtDb = new QDoubleSpinBox(box);
+    m_quickAtDb->setObjectName(QStringLiteral("quickChannelAttenValue"));
+    m_quickAtDb->setDecimals(2);
+    m_quickAtDb->setSuffix(QStringLiteral(" дБ"));
+    layout->addWidget(m_quickAtDb);
+
+    connect(m_quickPhRange, &QSlider::valueChanged, this, &SingleChannelPanel::setPhaseCode);
+    connect(phaseDown, &QPushButton::clicked, this, [this]() { setPhaseCode(m_phCode - 1); });
+    connect(phaseUp, &QPushButton::clicked, this, [this]() { setPhaseCode(m_phCode + 1); });
+    connect(m_quickPhDeg, &QDoubleSpinBox::editingFinished, this,
+            [this]() { setPhaseCode(phase_code_from_deg(m_quickPhDeg->value(), m_format.phase)); });
+    connect(m_quickAtRange, &QSlider::valueChanged, this, &SingleChannelPanel::setAttenCode);
+    connect(attenDown, &QPushButton::clicked, this, [this]() { setAttenCode(m_atCode - 1); });
+    connect(attenUp, &QPushButton::clicked, this, [this]() { setAttenCode(m_atCode + 1); });
+    connect(m_quickAtDb, &QDoubleSpinBox::editingFinished, this,
+            [this]() { setAttenCode(atten_code_from_db(m_quickAtDb->value(), m_format.atten)); });
+    render();
+    updateButtons();
+    return box;
+}
+
 void SingleChannelPanel::setPhaseCode(int code)
 {
-    m_phCode = clamp_code(code, m_format.phase);
+    const int next = clamp_code(code, m_format.phase);
+    if (next == m_phCode) return;
+    m_phCode = next;
     render();
     changed();
 }
 
 void SingleChannelPanel::setAttenCode(int code)
 {
-    m_atCode = clamp_code(code, m_format.atten);
+    const int next = clamp_code(code, m_format.atten);
+    if (next == m_atCode) return;
+    m_atCode = next;
     render();
     changed();
 }
@@ -542,6 +604,9 @@ void SingleChannelPanel::updateButtons()
     m_refresh->setEnabled(!open);
     m_swStart->setEnabled(m_connected && !m_sweeping);
     m_swStop->setEnabled(m_sweeping);
+    if (m_quickPhRange) {
+        m_quickPhRange->parentWidget()->setEnabled(!m_sweeping);
+    }
 }
 
 // --- Настройки ---
@@ -697,6 +762,20 @@ void SingleChannelPanel::render()
     m_atVal->setText(QString::number(db, 'f', 2) + QStringLiteral(" дБ"));
     m_phCodeLabel->setText(QStringLiteral("код %1 / %2").arg(m_phCode).arg(binary(m_phCode, m_format.phase.width)));
     m_atCodeLabel->setText(QStringLiteral("код %1 / %2").arg(m_atCode).arg(binary(m_atCode, m_format.atten.width)));
+    if (m_quickPhRange) {
+        const QSignalBlocker b1(m_quickPhRange), b2(m_quickPhDeg);
+        const QSignalBlocker b3(m_quickAtRange), b4(m_quickAtDb);
+        m_quickPhRange->setRange(0, phMax);
+        m_quickAtRange->setRange(0, atMax);
+        m_quickPhRange->setValue(m_phCode);
+        m_quickAtRange->setValue(m_atCode);
+        m_quickPhDeg->setRange(0.0, phase_deg(phMax, m_format.phase));
+        m_quickPhDeg->setSingleStep(m_format.phase.lsb);
+        m_quickAtDb->setRange(atten_db(0, m_format.atten), 0.0);
+        m_quickAtDb->setSingleStep(m_format.atten.lsb);
+        if (!m_quickPhDeg->hasFocus()) m_quickPhDeg->setValue(deg);
+        if (!m_quickAtDb->hasFocus()) m_quickAtDb->setValue(db);
+    }
 
     const bool overlap = fields_overlap(m_format);
     const bool outside = fields_outside(m_format);

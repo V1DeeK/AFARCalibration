@@ -271,6 +271,8 @@ add_library(afar_app_ui STATIC
     ui/MeasureTab.h
     ui/S21PlotWidget.cpp
     ui/S21PlotWidget.h
+    ui/S2VnaGraphHost.cpp
+    ui/S2VnaGraphHost.h
     ui/CodeMatrixTab.cpp
     ui/CodeMatrixTab.h
     ui/AcceptanceAtTab.cpp

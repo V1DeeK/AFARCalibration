@@ -12,8 +12,12 @@
 #include "afar/ScpiIdn.h"
 #include "afar/C2220Limits.h"
 #include <QDateTime>
+#include <QDir>
+#include <QFileInfo>
+#include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
+#include <QUuid>
 
 #include <cmath>
 #include <complex>
@@ -216,6 +220,9 @@ MeasureWorker::~MeasureWorker() = default;
 void MeasureWorker::rebuildVna()
 {
     std::lock_guard lock(m_transportMutex);
+    m_nativeTriggerBefore.reset();
+    m_nativeC2220.reset();
+    m_nativeSocket.reset();
     m_c2220.reset();
     m_socket.reset();
     m_simVna.reset();
@@ -247,6 +254,40 @@ void MeasureWorker::interruptIo() noexcept
     std::lock_guard lock(m_transportMutex);
     if (m_socket) {
         m_socket->request_interrupt();
+    }
+    if (m_nativeSocket) {
+        m_nativeSocket->request_interrupt();
+    }
+}
+
+C2220Vna* MeasureWorker::nativeControlsVna()
+{
+    if (m_c2220 && m_c2220->connected()) return m_c2220.get();
+    // Встроенный TView принадлежит только локальной S2VNA; путь .sta тоже локальный.
+    if (m_host != QStringLiteral("127.0.0.1")
+        && m_host.compare(QStringLiteral("localhost"), Qt::CaseInsensitive) != 0
+        && m_host != QStringLiteral("::1")) {
+        throw std::runtime_error("Native S2VNA controls require localhost");
+    }
+    if (m_nativeC2220 && m_nativeSocket && m_nativeSocket->is_connected()) {
+        return m_nativeC2220.get();
+    }
+    {
+        std::lock_guard lock(m_transportMutex);
+        m_nativeC2220.reset();
+        m_nativeSocket = std::make_unique<ScpiSocketTransport>(m_host.toStdString(),
+                                                                static_cast<std::uint16_t>(m_port));
+        m_nativeC2220 = std::make_unique<C2220Vna>(*m_nativeSocket);
+    }
+    try {
+        m_nativeC2220->connect();
+        m_nativeC2220->identify(); // Demo Mode допустим только для управления окном S2VNA.
+        return m_nativeC2220.get();
+    } catch (...) {
+        std::lock_guard lock(m_transportMutex);
+        m_nativeC2220.reset();
+        m_nativeSocket.reset();
+        throw;
     }
 }
 
@@ -306,6 +347,8 @@ void MeasureWorker::configureVna(int backend,
     m_measureRetries = measureRetries >= 0 ? measureRetries : 2;
     m_lastTwoPortMeasurement.reset();
     emit twoPortExportAvailable(false);
+    m_nativeUndoPath.clear();
+    emit nativeStateUndoAvailable(false);
     rebuildVna();
     m_orch = std::make_unique<afar::MeasurementOrchestrator>(activeVna(), activeDut());
     emitConnection();
@@ -411,6 +454,10 @@ void MeasureWorker::probeVna()
 
 void MeasureWorker::disconnectVna()
 {
+    leaveNativeGraph();
+    m_nativeUndoPath.clear();
+    emit nativeStateUndoAvailable(false);
+    if (m_nativeC2220) m_nativeC2220->abort();
     if (m_vna) {
         m_vna->abort();
     }
@@ -419,6 +466,373 @@ void MeasureWorker::disconnectVna()
     emit twoPortExportAvailable(false);
     emitConnection();
     emit vnaDisconnected();
+}
+
+void MeasureWorker::enterNativeGraph()
+{
+    if (m_nativeTriggerBefore || m_backend != BackendSocket || !m_c2220
+        || !m_c2220->connected() || !m_orch) return;
+    const auto st = m_orch->state();
+    if (st != afar::RunState::Idle && st != afar::RunState::Ready
+        && st != afar::RunState::Complete && st != afar::RunState::Aborted
+        && st != afar::RunState::Error) return;
+    try {
+        m_nativeTriggerBefore = m_c2220->enable_native_continuous();
+        emit diagnostic(QStringLiteral("График S2VNA: непрерывное обновление включено"));
+    } catch (const std::exception& e) {
+        emit diagnostic(QStringLiteral("График S2VNA: не удалось включить обновление: %1")
+                            .arg(QString::fromUtf8(e.what())));
+    }
+}
+
+void MeasureWorker::leaveNativeGraph()
+{
+    if (!m_nativeTriggerBefore) return;
+    const auto previous = *m_nativeTriggerBefore;
+    m_nativeTriggerBefore.reset();
+    if (!m_c2220 || !m_c2220->connected()) return;
+    try {
+        m_c2220->restore_native_trigger(previous);
+    } catch (const std::exception& e) {
+        emit diagnostic(QStringLiteral("График S2VNA: не удалось восстановить запуск: %1")
+                            .arg(QString::fromUtf8(e.what())));
+    }
+}
+
+void MeasureWorker::readNativeTraces()
+{
+    try {
+        QStringList parameters;
+        QStringList formats;
+        const auto state = nativeControlsVna()->native_graph_state();
+        for (const auto& p : state.parameters) parameters << QString::fromStdString(p);
+        for (const auto& f : state.formats) formats << QString::fromStdString(f);
+        emit nativeGraphStateChanged(parameters, formats, state.layout, {});
+    } catch (const std::exception& e) {
+        emit nativeGraphStateChanged({}, {}, 0, QString::fromUtf8(e.what()));
+    }
+}
+
+void MeasureWorker::configureNativeGraph(const QStringList& parameters,
+                                         const QStringList& formats,
+                                         bool separate)
+{
+    const auto st = m_orch->state();
+    if (st != afar::RunState::Idle && st != afar::RunState::Complete
+        && st != afar::RunState::Aborted && st != afar::RunState::Error) {
+        emit nativeGraphStateChanged({}, {}, 0,
+                                     QStringLiteral("Настройка графиков недоступна во время серии"));
+        return;
+    }
+    try {
+        if (parameters.size() != formats.size()) {
+            throw std::invalid_argument("Native graph parameter/format count mismatch");
+        }
+        std::vector<C2220Vna::NativeTrace> traces;
+        traces.reserve(parameters.size());
+        for (int i = 0; i < parameters.size(); ++i) {
+            const QString name = parameters[i].trimmed().toUpper();
+            const SParameter parameter = name == QStringLiteral("S11") ? SParameter::S11
+                : name == QStringLiteral("S21") ? SParameter::S21
+                : name == QStringLiteral("S12") ? SParameter::S12
+                : name == QStringLiteral("S22") ? SParameter::S22
+                : throw std::invalid_argument("Unknown S-parameter");
+            traces.push_back({parameter, formats[i].toUpper().toStdString()});
+        }
+        auto* native = nativeControlsVna();
+        native->configure_native_graph(traces, separate);
+        native->auto_scale_native_graph();
+        readNativeTraces();
+        readNativeMarkers();
+    } catch (const std::exception& e) {
+        emit nativeGraphStateChanged({}, {}, 0, QString::fromUtf8(e.what()));
+    }
+}
+
+void MeasureWorker::autoScaleNativeGraph()
+{
+    try {
+        nativeControlsVna()->auto_scale_native_graph();
+        emit diagnostic(QStringLiteral("Масштаб графиков S2VNA обновлён"));
+    } catch (const std::exception& e) {
+        emit diagnostic(QStringLiteral("Автомасштаб S2VNA: %1")
+                            .arg(QString::fromUtf8(e.what())));
+    }
+}
+
+void MeasureWorker::changeNativeMarkerCount(int operation)
+{
+    try {
+        auto* native = nativeControlsVna();
+        const auto state = native->native_graph_state();
+        for (int trace = 1; trace <= static_cast<int>(state.parameters.size()); ++trace) {
+            if (native->native_reference_marker_active(trace)) {
+                throw std::runtime_error("Reference marker is active; change markers in S2VNA");
+            }
+        }
+        const int count = native->native_marker_count(1);
+        const int target = operation == 0 ? 0
+            : operation > 0 ? std::min(15, count + 1) : std::max(0, count - 1);
+        for (int trace = 1; trace <= static_cast<int>(state.parameters.size()); ++trace) {
+            native->set_native_marker_count(trace, target);
+        }
+        readNativeMarkers();
+    } catch (const std::exception& e) {
+        emit nativeMarkersChanged({QStringLiteral("Маркеры S2VNA: %1")
+                                       .arg(QString::fromUtf8(e.what()))}, {}, {}, {});
+    }
+}
+
+void MeasureWorker::readNativeMarkers()
+{
+    try {
+        auto* native = nativeControlsVna();
+        const auto state = native->native_graph_state();
+        QStringList lines;
+        QStringList keys;
+        QVector<double> values;
+        QVector<double> frequencies;
+        for (int trace = 1; trace <= static_cast<int>(state.parameters.size()); ++trace) {
+            const QString parameter = QString::fromStdString(state.parameters[trace - 1]);
+            const QString format = QString::fromStdString(state.formats[trace - 1]);
+            const QString unit = format == QStringLiteral("MLOG") ? QStringLiteral(" дБ")
+                : format == QStringLiteral("PHAS") ? QStringLiteral("°")
+                : format == QStringLiteral("GDEL") ? QStringLiteral(" с") : QString();
+            const auto markers = native->native_markers(trace);
+            for (int i = 0; i < static_cast<int>(markers.size()); ++i) {
+                const double freqGhz = markers[i].frequency_hz / 1e9;
+                if (trace == 1) {
+                    frequencies << freqGhz;
+                    keys << QStringLiteral("M%1.FREQ").arg(i + 1);
+                    values << freqGhz;
+                }
+                lines << QStringLiteral("M%1 · %2 · %3 ГГц: %4%5")
+                             .arg(i + 1).arg(parameter)
+                             .arg(freqGhz, 0, 'f', 6)
+                             .arg(markers[i].value, 0, 'g', 10).arg(unit);
+                const QString suffix = format == QStringLiteral("MLOG") ? QStringLiteral("DB")
+                    : format == QStringLiteral("PHAS") ? QStringLiteral("PHASE")
+                    : QStringLiteral("VALUE");
+                keys << QStringLiteral("M%1.%2.%3").arg(i + 1).arg(parameter, suffix);
+                values << markers[i].value;
+                if (format == QStringLiteral("SWR")) {
+                    keys << QStringLiteral("M%1.VSWR%2")
+                                .arg(i + 1).arg(parameter == QStringLiteral("S11") ? 1 : 2);
+                    values << markers[i].value;
+                }
+            }
+        }
+        if (lines.isEmpty()) lines << QStringLiteral("Маркеров нет. Нажмите «Добавить маркер».");
+        emit nativeMarkersChanged(lines, keys, values, frequencies);
+    } catch (const std::exception& e) {
+        emit nativeMarkersChanged({QStringLiteral("Маркеры S2VNA: %1")
+                                       .arg(QString::fromUtf8(e.what()))}, {}, {}, {});
+    }
+}
+
+void MeasureWorker::loadNativeState(const QString& path)
+{
+    const auto st = m_orch->state();
+    if (st != afar::RunState::Idle && st != afar::RunState::Complete
+        && st != afar::RunState::Aborted && st != afar::RunState::Error) {
+        emit nativeStateLoaded(false, QStringLiteral("Загрузка состояния недоступна во время серии"));
+        return;
+    }
+    const QFileInfo file(path);
+    if (!file.isFile() || !file.isReadable()
+        || file.suffix().compare(QStringLiteral("sta"), Qt::CaseInsensitive) != 0) {
+        emit nativeStateLoaded(false, QStringLiteral("Выберите доступный файл состояния .sta"));
+        return;
+    }
+    QString backup;
+    bool loadStarted = false;
+    try {
+        leaveNativeGraph();
+        auto* native = nativeControlsVna();
+        if (!m_nativeStateBackupDir) {
+            m_nativeStateBackupDir = std::make_unique<QTemporaryDir>();
+        }
+        if (!m_nativeStateBackupDir->isValid()) {
+            throw std::runtime_error("Не удалось создать временный каталог для отката");
+        }
+        backup = m_nativeStateBackupDir->filePath(
+            QStringLiteral("before-%1.sta").arg(QUuid::createUuid().toString(QUuid::Id128)));
+        native->save_state(QDir::toNativeSeparators(backup).toLocal8Bit().toStdString());
+        const QFileInfo backupFile(backup);
+        if (!backupFile.isFile() || backupFile.size() <= 0) {
+            throw std::runtime_error("S2VNA не сохранила исходное состояние для отката");
+        }
+        loadStarted = true;
+        native->load_state(QDir::toNativeSeparators(file.absoluteFilePath())
+                               .toLocal8Bit().toStdString());
+        const auto applied = native->read_config();
+        const auto operating = native->native_operating_state();
+        std::string validation;
+        if (!afar::c2220::validateSweep(applied, validation)) {
+            throw std::runtime_error("S2VNA загрузила недопустимые параметры: " + validation);
+        }
+        m_lastTwoPortMeasurement.reset();
+        emit twoPortExportAvailable(false);
+        m_nativeUndoPath = backup;
+        emit nativeStateUndoAvailable(true);
+        emit nativeSweepSettingsChanged(
+            static_cast<double>(applied.f_start_hz), static_cast<double>(applied.f_stop_hz),
+            static_cast<int>(applied.points), static_cast<int>(applied.ifbw_hz),
+            applied.power_dbm, static_cast<int>(applied.averages));
+        emit nativeOperatingStateChanged(operating.rf_output, operating.correction);
+        readNativeTraces();
+        readNativeMarkers();
+        try {
+            emit vnaCalibrationDetected(QString::fromStdString(native->current_calibration_kit_id()),
+                                        native->correction_enabled());
+        } catch (const std::exception& e) {
+            emit diagnostic(QStringLiteral("Состояние загружено, но сведения о коррекции не прочитаны: %1")
+                                .arg(QString::fromUtf8(e.what())));
+        }
+        emit nativeStateLoaded(true, QStringLiteral("Состояние S2VNA загружено"));
+    } catch (const std::exception& e) {
+        QString message = QString::fromUtf8(e.what());
+        if (loadStarted) {
+            try {
+                nativeControlsVna()->load_state(QDir::toNativeSeparators(backup)
+                                                    .toLocal8Bit().toStdString());
+                message += QStringLiteral("; прежнее состояние восстановлено");
+            } catch (const std::exception& rollbackError) {
+                message += QStringLiteral("; автоматический откат не удался: %1")
+                               .arg(QString::fromUtf8(rollbackError.what()));
+                // Оставить оператору возможность повторить откат, пока жив сеанс.
+                m_nativeUndoPath = backup;
+                emit nativeStateUndoAvailable(true);
+            }
+        }
+        emit nativeStateLoaded(false, message);
+    }
+}
+
+void MeasureWorker::undoNativeState()
+{
+    const auto st = m_orch->state();
+    if (st != afar::RunState::Idle && st != afar::RunState::Complete
+        && st != afar::RunState::Aborted && st != afar::RunState::Error) {
+        emit nativeStateLoaded(false, QStringLiteral("Откат состояния недоступен во время серии"));
+        return;
+    }
+    if (m_nativeUndoPath.isEmpty() || !QFileInfo::exists(m_nativeUndoPath)) {
+        emit nativeStateLoaded(false, QStringLiteral("Нет сохранённого состояния для отката"));
+        return;
+    }
+    try {
+        leaveNativeGraph();
+        auto* native = nativeControlsVna();
+        native->load_state(QDir::toNativeSeparators(m_nativeUndoPath).toLocal8Bit().toStdString());
+        const auto applied = native->read_config();
+        const auto operating = native->native_operating_state();
+        m_lastTwoPortMeasurement.reset();
+        emit twoPortExportAvailable(false);
+        emit nativeSweepSettingsChanged(
+            static_cast<double>(applied.f_start_hz), static_cast<double>(applied.f_stop_hz),
+            static_cast<int>(applied.points), static_cast<int>(applied.ifbw_hz),
+            applied.power_dbm, static_cast<int>(applied.averages));
+        emit nativeOperatingStateChanged(operating.rf_output, operating.correction);
+        readNativeTraces();
+        readNativeMarkers();
+        try {
+            emit vnaCalibrationDetected(QString::fromStdString(native->current_calibration_kit_id()),
+                                        native->correction_enabled());
+        } catch (const std::exception& e) {
+            emit diagnostic(QStringLiteral("Откат выполнен, но сведения о коррекции не прочитаны: %1")
+                                .arg(QString::fromUtf8(e.what())));
+        }
+        m_nativeUndoPath.clear();
+        emit nativeStateUndoAvailable(false);
+        emit nativeStateLoaded(true, QStringLiteral("Предыдущее состояние S2VNA восстановлено"));
+    } catch (const std::exception& e) {
+        emit nativeStateLoaded(false, QString::fromUtf8(e.what()));
+    }
+}
+
+void MeasureWorker::applyNativeSweep(double fStartHz, double fStopHz, int points,
+                                     int ifbwHz, double powerDbm, int averages)
+{
+    const auto st = m_orch->state();
+    if (st != afar::RunState::Idle && st != afar::RunState::Complete
+        && st != afar::RunState::Aborted && st != afar::RunState::Error) {
+        emit diagnostic(QStringLiteral("Изменение параметров недоступно во время серии"));
+        return;
+    }
+    if (m_backend != BackendSocket || !m_c2220 || !m_c2220->connected()) {
+        emit diagnostic(QStringLiteral("Сначала включите соединение с C2220 через S2VNA"));
+        return;
+    }
+    try {
+        if (!std::isfinite(fStartHz) || !std::isfinite(fStopHz)
+            || !std::isfinite(powerDbm) || fStartHz < 0 || fStopHz < 0
+            || points < 0 || ifbwHz < 0 || averages < 0) {
+            throw std::invalid_argument("Некорректные числовые параметры свипа");
+        }
+        SweepConfig requested{};
+        requested.f_start_hz = static_cast<std::uint64_t>(std::llround(fStartHz));
+        requested.f_stop_hz = static_cast<std::uint64_t>(std::llround(fStopHz));
+        requested.points = static_cast<std::uint32_t>(points);
+        requested.ifbw_hz = static_cast<std::uint32_t>(ifbwHz);
+        requested.power_dbm = powerDbm;
+        requested.averages = static_cast<std::uint16_t>(averages);
+        const auto applied = m_c2220->apply_native_sweep(requested);
+        emit nativeSweepSettingsChanged(
+            static_cast<double>(applied.f_start_hz), static_cast<double>(applied.f_stop_hz),
+            static_cast<int>(applied.points), static_cast<int>(applied.ifbw_hz),
+            applied.power_dbm, static_cast<int>(applied.averages));
+        const auto operating = m_c2220->native_operating_state();
+        emit nativeOperatingStateChanged(operating.rf_output, operating.correction);
+        emit diagnostic(QStringLiteral("Параметры свипа применены к S2VNA"));
+        try {
+            emit vnaCalibrationDetected(
+                QString::fromStdString(m_c2220->current_calibration_kit_id()),
+                m_c2220->correction_enabled());
+        } catch (const std::exception& e) {
+            emit diagnostic(QStringLiteral("Параметры применены, но сведения о коррекции не прочитаны: %1")
+                                .arg(QString::fromUtf8(e.what())));
+        }
+    } catch (const std::exception& e) {
+        // SCPI-применение могло завершиться частично: показать реальные значения прибора.
+        try {
+            const auto actual = m_c2220->read_config();
+            emit nativeSweepSettingsChanged(
+                static_cast<double>(actual.f_start_hz), static_cast<double>(actual.f_stop_hz),
+                static_cast<int>(actual.points), static_cast<int>(actual.ifbw_hz),
+                actual.power_dbm, static_cast<int>(actual.averages));
+        } catch (...) {}
+        emit diagnostic(QStringLiteral("Не удалось применить параметры к S2VNA: %1")
+                            .arg(QString::fromUtf8(e.what())));
+    }
+}
+
+void MeasureWorker::applyNativeOperatingState(bool rfOutput, bool correction)
+{
+    const auto st = m_orch->state();
+    if (st != afar::RunState::Idle && st != afar::RunState::Complete
+        && st != afar::RunState::Aborted && st != afar::RunState::Error) {
+        emit diagnostic(QStringLiteral("ВЧ-выход и коррекцию нельзя менять во время серии"));
+        return;
+    }
+    if (m_backend != BackendSocket || !m_c2220 || !m_c2220->connected()) {
+        emit diagnostic(QStringLiteral("Сначала включите соединение с C2220 через S2VNA"));
+        return;
+    }
+    try {
+        const auto state = m_c2220->set_native_operating_state(rfOutput, correction);
+        emit nativeOperatingStateChanged(state.rf_output, state.correction);
+        emit vnaCalibrationDetected(QString::fromStdString(m_c2220->current_calibration_kit_id()),
+                                    state.correction);
+        emit diagnostic(QStringLiteral("ВЧ-выход и коррекция применены к S2VNA"));
+    } catch (const std::exception& e) {
+        try {
+            const auto actual = m_c2220->native_operating_state();
+            emit nativeOperatingStateChanged(actual.rf_output, actual.correction);
+        } catch (...) {}
+        emit diagnostic(QStringLiteral("Не удалось применить ВЧ/коррекцию: %1")
+                            .arg(QString::fromUtf8(e.what())));
+    }
 }
 
 void MeasureWorker::simulateScpiError()
@@ -553,6 +967,16 @@ void MeasureWorker::measureNow(double fStartHz,
         return;
     }
 
+    std::optional<C2220Vna::NativeGraphState> graphBefore;
+    if (m_backend == BackendSocket && m_c2220 && m_c2220->connected()) {
+        try {
+            graphBefore = m_c2220->native_graph_state();
+        } catch (const std::exception& e) {
+            emit diagnostic(QStringLiteral("Не удалось сохранить вид графиков S2VNA: %1")
+                                .arg(QString::fromUtf8(e.what())));
+        }
+    }
+
     emit operationProgress(QStringLiteral("Измеряется S11"), 0, 4);
     int readyCount = 0;
     std::string diag;
@@ -575,6 +999,25 @@ void MeasureWorker::measureNow(double fStartHz,
                 readyCount, 4);
             emit diagnostic(QStringLiteral("Получен %1 — график обновлён").arg(name));
         });
+    if (graphBefore && m_c2220 && m_c2220->connected()) {
+        try {
+            m_c2220->restore_native_graph_state(*graphBefore);
+            readNativeTraces();
+            readNativeMarkers();
+        } catch (const std::exception& e) {
+            emit diagnostic(QStringLiteral("Измерение завершено, но вид графиков S2VNA не "
+                                           "восстановлен: %1")
+                                .arg(QString::fromUtf8(e.what())));
+        }
+    }
+    if (m_nativeTriggerBefore && m_c2220 && m_c2220->connected()) {
+        try {
+            (void)m_c2220->enable_native_continuous();
+        } catch (const std::exception& e) {
+            emit diagnostic(QStringLiteral("Не удалось возобновить графики S2VNA: %1")
+                                .arg(QString::fromUtf8(e.what())));
+        }
+    }
     emitConnection();
     emitState();
     if (ok) {
@@ -1577,6 +2020,8 @@ void MeasureWorker::requestCellPreview(int channel, int attCode, int phase)
 
 void MeasureWorker::shutdown()
 {
+    leaveNativeGraph();
+    if (m_nativeC2220) m_nativeC2220->abort();
     m_timer->stop();
     if (m_orch && (m_orch->state() == afar::RunState::Running
                    || m_orch->state() == afar::RunState::Paused

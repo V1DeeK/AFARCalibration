@@ -3,7 +3,9 @@
 #include "afar/C2220Limits.h"
 #include "NumberText.h"
 
+#include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
@@ -200,6 +202,7 @@ void C2220Vna::check_direct_access()
 
 void C2220Vna::connect()
 {
+    if (connected_ && transport_.is_connected()) return;
     transport_.set_io_timeout_ms(profile_.connect_timeout_ms);
     transport_.connect();
     connected_ = true;
@@ -249,6 +252,375 @@ void C2220Vna::configure(const SweepConfig& config)
 
     config_ = config;
     configured_ = true;
+}
+
+C2220Vna::TriggerState C2220Vna::enable_native_continuous()
+{
+    require_connected("enable_native_continuous");
+    const std::string source = trim_scpi_text(query("TRIG:SOUR?"));
+    const std::string continuous = trim_scpi_text(query("INIT:CONT?"));
+    if (source != "INT" && source != "EXT" && source != "BUS" && source != "MAN") {
+        throw std::runtime_error("C2220Vna: unknown trigger source: " + source);
+    }
+    if (continuous != "0" && continuous != "1"
+        && continuous != "ON" && continuous != "OFF") {
+        throw std::runtime_error("C2220Vna: unknown continuous mode: " + continuous);
+    }
+    const TriggerState previous{source, continuous == "1" || continuous == "ON"};
+    try {
+        if (!previous.continuous) write_cmd("INIT:CONT ON");
+        if (previous.source != "INT") write_cmd("TRIG:SOUR INT");
+    } catch (...) {
+        try {
+            write_cmd("TRIG:SOUR " + previous.source);
+            write_cmd(std::string("INIT:CONT ") + (previous.continuous ? "ON" : "OFF"));
+        } catch (...) {
+        }
+        throw;
+    }
+    return previous;
+}
+
+void C2220Vna::restore_native_trigger(const TriggerState& previous)
+{
+    require_connected("restore_native_trigger");
+    // Если настройки успел изменить оператор или другой сценарий, не затрём их.
+    if (trim_scpi_text(query("TRIG:SOUR?")) != "INT"
+        || !scpi_state_is_on(query("INIT:CONT?"))) {
+        return;
+    }
+    if (previous.source != "INT") write_cmd("TRIG:SOUR " + previous.source);
+    if (!previous.continuous) write_cmd("INIT:CONT OFF");
+}
+
+void C2220Vna::load_state(const std::string& path)
+{
+    require_connected("load_state");
+    if (path.empty() || path.find_first_of("\"\r\n") != std::string::npos) {
+        throw std::invalid_argument("C2220Vna: invalid state file path");
+    }
+    configured_ = false; // После попытки восстановления предыдущая SweepConfig уже ненадёжна.
+    write_cmd("MMEM:LOAD:STAT \"" + path + "\"");
+    if (trim_scpi_text(query("*OPC?")) != "1") {
+        throw std::runtime_error("C2220Vna: state restore did not complete");
+    }
+    const auto errors = drain_errors();
+    if (!errors.empty()) {
+        throw std::runtime_error("C2220Vna: state restore failed: " + errors.front());
+    }
+}
+
+void C2220Vna::save_state(const std::string& path)
+{
+    require_connected("save_state");
+    if (path.empty() || path.find_first_of("\"\r\n") != std::string::npos) {
+        throw std::invalid_argument("C2220Vna: invalid state file path");
+    }
+    const auto previous = trim_scpi_text(query("MMEM:STOR:STYP?"));
+    if (previous != "STAT" && previous != "CST" && previous != "DST"
+        && previous != "CDST" && previous != "CMST") {
+        throw std::runtime_error("C2220Vna: unknown state save type: " + previous);
+    }
+    const bool changed = previous != "CDST";
+    try {
+        if (changed) write_cmd("MMEM:STOR:STYP CDST");
+        write_cmd("MMEM:STOR:STAT \"" + path + "\"");
+        if (trim_scpi_text(query("*OPC?")) != "1") {
+            throw std::runtime_error("C2220Vna: state save did not complete");
+        }
+        const auto errors = drain_errors();
+        if (!errors.empty()) {
+            throw std::runtime_error("C2220Vna: state save failed: " + errors.front());
+        }
+    } catch (...) {
+        if (changed) {
+            try { write_cmd("MMEM:STOR:STYP " + previous); } catch (...) {}
+        }
+        throw;
+    }
+    if (changed) {
+        write_cmd("MMEM:STOR:STYP " + previous);
+        if (trim_scpi_text(query("MMEM:STOR:STYP?")) != previous) {
+            throw std::runtime_error("C2220Vna: state save type was not restored");
+        }
+    }
+}
+
+SweepConfig C2220Vna::apply_native_sweep(const SweepConfig& config)
+{
+    require_connected("apply_native_sweep");
+    std::string diagnostics;
+    if (!afar::c2220::validateSweep(config, diagnostics)) {
+        throw std::invalid_argument("C2220Vna: " + diagnostics);
+    }
+    write_cmd("SENS:FREQ:STAR " + std::to_string(config.f_start_hz));
+    write_cmd("SENS:FREQ:STOP " + std::to_string(config.f_stop_hz));
+    write_cmd("SENS:SWE:POIN " + std::to_string(config.points));
+    write_cmd("SENS:BAND " + std::to_string(config.ifbw_hz));
+    write_cmd("SOUR:POW " + format_double(config.power_dbm));
+    write_cmd("SENS:AVER:COUN " + std::to_string(config.averages));
+    write_cmd(std::string("SENS:AVER ") + (config.averages > 1 ? "ON" : "OFF"));
+    write_cmd(std::string("TRIG:AVER ") + (config.averages > 1 ? "ON" : "OFF"));
+    if (trim_scpi_text(query("*OPC?")) != "1") {
+        throw std::runtime_error("C2220Vna: sweep update did not complete");
+    }
+    const auto errors = drain_errors();
+    if (!errors.empty()) {
+        throw std::runtime_error("C2220Vna: sweep update failed: " + errors.front());
+    }
+    return read_config();
+}
+
+C2220Vna::NativeOperatingState C2220Vna::native_operating_state()
+{
+    require_connected("native_operating_state");
+    const auto parse = [](const std::string& value) {
+        const auto text = trim_scpi_text(value);
+        if (text == "1" || text == "ON") return true;
+        if (text == "0" || text == "OFF") return false;
+        throw std::runtime_error("C2220Vna: invalid RF/correction state: " + text);
+    };
+    return {parse(query("OUTP?")), parse(query("SENS:CORR:STAT?"))};
+}
+
+C2220Vna::NativeOperatingState C2220Vna::set_native_operating_state(
+    bool rf_output, bool correction)
+{
+    require_connected("set_native_operating_state");
+    const auto current = native_operating_state();
+    if (!rf_output && current.rf_output) write_cmd("OUTP OFF");
+    if (current.correction != correction) {
+        write_cmd(std::string("SENS:CORR:STAT ") + (correction ? "ON" : "OFF"));
+    }
+    if (rf_output && !current.rf_output) write_cmd("OUTP ON");
+    if (trim_scpi_text(query("*OPC?")) != "1") {
+        throw std::runtime_error("C2220Vna: RF/correction update did not complete");
+    }
+    const auto errors = drain_errors();
+    if (!errors.empty()) {
+        throw std::runtime_error("C2220Vna: RF/correction update failed: " + errors.front());
+    }
+    const auto applied = native_operating_state();
+    if (applied.rf_output != rf_output || applied.correction != correction) {
+        throw std::runtime_error("C2220Vna: RF/correction readback mismatch");
+    }
+    return applied;
+}
+
+C2220Vna::NativeGraphState C2220Vna::native_graph_state()
+{
+    require_connected("native_graph_state");
+    const int count = static_cast<int>(parse_single_double(query("CALC1:PAR:COUN?"),
+                                                            "CALC1:PAR:COUN?"));
+    if (count < 1 || count > 16) {
+        throw std::runtime_error("C2220Vna: invalid native trace count");
+    }
+    NativeGraphState state;
+    state.layout = static_cast<int>(parse_single_double(query("DISP:WIND1:SPL?"),
+                                                         "DISP:WIND1:SPL?"));
+    for (int trace = 1; trace <= std::min(count, 6); ++trace) {
+        const std::string number = std::to_string(trace);
+        state.parameters.push_back(trim_scpi_text(query("CALC1:PAR" + number + ":DEF?")));
+        state.formats.push_back(trim_scpi_text(query("CALC1:TRAC" + number + ":FORM?")));
+    }
+    return state;
+}
+
+void C2220Vna::configure_native_graph(const std::vector<NativeTrace>& traces, bool separate)
+{
+    require_connected("configure_native_graph");
+    if (traces.empty() || traces.size() > 6) {
+        throw std::invalid_argument("C2220Vna: native graph needs 1..6 traces");
+    }
+    for (const auto& trace : traces) {
+        if (trace.format != "MLOG" && trace.format != "MLIN" && trace.format != "PHAS"
+            && trace.format != "GDEL" && trace.format != "SWR") {
+            throw std::invalid_argument("C2220Vna: unsupported native graph format");
+        }
+        if (trace.format == "SWR" && trace.parameter != SParameter::S11
+            && trace.parameter != SParameter::S22) {
+            throw std::invalid_argument("C2220Vna: SWR requires S11 or S22");
+        }
+    }
+    const int count = static_cast<int>(traces.size());
+    const int layout = !separate || count == 1 ? 1
+        : count == 2 ? 2 : count == 3 ? 4 : count == 4 ? 7 : 9;
+    write_cmd("CALC1:PAR:COUN " + std::to_string(count));
+    for (int i = 0; i < count; ++i) {
+        const std::string number = std::to_string(i + 1);
+        write_cmd("CALC1:PAR" + number + ":DEF " + s_parameter_scpi(traces[i].parameter));
+        write_cmd("CALC1:TRAC" + number + ":FORM " + traces[i].format);
+    }
+    write_cmd("DISP:WIND1:SPL " + std::to_string(layout));
+    if (trim_scpi_text(query("*OPC?")) != "1") {
+        throw std::runtime_error("C2220Vna: native graph configuration did not complete");
+    }
+    const auto errors = drain_errors();
+    if (!errors.empty()) {
+        throw std::runtime_error("C2220Vna: native graph configuration failed: " + errors.front());
+    }
+    const auto applied = native_graph_state();
+    if (applied.layout != layout || applied.parameters.size() != traces.size()) {
+        throw std::runtime_error("C2220Vna: native graph layout was not applied");
+    }
+    for (int i = 0; i < count; ++i) {
+        if (applied.parameters[i] != s_parameter_scpi(traces[i].parameter)
+            || applied.formats[i] != traces[i].format) {
+            throw std::runtime_error("C2220Vna: native graph trace was not applied");
+        }
+    }
+}
+
+void C2220Vna::restore_native_graph_state(const NativeGraphState& state)
+{
+    require_connected("restore_native_graph_state");
+    if (state.parameters.empty() || state.parameters.size() > 6
+        || state.parameters.size() != state.formats.size()
+        || state.layout < 1 || state.layout > 9) {
+        throw std::invalid_argument("C2220Vna: invalid saved graph state");
+    }
+    for (std::size_t i = 0; i < state.parameters.size(); ++i) {
+        const auto& parameter = state.parameters[i];
+        const auto& format = state.formats[i];
+        if (parameter != "S11" && parameter != "S21" && parameter != "S12"
+            && parameter != "S22") {
+            throw std::invalid_argument("C2220Vna: invalid saved S-parameter");
+        }
+        if (format.empty() || format.size() > 8
+            || !std::all_of(format.begin(), format.end(), [](unsigned char c) {
+                return std::isupper(c) || std::isdigit(c);
+            })) {
+            throw std::invalid_argument("C2220Vna: invalid saved graph format");
+        }
+    }
+    const auto current = native_graph_state();
+    if (current.parameters.size() != state.parameters.size()) {
+        write_cmd("CALC1:PAR:COUN " + std::to_string(state.parameters.size()));
+    }
+    for (std::size_t i = 0; i < state.parameters.size(); ++i) {
+        const auto number = std::to_string(i + 1);
+        if (i >= current.parameters.size() || current.parameters[i] != state.parameters[i]) {
+            write_cmd("CALC1:PAR" + number + ":DEF " + state.parameters[i]);
+        }
+        if (i >= current.formats.size() || current.formats[i] != state.formats[i]) {
+            write_cmd("CALC1:TRAC" + number + ":FORM " + state.formats[i]);
+        }
+    }
+    if (current.layout != state.layout) {
+        write_cmd("DISP:WIND1:SPL " + std::to_string(state.layout));
+    }
+    if (trim_scpi_text(query("*OPC?")) != "1") {
+        throw std::runtime_error("C2220Vna: graph restoration did not complete");
+    }
+    const auto errors = drain_errors();
+    if (!errors.empty()) {
+        throw std::runtime_error("C2220Vna: graph restoration failed: " + errors.front());
+    }
+    const auto restored = native_graph_state();
+    if (restored.parameters != state.parameters || restored.formats != state.formats
+        || restored.layout != state.layout) {
+        throw std::runtime_error("C2220Vna: graph restoration readback mismatch");
+    }
+}
+
+void C2220Vna::auto_scale_native_graph()
+{
+    require_connected("auto_scale_native_graph");
+    const int count = static_cast<int>(parse_single_double(query("CALC1:PAR:COUN?"),
+                                                            "CALC1:PAR:COUN?"));
+    if (count < 1 || count > 16) {
+        throw std::runtime_error("C2220Vna: invalid native trace count");
+    }
+    for (int trace = 1; trace <= count; ++trace) {
+        write_cmd("DISP:WIND1:TRAC" + std::to_string(trace) + ":Y:AUTO");
+    }
+    if (trim_scpi_text(query("*OPC?")) != "1") {
+        throw std::runtime_error("C2220Vna: native auto scale did not complete");
+    }
+}
+
+int C2220Vna::native_marker_count(int trace)
+{
+    require_connected("native_marker_count");
+    if (trace < 1 || trace > 16) throw std::invalid_argument("C2220Vna: invalid trace");
+    const std::string command = "CALC1:TRAC" + std::to_string(trace) + ":MARK:COUN?";
+    const int count = static_cast<int>(parse_single_double(query(command), command.c_str()));
+    if (count < 0 || count > 16) throw std::runtime_error("C2220Vna: invalid marker count");
+    return count;
+}
+
+bool C2220Vna::native_reference_marker_active(int trace)
+{
+    require_connected("native_reference_marker_active");
+    if (trace < 1 || trace > 16) throw std::invalid_argument("C2220Vna: invalid trace");
+    const std::string command = "CALC1:TRAC" + std::to_string(trace) + ":MARK16:STAT?";
+    return parse_single_double(query(command), command.c_str()) != 0.0;
+}
+
+void C2220Vna::set_native_marker_count(int trace, int count)
+{
+    require_connected("set_native_marker_count");
+    if (trace < 1 || trace > 16 || count < 0 || count > 15) {
+        throw std::invalid_argument("C2220Vna: invalid trace or marker count");
+    }
+    if (native_reference_marker_active(trace)) {
+        throw std::runtime_error("C2220Vna: reference marker is active");
+    }
+    write_cmd("CALC1:TRAC" + std::to_string(trace) + ":MARK:COUN " + std::to_string(count));
+    if (native_marker_count(trace) != count) {
+        throw std::runtime_error("C2220Vna: marker count was not applied");
+    }
+}
+
+std::vector<C2220Vna::NativeMarker> C2220Vna::native_markers(int trace)
+{
+    const int count = std::min(native_marker_count(trace)
+                                   - static_cast<int>(native_reference_marker_active(trace)), 15);
+    std::vector<NativeMarker> markers;
+    markers.reserve(count);
+    for (int marker = 1; marker <= count; ++marker) {
+        const std::string prefix = "CALC1:TRAC" + std::to_string(trace)
+            + ":MARK" + std::to_string(marker);
+        NativeMarker value;
+        value.frequency_hz = parse_single_double(query(prefix + ":X?"), "native marker X");
+        const auto y = parse_ascii_doubles(query(prefix + ":Y?"));
+        if (y.size() < 2) throw std::runtime_error("C2220Vna: invalid native marker Y");
+        value.value = y[0];
+        value.secondary = y[1];
+        markers.push_back(value);
+    }
+    return markers;
+}
+
+std::vector<std::string> C2220Vna::native_trace_parameters()
+{
+    require_connected("native_trace_parameters");
+    const int count = static_cast<int>(parse_single_double(query("CALC1:PAR:COUN?"),
+                                                            "CALC1:PAR:COUN?"));
+    if (count < 1 || count > 16) {
+        throw std::runtime_error("C2220Vna: invalid native trace count");
+    }
+    std::vector<std::string> result;
+    for (int i = 1; i <= std::min(count, 4); ++i) {
+        result.push_back(trim_scpi_text(query("CALC1:PAR" + std::to_string(i) + ":DEF?")));
+    }
+    return result;
+}
+
+void C2220Vna::set_native_trace_parameter(int trace, SParameter parameter)
+{
+    require_connected("set_native_trace_parameter");
+    if (trace < 1 || trace > 4
+        || trace > static_cast<int>(parse_single_double(query("CALC1:PAR:COUN?"),
+                                                         "CALC1:PAR:COUN?"))) {
+        throw std::invalid_argument("C2220Vna: trace is not open");
+    }
+    const std::string prefix = "CALC1:PAR" + std::to_string(trace) + ":DEF";
+    const std::string requested = s_parameter_scpi(parameter);
+    write_cmd(prefix + " " + requested);
+    if (trim_scpi_text(query(prefix + "?")) != requested) {
+        throw std::runtime_error("C2220Vna: trace parameter was not applied");
+    }
 }
 
 ComplexSweep C2220Vna::measure_once()

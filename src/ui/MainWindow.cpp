@@ -173,7 +173,9 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     calLayout->addWidget(m_measure->calibrationPanel());
     m_connections->setMiddleWidget(calBox);
     m_connections->setSweepWidget(m_measure->sweepPanel());
-    m_connections->setSingleChannelWidget(new SingleChannelPanel(root));
+    auto* singleChannel = new SingleChannelPanel(root);
+    m_measure->setSingleChannelControls(singleChannel->createQuickControls());
+    m_connections->setSingleChannelWidget(singleChannel);
     connect(m_measure, &MeasureTab::sweepSettingsRequested,
             m_connections, &ConnectionBar::showSweepSettings);
     // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Настройки».
@@ -226,6 +228,13 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_tabs->setCurrentIndex(qBound(0, QSettings().value(tabKey, 0).toInt(), m_tabs->count() - 1));
     connect(m_tabs, &QTabWidget::currentChanged, this,
             [tabKey](int index) { QSettings().setValue(tabKey, index); });
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this, viewport](int index) {
+        if (m_tabs->widget(index) != viewport) {
+            m_measure->stopEmbeddedGraph();
+        } else if (m_vnaConnected && m_connections->vnaBackend() == MeasureWorker::BackendSocket) {
+            QTimer::singleShot(0, m_measure, [this] { m_measure->showEmbeddedGraph(); });
+        }
+    });
     m_spectrumConnectTimer = new QTimer(this);
     m_spectrumConnectTimer->setObjectName(QStringLiteral("spectrumConnectTimer"));
     m_spectrumConnectTimer->setInterval(3000);
@@ -317,7 +326,86 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
             &MainWindow::onSeriesArtifactsPreview);
     connect(m_worker, &MeasureWorker::directLutCurvePreview, this,
             &MainWindow::onDirectLutCurvePreview);
-    connect(m_measure, &MeasureTab::measureNowRequested, this, &MainWindow::onMeasureNow);
+    connect(m_measure, &MeasureTab::captureForReportRequested,
+            this, &MainWindow::onMeasureNow);
+    connect(m_measure, &MeasureTab::nativeGraphShown, this, [this]() {
+        QMetaObject::invokeMethod(m_worker, "enterNativeGraph", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_worker, "readNativeTraces", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_worker, "readNativeMarkers", Qt::QueuedConnection);
+    });
+    connect(m_measure, &MeasureTab::nativeGraphHidden, this, [this]() {
+        QMetaObject::invokeMethod(m_worker, "leaveNativeGraph", Qt::QueuedConnection);
+    });
+    connect(m_measure, &MeasureTab::nativeGraphConfigurationRequested, this,
+            [this](const QStringList& parameters, const QStringList& formats, bool separate) {
+                QMetaObject::invokeMethod(m_worker, "configureNativeGraph",
+                                          Qt::QueuedConnection, Q_ARG(QStringList, parameters),
+                                          Q_ARG(QStringList, formats), Q_ARG(bool, separate));
+            });
+    connect(m_measure, &MeasureTab::nativeAutoScaleRequested, this, [this] {
+        QMetaObject::invokeMethod(m_worker, "autoScaleNativeGraph", Qt::QueuedConnection);
+    });
+    connect(m_measure, &MeasureTab::nativeMarkerCountChangeRequested, this,
+            [this](int operation) {
+                QMetaObject::invokeMethod(m_worker, "changeNativeMarkerCount",
+                                          Qt::QueuedConnection, Q_ARG(int, operation));
+            });
+    connect(m_measure, &MeasureTab::nativeMarkerRefreshRequested, this, [this] {
+        QMetaObject::invokeMethod(m_worker, "readNativeMarkers", Qt::QueuedConnection);
+    });
+    connect(m_measure, &MeasureTab::nativeStateFileRequested,
+            this, &MainWindow::onNativeStateFileRequested);
+    connect(m_measure, &MeasureTab::nativeStateUndoRequested,
+            this, &MainWindow::onNativeStateUndoRequested);
+    connect(m_measure, &MeasureTab::nativeSweepSettingsApplyRequested,
+            this, &MainWindow::onApplyNativeSweep);
+    connect(m_measure, &MeasureTab::nativeOperatingStateApplyRequested, this,
+            [this](bool rfOutput, bool correction) {
+                QMetaObject::invokeMethod(m_worker, "applyNativeOperatingState",
+                                          Qt::QueuedConnection, Q_ARG(bool, rfOutput),
+                                          Q_ARG(bool, correction));
+            });
+    connect(m_worker, &MeasureWorker::nativeStateUndoAvailable, m_measure,
+            &MeasureTab::setNativeStateUndoAvailable, Qt::QueuedConnection);
+    connect(m_worker, &MeasureWorker::nativeSweepSettingsChanged, m_measure,
+            &MeasureTab::setInstrumentSweepSettings, Qt::QueuedConnection);
+    connect(m_worker, &MeasureWorker::nativeOperatingStateChanged, m_measure,
+            &MeasureTab::setNativeOperatingState, Qt::QueuedConnection);
+    connect(m_worker, &MeasureWorker::nativeGraphStateChanged, this,
+            [this](const QStringList& parameters, const QStringList& formats,
+                   int layout, const QString& error) {
+                if (!error.isEmpty()) {
+                    if (!m_nativeTraceParameters.isEmpty()) {
+                        m_measure->setNativeGraphState(m_nativeTraceParameters,
+                                                       m_nativeTraceFormats, m_nativeLayout);
+                    }
+                    m_connections->setDiagnostic(QStringLiteral("Графики S2VNA: %1").arg(error));
+                    return;
+                }
+                m_nativeTraceParameters = parameters;
+                m_nativeTraceFormats = formats;
+                m_nativeLayout = layout;
+                m_measure->setNativeGraphState(parameters, formats, layout);
+            });
+    connect(m_worker, &MeasureWorker::nativeMarkersChanged, m_measure,
+            &MeasureTab::setNativeMarkerValues, Qt::QueuedConnection);
+    connect(m_worker, &MeasureWorker::nativeStateLoaded, this,
+            [this](bool ok, const QString& message) {
+                m_measure->setNativeStateLoading(false);
+                setOperationProgress(ok ? message : QStringLiteral("Ошибка работы с состоянием S2VNA"),
+                                     1, 1);
+                if (!ok) {
+                    QMessageBox::warning(this, QStringLiteral("Состояние S2VNA"), message);
+                } else {
+                    m_connections->setDiagnostic(message);
+                    statusBar()->showMessage(message, 12000);
+                }
+                QTimer::singleShot(300, m_measure, [this] {
+                    if (m_tabs->currentIndex() == 1) {
+                        m_measure->showEmbeddedGraph();
+                    }
+                });
+            });
     connect(m_measure, &MeasureTab::exportTwoPortRequested, this, &MainWindow::onExportTwoPort);
     connect(m_measure, &MeasureTab::calibrateStepRequested, this, &MainWindow::onCalibrateStep);
     connect(m_measure, &MeasureTab::selectCalibrationKitRequested, this,
@@ -329,10 +417,22 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
             &MeasureTab::onCalibrateStepFinished, Qt::QueuedConnection);
     connect(m_worker, &MeasureWorker::calibrateOnePortFinished, m_measure,
             &MeasureTab::onCalibrateStepFinished, Qt::QueuedConnection);
+    const auto returnToNativeGraph = [this](bool, int, const QString&) {
+        if (m_vnaConnected && m_connections->vnaBackend() == MeasureWorker::BackendSocket
+            && m_tabs->currentIndex() == 1) {
+            QTimer::singleShot(200, m_measure, [this] { m_measure->showEmbeddedGraph(); });
+        }
+    };
+    connect(m_worker, &MeasureWorker::calibrateTwoPortFinished, this, returnToNativeGraph);
+    connect(m_worker, &MeasureWorker::calibrateOnePortFinished, this, returnToNativeGraph);
     connect(m_worker, &MeasureWorker::measureNowFinished, this,
             [this](bool ok, const QString& message) {
+                m_liveSweepInFlight = false;
                 if (!ok) {
-                     setOperationProgress(QStringLiteral("Ошибка измерения"), 1, 1);
+                    const bool editing = message.startsWith(
+                        QStringLiteral("Некорректные параметры C2220"));
+                    setOperationProgress(editing ? QStringLiteral("Ожидание корректных настроек")
+                                                 : QStringLiteral("Ошибка измерения"), 1, 1);
                     m_connections->setDiagnostic(
                         message.isEmpty() ? QStringLiteral("Измерить сейчас: отказ") : message);
                 } else {
@@ -447,6 +547,7 @@ void MainWindow::updateSpectrumFromPs()
 
 MainWindow::~MainWindow()
 {
+    m_measure->stopEmbeddedGraph();
     if (m_thread && m_worker) {
         m_worker->interruptIo();
         QMetaObject::invokeMethod(m_worker, "shutdown", Qt::QueuedConnection);
@@ -558,6 +659,7 @@ void MainWindow::updateCycleButtons(int state)
 
 void MainWindow::onMeasureNow()
 {
+    if (m_liveSweepInFlight) return;
     using afar::RunState;
     const auto st = static_cast<RunState>(m_state);
     if (st == RunState::Running || st == RunState::Pausing || st == RunState::Stopping
@@ -568,10 +670,10 @@ void MainWindow::onMeasureNow()
     }
     if (!(m_measure->fStartHz() < m_measure->fStopHz())) {
         m_connections->setDiagnostic(QStringLiteral(
-            "Диапазон не применён: f нач. должна быть меньше f кон.; прежний график сохранён. "
-            "Для 1,160 ГГц введите 1160 МГц или 1,160 ГГц."));
+            "f нач. должна быть меньше f кон. — исправьте настройки измерения."));
         return;
     }
+    m_liveSweepInFlight = true;
     setOperationProgress(QStringLiteral("Подготовка измерения S11/S21/S12/S22"), 0, 4);
     QMetaObject::invokeMethod(m_worker, "measureNow", Qt::QueuedConnection,
                               Q_ARG(double, m_measure->fStartHz()),
@@ -609,6 +711,7 @@ void MainWindow::onExportTwoPort()
 
 void MainWindow::onCalibrateStep(int kind, int step, int port, int subclass)
 {
+    m_measure->stopEmbeddedGraph();
     if (kind == 0) {
         QMetaObject::invokeMethod(m_worker, "calibrateOnePort", Qt::QueuedConnection,
                                   Q_ARG(int, step), Q_ARG(int, port), Q_ARG(int, subclass));
@@ -616,6 +719,67 @@ void MainWindow::onCalibrateStep(int kind, int step, int port, int subclass)
         QMetaObject::invokeMethod(m_worker, "calibrateTwoPort", Qt::QueuedConnection,
                                   Q_ARG(int, step), Q_ARG(int, subclass));
     }
+}
+
+void MainWindow::onNativeStateFileRequested()
+{
+#ifdef _WIN32
+    const QString bundled = QDir(QString::fromStdWString(examplesDirectory().wstring()))
+                                .filePath(QStringLiteral("s2vna/21102026.sta"));
+#else
+    const QString bundled = QDir(QString::fromStdString(examplesDirectory().string()))
+                                .filePath(QStringLiteral("s2vna/21102026.sta"));
+#endif
+    const QString remembered = QSettings().value(QStringLiteral("ui/s2vna_state_path")).toString();
+    const QString supplied = QStringLiteral("E:/21102026.sta");
+    const QString initial = QFileInfo(remembered).isFile() ? remembered
+        : QFileInfo(supplied).isFile() ? supplied
+        : QFileInfo(bundled).isFile() ? bundled : QDir::homePath();
+    const QString selected = QFileDialog::getOpenFileName(
+        this, QStringLiteral("Выбрать состояние S2VNA"), initial,
+        QStringLiteral("Состояние S2VNA (*.sta)"));
+    if (selected.isEmpty()) return;
+    if (QMessageBox::question(
+            this, QStringLiteral("Восстановить состояние S2VNA?"),
+            QStringLiteral("Файл заменит текущие частоты, число точек, мощность, графики, "
+                           "может включить ВЧ-выход и заменить калибровку прибора."
+                           "\n\n%1\n\nПродолжить?")
+                .arg(selected),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
+    QSettings().setValue(QStringLiteral("ui/s2vna_state_path"), selected);
+    m_measure->stopEmbeddedGraph();
+    m_measure->setNativeStateLoading(true);
+    setOperationProgress(QStringLiteral("Восстановление состояния S2VNA"), 0, 1);
+    QMetaObject::invokeMethod(m_worker, "loadNativeState", Qt::QueuedConnection,
+                              Q_ARG(QString, selected));
+}
+
+void MainWindow::onNativeStateUndoRequested()
+{
+    if (QMessageBox::question(
+            this, QStringLiteral("Откат состояния S2VNA"),
+            QStringLiteral("Восстановить настройки и калибровку до последней загрузки .sta? "
+                           "Изменения, сделанные после загрузки, будут потеряны."),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
+    m_measure->stopEmbeddedGraph();
+    m_measure->setNativeStateLoading(true);
+    setOperationProgress(QStringLiteral("Откат состояния S2VNA"), 0, 1);
+    QMetaObject::invokeMethod(m_worker, "undoNativeState", Qt::QueuedConnection);
+}
+
+void MainWindow::onApplyNativeSweep()
+{
+    if (!m_vnaConnected || m_connections->vnaBackend() != MeasureWorker::BackendSocket) {
+        m_connections->setDiagnostic(QStringLiteral("Сначала включите C2220 через S2VNA"));
+        return;
+    }
+    QMetaObject::invokeMethod(m_worker, "applyNativeSweep", Qt::QueuedConnection,
+                              Q_ARG(double, m_measure->fStartHz()),
+                              Q_ARG(double, m_measure->fStopHz()),
+                              Q_ARG(int, m_measure->points()),
+                              Q_ARG(int, m_measure->ifbwHz()),
+                              Q_ARG(double, m_measure->powerDbm()),
+                              Q_ARG(int, m_measure->averages()));
 }
 
 void MainWindow::onConnectionChanged(const QString& vnaModel,
@@ -850,6 +1014,10 @@ QString MainWindow::defaultDataRoot() const
 
 void MainWindow::onApplyVnaSettings()
 {
+    m_measure->stopEmbeddedGraph();
+    m_nativeTraceParameters.clear();
+    m_nativeTraceFormats.clear();
+    m_nativeLayout = 1;
     m_autoProbePending = false;
     m_reusedExternalS2Vna = false;
     QMetaObject::invokeMethod(
@@ -874,6 +1042,9 @@ void MainWindow::onApplyControllerSettings()
 
 void MainWindow::onToggleVnaConnection(bool enable)
 {
+    if (!enable) {
+        m_measure->stopEmbeddedGraph();
+    }
     if (enable) {
         if (m_disconnectPending) {
             return;
@@ -896,6 +1067,10 @@ void MainWindow::onToggleVnaConnection(bool enable)
 
 void MainWindow::onVnaDisconnected()
 {
+    m_measure->stopEmbeddedGraph();
+    m_nativeTraceParameters.clear();
+    m_nativeTraceFormats.clear();
+    m_nativeLayout = 1;
     m_s2vnaRuntime.stopOwned();
     m_disconnectPending = false;
     m_connections->setVnaSettingsLocked(false);
@@ -1000,6 +1175,10 @@ void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
         m_s2vnaRuntime.hideOwnedWindow();
         m_connections->setDiagnostic(QStringLiteral("Связь OK: %1").arg(idnOrError));
         statusBar()->showMessage(QStringLiteral("VNA IDN: %1").arg(idnOrError), 8000);
+        if (m_tabs->currentIndex() == 1
+            && m_connections->vnaBackend() == MeasureWorker::BackendSocket) {
+            QTimer::singleShot(300, m_measure, [this] { m_measure->showEmbeddedGraph(); });
+        }
         if (measureAfterSuccess) {
             onMeasureNow();
         }

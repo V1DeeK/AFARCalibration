@@ -8,6 +8,10 @@
 
 Код и длинные примеры из руководств сюда не копируются.
 
+Текущий интерфейс встроенного графика S2VNA расширяет исторический закрытый набор
+v1 командами из раздела ниже. Они применяются только по действию оператора и не
+заменяют последовательность измерения серии.
+
 ---
 
 ## 1. Источники (раздел 15 ТЗ)
@@ -74,6 +78,23 @@
 | `SENS:CORR:COLL:LOAD` | Измерение LOAD на порту. В драйвере: `… LOAD 1` / `… LOAD 2`. | калибровка 1- и 2-портовая; сверка с Help установленной S2VNA обязательна; синтаксис как в коде драйвера до расхождения |
 | `SENS:CORR:COLL:THRU` | Измерение THRU между портами. В драйвере: `SENS:CORR:COLL:THRU 2,1`. Только двухпортовый SOLT; в однопортовой последовательности **нет**. | калибровка двухпортовая; сверка с Help установленной S2VNA обязательна; синтаксис как в коде драйвера до расхождения |
 | `SENS:CORR:COLL:SAVE` | Применить/сохранить собранную калибровку. | калибровка 1- и 2-портовая; сверка с Help установленной S2VNA обязательна; синтаксис как в коде драйвера до расхождения |
+
+### Встроенный график и состояние S2VNA
+
+| Команда | Назначение | Официальная справка |
+|---------|------------|---------------------|
+| `CALC1:PAR:COUN?` | Узнать число трасс канала 1; UI предлагает управление первыми четырьмя. | [CALC:PAR:COUN](https://planarchel.ru/instruction/s2vna/calcparcoun.html) |
+| `CALC1:PAR<Tr>:DEF?`, `CALC1:PAR<Tr>:DEF Sxx` | Прочитать/изменить S11/S21/S12/S22 только у выбранной трассы. | [CALC:PAR:DEF](https://planarchel.ru/instruction/s2vna/calcpardef.html) |
+| `MMEM:LOAD:STAT <файл>` | Восстановить файл `.sta`, включая четыре графика и возможную сохранённую калибровку; только после подтверждения оператора. | [MMEM:LOAD](https://planarchel.ru/instruction/s2vna/mmemload.html) |
+| `MMEM:STOR:STYP?`, `MMEM:STOR:STYP CDST`, `MMEM:STOR:STAT <файл>` | Перед загрузкой другого `.sta` сохранить временную полную копию (настройки, калибровка, данные) для отката; затем вернуть прежний тип сохранения. | [MMEM:STOR:STYP](https://planarchel.ru/instruction/s2vna/mmemstorstyp.html), [MMEM:STOR](https://planarchel.ru/instruction/s2vna/mmemstor.html) |
+| `OUTP?`, `OUTP ON/OFF`, `SENS:CORR:STAT ON/OFF` | Прочитать и явно применить флаги ВЧ-выхода и коррекции из состояния, с проверкой чтением обратно. | [OUTP](https://planarchel.ru/instruction/s2vna/outp.html), [SENS:CORR:STAT](https://planarchel.ru/instruction/s2vna/senscorrstat.html) |
+| `CALC1:PAR:COUN N` | Вывести выбранное число трасс в канале 1 (1…6 в Studio). | [CALC:PAR:COUN](https://planarchel.ru/instruction/s2vna/calcparcoun.html) |
+| `CALC1:TRAC<Tr>:FORM <формат>`, `…?` | Формат каждой трассы: `MLOG`, `MLIN`, `PHAS`, `GDEL`, `SWR` (КСВН только S11/S22). | [CALC:FORM](https://planarchel.ru/instruction/s2vna/calcform.html) |
+| `DISP:WIND1:SPL <схема>`, `…?` | Совмещённые или отдельные панели; схема не задаёт число трасс. | [DISP:WIND:SPL](https://planarchel.ru/instruction/s2vna/dispwindspl.html) |
+| `DISP:WIND1:TRAC<Tr>:Y:AUTO` | Автомасштабирование каждой видимой трассы. | [DISP:WIND:TRAC:Y:AUTO](https://planarchel.ru/instruction/s2vna/dispwindtracyauto.html) |
+| `CALC1:TRAC<Tr>:MARK:COUN N`, `…?` | Число обычных маркеров трассы (0…15); кнопки добавить/удалить/очистить. | [CALC:MARK:COUN](https://planarchel.ru/instruction/s2vna/calcmarkcoun.html) |
+| `CALC1:TRAC<Tr>:MARK16:STAT?` | Проверить опорный маркер перед изменением числа обычных: при активном R не менять его без ведома оператора. | [CALC:MARK](https://planarchel.ru/instruction/s2vna/calcmark.html) |
+| `CALC1:TRAC<Tr>:MARK<Mk>:X?`, `…:Y?` | Положение и отображаемое значение маркера для терминала Studio. | [CALC:MARK:X](https://planarchel.ru/instruction/s2vna/calcmarkx.html), [CALC:MARK:Y](https://planarchel.ru/instruction/s2vna/calcmarky_.html) |
 
 Ось частот после свипа: **либо** `CALC:DATA:XAX?`, **либо** `SENS:FREQ:DATA?`. Выбор фиксируется при сверке с установленной S2VNA; оба мнемоника уже в таблице, третьего источника оси нет.
 

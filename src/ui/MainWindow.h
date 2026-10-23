@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QMainWindow>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 class QCloseEvent;
@@ -120,6 +121,9 @@ private slots:
     void onMeasureNow();
     void onExportTwoPort();
     void onCalibrateStep(int kind, int step, int port, int subclass);
+    void onNativeStateFileRequested();
+    void onNativeStateUndoRequested();
+    void onApplyNativeSweep();
 
 private:
     void loadExampleDefaults();
@@ -156,6 +160,10 @@ private:
     MeasureWorker* m_worker = nullptr;
     int m_state = 0;
     bool m_vnaConnected = false;
+    QStringList m_nativeTraceParameters;
+    QStringList m_nativeTraceFormats;
+    int m_nativeLayout = 1;
+    bool m_liveSweepInFlight = false;
     bool m_connectionRequested = false;
     bool m_disconnectPending = false;
     bool m_measureAfterProbe = false;

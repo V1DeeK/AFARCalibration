@@ -34,6 +34,8 @@ public:
     [[nodiscard]] afar::ppkh4::FrameFormat frameFormat() const { return m_format; }
     /// Текущий кадр в виде команды SEND (то, что уйдёт в плату).
     [[nodiscard]] QString sendCommand() const;
+    /// Компактное управление тем же каналом для панели графиков.
+    QWidget* createQuickControls();
 
     void setPhaseCode(int code);
     void setAttenCode(int code);
@@ -103,6 +105,10 @@ private:
     QSlider* m_atRange = nullptr;
     QDoubleSpinBox* m_atDb = nullptr;
     QSpinBox* m_atNum = nullptr;
+    QSlider* m_quickPhRange = nullptr;
+    QDoubleSpinBox* m_quickPhDeg = nullptr;
+    QSlider* m_quickAtRange = nullptr;
+    QDoubleSpinBox* m_quickAtDb = nullptr;
 
     // Перебор
     QComboBox* m_swWhat = nullptr;

@@ -36,6 +36,50 @@ public:
     ComplexSweep measure_s21() override;
     /// Считать уже отображаемую в S2VNA трассу без изменения диапазона и нового trigger.
     ComplexSweep read_current_trace(SweepConfig* instrument_config = nullptr);
+    struct TriggerState {
+        std::string source;
+        bool continuous{false};
+    };
+    /// Показ графика S2VNA: запомнить текущий запуск и включить непрерывную развертку.
+    TriggerState enable_native_continuous();
+    void restore_native_trigger(const TriggerState& previous);
+    /// SCPI-состояние S2VNA; содержит настройки каналов и может содержать калибровку.
+    void load_state(const std::string& path);
+    /// Сохранить полный снимок S2VNA для отката, не меняя постоянный тип сохранения.
+    void save_state(const std::string& path);
+    /// Применить настройки непрерывного свипа, не меняя трассы и источник запуска.
+    SweepConfig apply_native_sweep(const SweepConfig& config);
+    struct NativeOperatingState {
+        bool rf_output{false};
+        bool correction{false};
+    };
+    NativeOperatingState native_operating_state();
+    NativeOperatingState set_native_operating_state(bool rf_output, bool correction);
+    struct NativeTrace {
+        SParameter parameter{SParameter::S11};
+        std::string format{"MLOG"};
+    };
+    struct NativeGraphState {
+        std::vector<std::string> parameters;
+        std::vector<std::string> formats;
+        int layout{1};
+    };
+    NativeGraphState native_graph_state();
+    void configure_native_graph(const std::vector<NativeTrace>& traces, bool separate);
+    /// Вернуть трассы/форматы/раскладку после разового измерения для отчёта.
+    void restore_native_graph_state(const NativeGraphState& state);
+    void auto_scale_native_graph();
+    struct NativeMarker {
+        double frequency_hz{0.0};
+        double value{0.0};
+        double secondary{0.0};
+    };
+    int native_marker_count(int trace);
+    bool native_reference_marker_active(int trace);
+    void set_native_marker_count(int trace, int count);
+    std::vector<NativeMarker> native_markers(int trace);
+    std::vector<std::string> native_trace_parameters();
+    void set_native_trace_parameter(int trace, SParameter parameter);
     /// Текущий комплект мер S2VNA, например `CKIT 1 (85032F)`.
     std::string current_calibration_kit_id();
     /// Выбрать один из комплектов мер S2VNA 1..64 и вернуть его номер/метку.

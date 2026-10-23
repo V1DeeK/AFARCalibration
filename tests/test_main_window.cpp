@@ -6,7 +6,10 @@
 
 #include "MacResolver.h"
 #include "MainWindow.h"
+#include "MeasureTab.h"
 #include "PsSession.h"
+#include "SingleChannelPanel.h"
+#include "S2VnaGraphHost.h"
 #include "TestPsServer.h"
 #include "Theme.h"
 #include "UiStyle.h"
@@ -16,6 +19,7 @@
 #include <QAbstractScrollArea>
 #include <QAbstractSpinBox>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QApplication>
 #include <QCheckBox>
 #include <QDir>
@@ -27,11 +31,16 @@
 #include <QMessageBox>
 #include <QOpenGLWidget>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScreen>
+#include <QScrollBar>
 #include <QSettings>
+#include <QSlider>
 #include <QSpinBox>
 #include <QStackedLayout>
+#include <QStackedWidget>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -323,11 +332,45 @@ TEST_CASE("Измерение S-параметров: управление на�
     Window w;
     w.openTab(1);
 
-    auto* plot = child<QWidget>(*w.window, "graphPlot0");
+    auto* plot = child<S2VnaGraphHost>(*w.window, "s2vnaGraphHost");
     auto* controls = child<QScrollArea>(*w.window, "graphControlsScroll");
     auto* connections = child<QWidget>(*w.window, "ConnectionBar");
     CHECK_FALSE(connections->isAncestorOf(controls));
     CHECK(controls->mapTo(w.window.get(), QPoint()).x() > plot->mapTo(w.window.get(), QPoint()).x());
+}
+
+TEST_CASE("Для отчёта остаётся разовый съём без собственной отрисовки графиков",
+          "[ui][window][measurement]")
+{
+    app();
+    Window w;
+    w.openTab(1);
+    auto* backend = child<QComboBox>(*w.window, "vnaBackend");
+    backend->setCurrentIndex(backend->findData(0));
+    QPushButton* power = nullptr;
+    for (auto* candidate : w.window->findChildren<QPushButton*>()) {
+        if (candidate->text() == QStringLiteral("Вкл")) {
+            power = candidate;
+            break;
+        }
+    }
+    REQUIRE(power != nullptr);
+    power->click();
+    REQUIRE(waitFor([&] {
+        for (auto* label : w.window->findChildren<QLabel*>()) {
+            if (label->text().startsWith(QStringLiteral("C2220:"))
+                && !label->text().contains(QStringLiteral("нет связи"))) return true;
+        }
+        return false;
+    }));
+    CHECK(w.window->findChild<QPushButton*>(QStringLiteral("buildGraphsButton")) == nullptr);
+    CHECK(w.window->findChild<QWidget*>(QStringLiteral("graphPlot0")) == nullptr);
+    auto* button = child<QPushButton>(*w.window, "captureForReport");
+    REQUIRE(button->text() == QStringLiteral("Снять измерение для отчёта"));
+    REQUIRE_FALSE(button->isCheckable());
+    button->click();
+    auto* exportButton = child<QPushButton>(*w.window, "exportTwoPortReport");
+    REQUIRE(waitFor([&] { return exportButton->isEnabled(); }, 10000));
 }
 
 TEST_CASE("Настройка частоты открывается рядом с подключением и сворачивается кликом",
@@ -360,6 +403,165 @@ TEST_CASE("Настройка частоты открывается рядом �
     auto* tabBar = tabs->tabBar();
     QMetaObject::invokeMethod(tabBar, "tabBarClicked", Qt::DirectConnection, Q_ARG(int, 3));
     CHECK(tabs->maximumHeight() <= tabBar->sizeHint().height() + 2);
+}
+
+TEST_CASE("Быстрая настройка канала на графиках синхронизирована с основной панелью",
+          "[ui][window][measurement]")
+{
+    app();
+    Window w;
+    auto* channel = child<SingleChannelPanel>(*w.window, "singleChannelPanel");
+    auto* quick = child<QGroupBox>(*w.window, "quickSingleChannelControls");
+    auto* action = child<QGroupBox>(*w.window, "graphActionBox");
+    auto* format = child<QComboBox>(*w.window, "graphDisplayFormat");
+    auto* side = quick->parentWidget()->layout();
+    REQUIRE(side != nullptr);
+    CHECK(side->indexOf(quick) == side->indexOf(action) + 1);
+    CHECK(side->indexOf(format->parentWidget()) == side->indexOf(quick) + 1);
+
+    auto* phaseSlider = child<QSlider>(*w.window, "quickChannelPhaseSlider");
+    auto* phaseValue = child<QDoubleSpinBox>(*w.window, "quickChannelPhaseValue");
+    auto* attenSlider = child<QSlider>(*w.window, "quickChannelAttenSlider");
+    auto* attenValue = child<QDoubleSpinBox>(*w.window, "quickChannelAttenValue");
+    phaseSlider->setValue(8);
+    CHECK(channel->phaseCode() == 8);
+    CHECK(phaseValue->value() == 45.0);
+    CHECK(child<QSpinBox>(*w.window, "singleChannelPhaseCode")->value() == 8);
+    phaseValue->setValue(90.0);
+    QMetaObject::invokeMethod(phaseValue, "editingFinished", Qt::DirectConnection);
+    CHECK(channel->phaseCode() == 16);
+    CHECK(phaseSlider->value() == 16);
+    child<QPushButton>(*w.window, "quickChannelPhaseUp")->click();
+    CHECK(channel->phaseCode() == 17);
+    CHECK(phaseSlider->value() == 17);
+    child<QPushButton>(*w.window, "quickChannelPhaseDown")->click();
+    CHECK(channel->phaseCode() == 16);
+
+    attenSlider->setValue(43);
+    CHECK(channel->attenCode() == 43);
+    CHECK(attenValue->value() == -10.0);
+    attenValue->setValue(-5.0);
+    QMetaObject::invokeMethod(attenValue, "editingFinished", Qt::DirectConnection);
+    CHECK(channel->attenCode() == 53);
+    CHECK(attenSlider->value() == 53);
+    CHECK(child<QSpinBox>(*w.window, "singleChannelAttenCode")->value() == 53);
+    child<QPushButton>(*w.window, "quickChannelAttenUp")->click();
+    CHECK(channel->attenCode() == 54);
+    CHECK(attenValue->value() == -4.5);
+    child<QPushButton>(*w.window, "quickChannelAttenDown")->click();
+    CHECK(channel->attenCode() == 53);
+    CHECK(attenValue->value() == -5.0);
+    channel->setPhaseCode(63);
+    child<QPushButton>(*w.window, "quickChannelPhaseUp")->click();
+    CHECK(channel->phaseCode() == 63);
+    channel->setAttenCode(0);
+    child<QPushButton>(*w.window, "quickChannelAttenDown")->click();
+    CHECK(channel->attenCode() == 0);
+}
+
+TEST_CASE("График S2VNA возвращается при переходе на другую вкладку",
+          "[ui][window][native][.]")
+{
+    app();
+    if (qEnvironmentVariableIsEmpty("AFAR_TEST_S2VNA_DEMO")) {
+        SKIP("требуется отдельно запущенная S2VNA в деморежиме");
+    }
+    Window w;
+    w.openTab(1);
+    auto* host = child<S2VnaGraphHost>(*w.window, "s2vnaGraphHost");
+    auto* button = child<QPushButton>(*w.window, "showS2vnaGraph");
+    auto* stack = child<QStackedWidget>(*w.window, "graphViewStack");
+    QString error;
+    const bool attached = waitFor([&] { return host->attach(&error); }, 10000);
+    INFO(error.toStdString());
+    REQUIRE(attached);
+    CHECK(host->isAttached());
+    host->detach();
+    CHECK_FALSE(host->isAttached());
+    QTimer::singleShot(3000, w.window.get(), [] {
+        if (auto* dialog = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+            dialog->accept();
+        }
+    });
+    button->click();
+    REQUIRE(host->isAttached());
+    CHECK(stack->currentWidget() == host);
+    const QString shot = qEnvironmentVariable("AFAR_TEST_S2VNA_SHOT");
+    if (!shot.isEmpty()) {
+        auto* workspace = child<QScrollArea>(*w.window, "sParametersWorkspace");
+        workspace->verticalScrollBar()->setValue(workspace->verticalScrollBar()->maximum());
+        QTest::qWait(300);
+        REQUIRE(w.window->screen()->grabWindow(w.window->winId()).save(shot));
+    }
+    w.openTab(0);
+    CHECK_FALSE(host->isAttached());
+    CHECK_FALSE(button->isChecked());
+    CHECK(stack->currentIndex() == 0);
+}
+
+TEST_CASE("S2VNA: четыре трассы настраиваются без дополнительных экранов",
+          "[ui][window][native]")
+{
+    app();
+    Window w;
+    w.openTab(1);
+    auto* measure = w.window->findChild<MeasureTab*>();
+    REQUIRE(measure != nullptr);
+    auto* button = child<QPushButton>(*w.window, "loadS2vnaState");
+    CHECK(button->text().contains(QStringLiteral(".sta")));
+    QStringList expected{QStringLiteral("S11"), QStringLiteral("S21"),
+                         QStringLiteral("S12"), QStringLiteral("S22")};
+    measure->setNativeGraphState(expected,
+                                 {QStringLiteral("MLOG"), QStringLiteral("MLOG"),
+                                  QStringLiteral("MLOG"), QStringLiteral("MLOG")}, 7);
+    for (const auto& parameter : expected) {
+        auto* trace = w.window->findChild<QPushButton*>(QStringLiteral("graphTrace") + parameter);
+        REQUIRE(trace != nullptr);
+        CHECK(trace->isChecked());
+    }
+    auto* together = child<QPushButton>(*w.window, "nativeTogetherButton");
+    CHECK(together->text() == QStringLiteral("Вместе"));
+    measure->setNativeStateLoading(true);
+    CHECK_FALSE(button->isEnabled());
+    measure->setNativeStateLoading(false);
+    CHECK(button->isEnabled());
+    auto* undo = child<QPushButton>(*w.window, "undoS2vnaState");
+    CHECK_FALSE(undo->isEnabled());
+    measure->setNativeStateUndoAvailable(true);
+    CHECK(undo->isEnabled());
+    measure->setNativeStateLoading(true);
+    CHECK_FALSE(undo->isEnabled());
+    measure->setNativeStateLoading(false);
+    CHECK(undo->isEnabled());
+
+    measure->setInstrumentSweepSettings(4.9e9, 6.0e9, 5501, 5000, -40.0, 1);
+    CHECK(measure->fStartHz() == 4.9e9);
+    CHECK(measure->fStopHz() == 6.0e9);
+    CHECK(measure->points() == 5501);
+    CHECK(measure->ifbwHz() == 5000);
+    CHECK(measure->powerDbm() == -40.0);
+    int applyRequested = 0;
+    QObject::connect(measure, &MeasureTab::nativeSweepSettingsApplyRequested,
+                     measure, [&applyRequested] { ++applyRequested; });
+    child<QPushButton>(*w.window, "applyNativeSweepSettings")->click();
+    CHECK(applyRequested == 1);
+    measure->setNativeOperatingState(true, true);
+    auto* rfOutput = child<QCheckBox>(*w.window, "nativeRfOutput");
+    auto* correction = child<QCheckBox>(*w.window, "nativeCorrection");
+    CHECK(rfOutput->isChecked());
+    CHECK(correction->isChecked());
+    int operatingRequested = 0;
+    QObject::connect(measure, &MeasureTab::nativeOperatingStateApplyRequested,
+                     measure, [&operatingRequested](bool rf, bool corr) {
+                         CHECK_FALSE(rf);
+                         CHECK(corr);
+                         ++operatingRequested;
+                     });
+    rfOutput->setChecked(false);
+    child<QPushButton>(*w.window, "applyNativeOperatingState")->click();
+    CHECK(operatingRequested == 1);
+    measure->setVnaCalibrationIdHint(QStringLiteral("CKIT 14 (example)"));
+    CHECK(child<QSpinBox>(*w.window, "vnaCalibrationKit")->value() == 14);
 }
 
 TEST_CASE("Главное окно: «Тех. состояние» — только параметры платы, «Одна команда» без «Журнала»", "[ui][window]")
