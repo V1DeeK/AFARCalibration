@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Ppkh4State.h"
 #include "S2VnaRuntime.h"
 
 #include <QElapsedTimer>
@@ -7,6 +8,9 @@
 #include <QString>
 #include <QStringList>
 #include <QVector>
+
+#include <optional>
+#include <utility>
 
 class QCloseEvent;
 class AcceptanceAtTab;
@@ -18,6 +22,7 @@ class MeasureWorker;
 class PsServiceCheckPage;
 class PsSession;
 class SettingsTab;
+class SingleChannelPanel;
 class SpectrumOpenGLWidget;
 class TestRunTab;
 class QTabWidget;
@@ -123,6 +128,9 @@ private slots:
     void onCalibrateStep(int kind, int step, int port, int subclass);
     void onNativeStateFileRequested();
     void onNativeStateUndoRequested();
+    void onBenchStateSaveRequested();
+    void onBenchStateLoadRequested();
+    void onBenchStateS2VnaSaved(bool ok, const QString& message);
     void onApplyNativeSweep();
 
 private:
@@ -138,6 +146,11 @@ private:
 
     ConnectionBar* m_connections = nullptr;
     MeasureTab* m_measure = nullptr;
+    SingleChannelPanel* m_singleChannel = nullptr;
+    /// Состояние стенда, ждущее ответа S2VNA на сохранение .sta: путь .afarstate и содержимое.
+    std::optional<std::pair<QString, afar::ppkh4::BenchState>> m_benchSavePending;
+    /// Настройки 1 канала, которые применяются после восстановления .sta.
+    std::optional<afar::ppkh4::ChannelState> m_benchLoadPending;
     CodeMatrixTab* m_matrix = nullptr;
     AcceptanceAtTab* m_acceptance = nullptr;
     PsSession* m_psSession = nullptr;

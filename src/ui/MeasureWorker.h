@@ -67,6 +67,8 @@ public slots:
     void readNativeMarkers();
     void loadNativeState(const QString& path);
     void undoNativeState();
+    /// Сохранить полное состояние S2VNA (настройки, калибровка, данные) в файл .sta.
+    void saveNativeState(const QString& path);
     void applyNativeSweep(double fStartHz, double fStopHz, int points,
                           int ifbwHz, double powerDbm, int averages);
     void applyNativeOperatingState(bool rfOutput, bool correction);
@@ -138,6 +140,7 @@ signals:
                               const QVector<double>& values,
                               const QVector<double>& frequenciesGhz);
     void nativeStateLoaded(bool ok, const QString& message);
+    void nativeStateSaved(bool ok, const QString& message);
     void nativeStateUndoAvailable(bool available);
     void nativeSweepSettingsChanged(double fStartHz, double fStopHz, int points,
                                     int ifbwHz, double powerDbm, int averages);

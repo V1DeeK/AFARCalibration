@@ -215,6 +215,22 @@ QWidget* SingleChannelPanel::makeConnectionBox()
     lay->addWidget(m_conn);
     lay->addWidget(m_lastSent, 1);
 
+    // Состояние стенда: S2VNA (.sta) + всё, что настроено на этой вкладке.
+    auto* saveState = new QPushButton(QStringLiteral("Сохранить состояние…"), box);
+    saveState->setObjectName(QStringLiteral("singleChannelSaveState"));
+    saveState->setToolTip(QStringLiteral("Сохранить состояние S2VNA (частоты, калибровка, графики) "
+                                         "и настройки этой вкладки: коды, формат кадра, перебор"));
+    ui::setButtonRole(saveState, ui::ButtonRole::Secondary);
+    auto* loadState = new QPushButton(QStringLiteral("Загрузить состояние…"), box);
+    loadState->setObjectName(QStringLiteral("singleChannelLoadState"));
+    loadState->setToolTip(QStringLiteral("Выбрать сохранённое состояние, восстановить S2VNA "
+                                         "и применить коды к плате"));
+    ui::setButtonRole(loadState, ui::ButtonRole::Secondary);
+    lay->addWidget(saveState);
+    lay->addWidget(loadState);
+    connect(saveState, &QPushButton::clicked, this, &SingleChannelPanel::stateSaveRequested);
+    connect(loadState, &QPushButton::clicked, this, &SingleChannelPanel::stateLoadRequested);
+
     connect(m_refresh, &QPushButton::clicked, this, &SingleChannelPanel::refreshPorts);
     connect(m_connect, &QPushButton::clicked, this, &SingleChannelPanel::toggleConnection);
     setConnState(Ppkh4Link::serialSupported()
@@ -318,8 +334,16 @@ QWidget* SingleChannelPanel::makeSweepBox()
     ui::applyGroupLayout(grid);
 
     m_swWhat = new QComboBox(box);
+    m_swWhat->setObjectName(QStringLiteral("singleChannelSweepMode"));
     m_swWhat->addItem(QStringLiteral("фаза"));
     m_swWhat->addItem(QStringLiteral("аттенюация"));
+    m_swWhat->addItem(QStringLiteral("фаза и аттенюация: все сочетания"));
+    m_swWhat->addItem(QStringLiteral("фаза и аттенюация: одновременно"));
+    m_swWhat->setItemData(2, QStringLiteral("Для каждого кода аттенюации проходятся все коды фазы"),
+                          Qt::ToolTipRole);
+    m_swWhat->setItemData(3, QStringLiteral("Оба кода меняются на каждом шаге, пока не кончится "
+                                            "более короткий диапазон"),
+                          Qt::ToolTipRole);
     auto spin = [box](int lo, int hi, int value) {
         auto* s = new QSpinBox(box);
         s->setRange(lo, hi);
@@ -329,6 +353,11 @@ QWidget* SingleChannelPanel::makeSweepBox()
     m_swFrom = spin(0, 65535, 0);
     m_swTo = spin(0, 65535, 63);
     m_swStep = spin(1, 65535, 1);
+    m_swAtFrom = spin(0, 65535, 0);
+    m_swAtTo = spin(0, 65535, 63);
+    m_swAtStep = spin(1, 65535, 1);
+    m_swFrom->setObjectName(QStringLiteral("singleChannelSweepPhaseFrom"));
+    m_swAtFrom->setObjectName(QStringLiteral("singleChannelSweepAttenFrom"));
     m_swDwell = spin(50, 600000, 1500);
     m_swDwell->setSuffix(QStringLiteral(" мс"));
     m_swStart = new QPushButton(QStringLiteral("Старт"), box);
@@ -337,27 +366,49 @@ QWidget* SingleChannelPanel::makeSweepBox()
     m_swStop = new QPushButton(QStringLiteral("Стоп"), box);
     ui::setButtonRole(m_swStop, ui::ButtonRole::Danger);
     m_swState = ui::hintLabel(QString(), box);
+    m_swState->setObjectName(QStringLiteral("singleChannelSweepState"));
+
+    auto rangeRow = [box](const QString& title, QSpinBox* from, QSpinBox* to, QSpinBox* step) {
+        auto* row = new QWidget(box);
+        auto* lay = new QHBoxLayout(row);
+        lay->setContentsMargins(0, 0, 0, 0);
+        lay->addWidget(ui::captionLabel(title, row));
+        lay->addWidget(from, 1);
+        lay->addWidget(ui::captionLabel(QStringLiteral("до"), row));
+        lay->addWidget(to, 1);
+        lay->addWidget(ui::captionLabel(QStringLiteral("шаг"), row));
+        lay->addWidget(step, 1);
+        return row;
+    };
+    m_swPhaseRow = rangeRow(QStringLiteral("фаза: код от"), m_swFrom, m_swTo, m_swStep);
+    m_swAttenRow = rangeRow(QStringLiteral("атт.: код от"), m_swAtFrom, m_swAtTo, m_swAtStep);
 
     grid->addWidget(ui::captionLabel(QStringLiteral("Что перебирать"), box), 0, 0);
-    grid->addWidget(m_swWhat, 0, 1, 1, 3);
-    grid->addWidget(ui::captionLabel(QStringLiteral("код от"), box), 1, 0);
-    grid->addWidget(m_swFrom, 1, 1);
-    grid->addWidget(ui::captionLabel(QStringLiteral("до"), box), 1, 2);
-    grid->addWidget(m_swTo, 1, 3);
-    grid->addWidget(ui::captionLabel(QStringLiteral("шаг кода"), box), 2, 0);
-    grid->addWidget(m_swStep, 2, 1);
-    grid->addWidget(ui::captionLabel(QStringLiteral("пауза"), box), 2, 2);
-    grid->addWidget(m_swDwell, 2, 3);
+    grid->addWidget(m_swWhat, 0, 1);
+    grid->addWidget(m_swPhaseRow, 1, 0, 1, 2);
+    grid->addWidget(m_swAttenRow, 2, 0, 1, 2);
+    grid->addWidget(ui::captionLabel(QStringLiteral("пауза"), box), 3, 0);
+    grid->addWidget(m_swDwell, 3, 1);
     auto* buttons = new QHBoxLayout();
     buttons->addWidget(m_swStart);
     buttons->addWidget(m_swStop);
     buttons->addWidget(m_swState, 1);
-    grid->addLayout(buttons, 3, 0, 1, 4);
-    grid->setRowStretch(4, 1);
+    grid->addLayout(buttons, 4, 0, 1, 2);
+    grid->setColumnStretch(1, 1);
+    grid->setRowStretch(5, 1);
 
+    connect(m_swWhat, &QComboBox::currentIndexChanged, this, &SingleChannelPanel::updateSweepRows);
     connect(m_swStart, &QPushButton::clicked, this, &SingleChannelPanel::startSweep);
     connect(m_swStop, &QPushButton::clicked, this, &SingleChannelPanel::stopSweep);
+    updateSweepRows();
     return box;
+}
+
+void SingleChannelPanel::updateSweepRows()
+{
+    const auto mode = static_cast<SweepMode>(m_swWhat->currentIndex());
+    m_swPhaseRow->setVisible(mode != SweepMode::Atten);
+    m_swAttenRow->setVisible(mode != SweepMode::Phase);
 }
 
 QWidget* SingleChannelPanel::makeFormatBox()
@@ -841,6 +892,52 @@ void SingleChannelPanel::sendFrame(const std::function<void()>& after)
     });
 }
 
+// --- Состояние стенда ---
+
+ChannelState SingleChannelPanel::channelState() const
+{
+    ChannelState st;
+    st.format = m_format;
+    st.lines = m_lines;
+    st.phase_code = m_phCode;
+    st.atten_code = m_atCode;
+    st.sweep_mode = static_cast<SweepMode>(m_swWhat->currentIndex());
+    st.sweep_phase = {m_swFrom->value(), m_swTo->value(), m_swStep->value()};
+    st.sweep_atten = {m_swAtFrom->value(), m_swAtTo->value(), m_swAtStep->value()};
+    st.sweep_dwell_ms = m_swDwell->value();
+    return st;
+}
+
+void SingleChannelPanel::applyChannelState(const ChannelState& state)
+{
+    stopSweep();
+    m_format = state.format;
+    m_lines = state.lines;
+    saveSettings();
+    loadForm();
+    m_phCode = clamp_code(state.phase_code, m_format.phase);
+    m_atCode = clamp_code(state.atten_code, m_format.atten);
+    m_swWhat->setCurrentIndex(static_cast<int>(state.sweep_mode));
+    m_swFrom->setValue(state.sweep_phase.from);
+    m_swTo->setValue(state.sweep_phase.to);
+    m_swStep->setValue(state.sweep_phase.step);
+    m_swAtFrom->setValue(state.sweep_atten.from);
+    m_swAtTo->setValue(state.sweep_atten.to);
+    m_swAtStep->setValue(state.sweep_atten.step);
+    m_swDwell->setValue(state.sweep_dwell_ms);
+    render();
+    // Без связи с платой коды уйдут при подключении: onOpened шлёт CFG и SEND.
+    if (m_connected) {
+        applyCfg();
+        sendFrame();
+    }
+}
+
+bool SingleChannelPanel::boardConnected() const
+{
+    return m_connected;
+}
+
 // --- Перебор ---
 
 void SingleChannelPanel::startSweep()
@@ -848,8 +945,16 @@ void SingleChannelPanel::startSweep()
     if (!m_connected || m_sweeping) {
         return;
     }
+    m_sweepPoints = sweep_points(static_cast<SweepMode>(m_swWhat->currentIndex()),
+                                 {m_swFrom->value(), m_swTo->value(), m_swStep->value()},
+                                 {m_swAtFrom->value(), m_swAtTo->value(), m_swAtStep->value()},
+                                 m_phCode, m_atCode, m_format);
+    if (m_sweepPoints.empty()) {
+        m_swState->setText(QStringLiteral("нечего перебирать"));
+        return;
+    }
     m_sweeping = true;
-    m_sweepCode = m_swFrom->value();
+    m_sweepIndex = 0;
     updateButtons();
     m_sweepTimer->start(0);
 }
@@ -864,25 +969,20 @@ void SingleChannelPanel::stopSweep()
 
 void SingleChannelPanel::sweepTick()
 {
-    if (!m_sweeping) {
+    if (!m_sweeping || m_sweepPoints.empty()) {
         return;
     }
-    const bool phase = m_swWhat->currentIndex() == 0;
-    const int from = m_swFrom->value();
-    const int to = m_swTo->value();
-    const int step = std::max(1, m_swStep->value());
-    if (phase) {
-        m_phCode = std::min(m_sweepCode, max_code(m_format.phase.width));
-    } else {
-        m_atCode = std::min(m_sweepCode, max_code(m_format.atten.width));
-    }
+    const auto [ph, at] = m_sweepPoints[m_sweepIndex];
+    m_phCode = ph;
+    m_atCode = at;
     render();
-    m_swState->setText(phase ? QStringLiteral("фаза %1°").arg(QString::number(phase_deg(m_phCode, m_format.phase), 'f', 3))
-                             : QStringLiteral("атт. %1 дБ").arg(QString::number(atten_db(m_atCode, m_format.atten), 'f', 2)));
-    m_sweepCode += from <= to ? step : -step;
-    if ((from <= to && m_sweepCode > to) || (from > to && m_sweepCode < to)) {
-        m_sweepCode = from;
-    }
+    m_swState->setText(QStringLiteral("%1 из %2: фаза %3°, атт. %4 дБ")
+                           .arg(m_sweepIndex + 1)
+                           .arg(m_sweepPoints.size())
+                           .arg(QString::number(phase_deg(m_phCode, m_format.phase), 'f', 3),
+                                QString::number(atten_db(m_atCode, m_format.atten), 'f', 2)));
+    // После последней точки перебор начинается заново, пока оператор не нажмёт «Стоп».
+    m_sweepIndex = (m_sweepIndex + 1) % m_sweepPoints.size();
     sendFrame([this]() {
         if (m_sweeping) {
             m_sweepTimer->start(std::max(50, m_swDwell->value()));

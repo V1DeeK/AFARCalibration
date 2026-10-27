@@ -852,3 +852,39 @@ TEST_CASE("Снимки вкладок в обеих темах для пров�
     applyAppTheme(*qApp, AppTheme::Light);
 }
 
+
+TEST_CASE("Настройка 1 канала: совместный перебор и применение состояния стенда",
+          "[ui][window][single_channel]")
+{
+    app();
+    Window w;
+    w.openTab(1);
+    auto* panel = w.window->findChild<SingleChannelPanel*>();
+    REQUIRE(panel != nullptr);
+    CHECK(child<QPushButton>(*w.window, "singleChannelSaveState") != nullptr);
+    CHECK(child<QPushButton>(*w.window, "singleChannelLoadState") != nullptr);
+
+    auto* mode = child<QComboBox>(*w.window, "singleChannelSweepMode");
+    REQUIRE(mode->count() == 4);
+    auto* attenFrom = child<QSpinBox>(*w.window, "singleChannelSweepAttenFrom");
+    auto* phaseFrom = child<QSpinBox>(*w.window, "singleChannelSweepPhaseFrom");
+    mode->setCurrentIndex(0);
+    CHECK(attenFrom->parentWidget()->isHidden());
+    mode->setCurrentIndex(2);
+    CHECK_FALSE(attenFrom->parentWidget()->isHidden());
+    CHECK_FALSE(phaseFrom->parentWidget()->isHidden());
+    CHECK(panel->channelState().sweep_mode == afar::ppkh4::SweepMode::Grid);
+
+    auto st = panel->channelState();
+    st.phase_code = 5;
+    st.atten_code = 43;
+    st.sweep_mode = afar::ppkh4::SweepMode::Together;
+    st.sweep_dwell_ms = 700;
+    panel->applyChannelState(st);
+    CHECK(panel->sendCommand() == QStringLiteral("SEND 12 AC5"));
+    CHECK(mode->currentIndex() == 3);
+    const auto back = panel->channelState();
+    CHECK(back.sweep_dwell_ms == 700);
+    CHECK(back.phase_code == 5);
+    CHECK(back.atten_code == 43);
+}

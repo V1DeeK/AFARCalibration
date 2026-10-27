@@ -807,10 +807,15 @@ QWidget* SettingsTab::buildConnectionBox()
 
     m_host = new QLineEdit(m_session->host(), box);
     m_host->setObjectName(QStringLiteral("psHost"));
-    m_host->setPlaceholderText(QStringLiteral("например 172.16.226.99"));
+    m_host->setPlaceholderText(QStringLiteral("например 172.16.226.99 или fcoms.local"));
     m_host->setClearButtonEnabled(true);
-    m_host->setToolTip(QStringLiteral("IP-адрес платы. Если он пустой или плата по нему не отвечает, "
-                                      "плата ищется по MAC-адресу в локальной сети."));
+    m_host->setToolTip(QStringLiteral("IP-адрес или имя платы. Если он пустой или плата по нему не отвечает, "
+                                      "плата ищется по имени в сети, затем по MAC-адресу."));
+    m_hostName = new QLineEdit(m_session->hostName(), box);
+    m_hostName->setObjectName(QStringLiteral("psHostName"));
+    m_hostName->setPlaceholderText(QString::fromLatin1(PsSession::kDefaultHostName));
+    m_hostName->setToolTip(QStringLiteral("Имя платы в сети (mDNS). Не меняется вместе с IP: по нему плату "
+                                          "находят первым делом. Пустое поле — по имени не искать."));
     m_mac = new QLineEdit(m_session->mac(), box);
     m_mac->setObjectName(QStringLiteral("psMac"));
     m_mac->setPlaceholderText(QStringLiteral("AA:BB:CC:DD:EE:FF"));
@@ -859,6 +864,8 @@ QWidget* SettingsTab::buildConnectionBox()
 
     layout->addWidget(ui::captionLabel(QStringLiteral("IP-адрес"), box));
     layout->addWidget(m_host);
+    layout->addWidget(ui::captionLabel(QStringLiteral("Имя в сети"), box));
+    layout->addWidget(m_hostName);
     layout->addWidget(ui::captionLabel(QStringLiteral("MAC-адрес"), box));
     layout->addWidget(m_mac);
     layout->addLayout(ports);
@@ -869,7 +876,7 @@ QWidget* SettingsTab::buildConnectionBox()
 
     connect(m_connect, &QPushButton::clicked, this, &SettingsTab::onMainButton);
     // Enter в любом поле — подключиться с тем, что введено (и повторить попытку, если она уже идёт).
-    for (QLineEdit* edit : {m_host, m_mac}) {
+    for (QLineEdit* edit : {m_host, m_hostName, m_mac}) {
         connect(edit, &QLineEdit::returnPressed, this, &SettingsTab::connectNow);
     }
     for (QSpinBox* spin : {m_port, m_tlmPort}) {
@@ -935,6 +942,7 @@ void SettingsTab::connectNow()
     if (m_session->link()->isReady() || m_session->seriesActive()) {
         return;
     }
+    m_session->setHostName(m_hostName->text());
     m_session->connectTo(m_host->text(), static_cast<quint16>(m_port->value()),
                          static_cast<quint16>(m_tlmPort->value()), m_mac->text());
 }
@@ -966,8 +974,9 @@ void SettingsTab::refreshConnection()
     m_connect->setEnabled(!series);
     // Пока связи нет, поля можно править всегда — и во время попыток подключения, и во время поиска по MAC.
     m_findByMac->setEnabled(!ready && !series);
-    for (QWidget* w : {static_cast<QWidget*>(m_host), static_cast<QWidget*>(m_mac),
-                       static_cast<QWidget*>(m_port), static_cast<QWidget*>(m_tlmPort)}) {
+    for (QWidget* w : {static_cast<QWidget*>(m_host), static_cast<QWidget*>(m_hostName),
+                       static_cast<QWidget*>(m_mac), static_cast<QWidget*>(m_port),
+                       static_cast<QWidget*>(m_tlmPort)}) {
         w->setEnabled(!ready);
     }
 }

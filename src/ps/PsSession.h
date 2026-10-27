@@ -13,11 +13,14 @@
 #include <optional>
 
 class MacResolver;
+class QHostInfo;
+class QTimer;
 
 /// Одна связь с PS на всю программу: её делят вкладки «Настройки»,
-/// «Тестовый прогон» и «Приёмка». Хранит адрес, MAC и
-/// порты в настройках, ищет плату по MAC, если адрес не ответил (IP платы
-/// меняется, MAC постоянный), ведёт журнал обмена, режим изделия, последнюю
+/// «Тестовый прогон» и «Приёмка». Хранит адрес, имя в сети, MAC и порты в
+/// настройках. Если адрес не ответил (IP платы меняется), ищет плату сначала
+/// по имени в сети (mDNS), потом по MAC и повторяет поиск, пока связи нет.
+/// Ведёт журнал обмена, режим изделия, последнюю
 /// телеметрию и результаты полного сканирования. Команды железу шлёт PS.
 class PsSession final : public QObject {
     Q_OBJECT
@@ -32,6 +35,10 @@ public:
 
     /// MAC платы по умолчанию — тот же, что у РМО и у чтения параметров libiio.
     static constexpr const char* kDefaultMac = "42:7E:D7:4E:0F:77";
+    /// Имя платы в сети (mDNS) по умолчанию.
+    static constexpr const char* kDefaultHostName = "fcoms.local";
+    /// Пока связи нет, поиск платы по имени и MAC повторяется с этим периодом.
+    static constexpr int kSearchRetryMs = 10000;
     static constexpr int kLogLimit = 5000;
     static constexpr int kTcpLogPerSec = 400;
     static constexpr int kUdpLogPerSec = 25;
@@ -45,6 +52,10 @@ public:
     [[nodiscard]] quint16 port() const;
     [[nodiscard]] quint16 telemetryPort() const;
     [[nodiscard]] QString mac() const;
+    /// Имя платы в сети; пустое — по имени не ищем.
+    [[nodiscard]] QString hostName() const;
+    /// Запомнить имя платы в сети (поле «Имя в сети»).
+    void setHostName(const QString& name);
     /// Через сколько мс простоя канала уходит keep_alive (по умолчанию 5000).
     [[nodiscard]] int keepAliveMs() const;
     static constexpr int kKeepAliveMinMs = 200;
@@ -53,7 +64,7 @@ public:
     /// Оператор подключался и не нажимал «Отключиться» — подключаться при запуске.
     [[nodiscard]] bool autoConnect() const;
 
-    /// Подключиться по адресу; пустой адрес и верный MAC — сразу поиск по MAC.
+    /// Подключиться по адресу (IP или имя в сети); пустой адрес — сразу поиск по имени и MAC.
     /// false и lastError() — параметры неверны или идёт серия.
     bool connectTo(const QString& host, quint16 port, quint16 telemetryPort, const QString& mac);
     /// Найти плату по MAC и подключиться к найденному адресу.
@@ -65,10 +76,12 @@ public:
     void connectFromSettings();
 
     [[nodiscard]] bool searching() const;
-    /// Идёт попытка подключения, поиск платы по MAC или ожидание переподключения.
+    /// Идёт попытка подключения, поиск платы по имени или MAC или ожидание переподключения.
     [[nodiscard]] bool busy() const;
     /// Для автотестов: подмена ARP и списка адресов опроса.
     [[nodiscard]] MacResolver* macResolver() const { return m_resolver; }
+    /// Для автотестов: период повтора поиска вместо kSearchRetryMs.
+    void setSearchRetryMs(int ms);
     [[nodiscard]] QString lastError() const { return m_lastError; }
     /// Состояние связи одной строкой для окошка «Подключение».
     [[nodiscard]] QString statusText() const;
@@ -127,7 +140,7 @@ signals:
     /// Сменилось, можно ли слать ручные команды.
     void controlsChanged();
     void sffChanged();
-    /// Плата найдена по MAC по новому адресу.
+    /// Плата найдена по имени в сети или по MAC по новому адресу.
     void hostResolved(const QString& ip);
     /// MAC платы, с которой установлена связь, определён по таблице ARP и отличался от сохранённого.
     void boardMacDetected(const QString& mac);
@@ -137,7 +150,17 @@ signals:
 private:
     void saveSettings(const QString& host, quint16 port, quint16 telemetryPort, const QString& mac);
     void startLink(const QString& host, quint16 port, quint16 telemetryPort);
-    void searchByMac();
+    /// Адрес не ответил: поиск по имени, затем по MAC. Один раз на попытку,
+    /// дальше — повтор по таймеру, пока связи нет.
+    void findBoard();
+    void lookupName(const QString& name);
+    void onNameLookup(const QHostInfo& info);
+    /// Имя не нашлось: поиск по MAC или, без MAC, повтор позже.
+    void startMacSearch();
+    void scheduleRetry();
+    void stopSearch();
+    /// Подключиться к найденному адресу, если оператор не отключался.
+    void connectToFound(const QString& ip);
     void onLinkState(PsLink::State state);
     void onResponse(const afar::ps::Envelope& response, afar::ps::Status status);
     void onEvent(const afar::ps::Envelope& event);
@@ -153,6 +176,9 @@ private:
     QString m_lastError;
     QString m_searchText;
     bool m_macSearchDone = false;
+    int m_nameLookupId = -1;  ///< идёт QHostInfo::lookupHost
+    QString m_lookupName;
+    QTimer* m_retry = nullptr;
     bool m_seriesActive = false;
     bool m_reconnectAfterSeries = false;
     bool m_checkRunning = false;
@@ -160,6 +186,8 @@ private:
     afar::ps::Mode m_mode = afar::ps::Mode::Idle;
     std::optional<afar::ps::Mode> m_modeAfterIdle;  ///< цель requestMode, ждём выхода в IDLE
     std::optional<afar::ps::Mode> m_modeAfterState;  ///< цель requestMode, ждём ответа get_state
+    /// msg_count нашего get_state: ответ на чужой, отправленный раньше, может нести старое состояние.
+    int m_modeAfterStateCount = -1;
     QString m_state;
     std::optional<afar::ps::Telemetry> m_telemetry;
     QVector<LogLine> m_log;

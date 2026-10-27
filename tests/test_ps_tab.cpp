@@ -91,6 +91,8 @@ struct Ui {
     Ui()
     {
         QSettings().clear();
+        // Тесты не ищут плату по имени в сети, кроме тех, что задают имя сами.
+        QSettings().setValue(QStringLiteral("ps/hostname"), QString());
         session = std::make_unique<PsSession>();
         // Тесты не сканируют сеть: поиск по MAC — только по подставленным данным.
         session->macResolver()->setArpReader([] { return QHash<QString, QString>{}; });
@@ -589,6 +591,87 @@ TEST_CASE("Подключение: плата сменила IP — находи
         waitFor([&] { return false; }, 300);
         CHECK_FALSE(searched);
         CHECK_FALSE(ui.session->link()->isReady());
+    }
+}
+
+TEST_CASE("Подключение: плата находится по имени в сети, поиск повторяется, пока связи нет", "[ps][ui][mac]")
+{
+    app();
+    TestPsServer server;
+    REQUIRE(server.listen());
+
+    SECTION("старый адрес не отвечает — адрес берётся по имени")
+    {
+        Ui ui;
+        bool searchedMac = false;
+        ui.session->macResolver()->setArpReader([&searchedMac] {
+            searchedMac = true;
+            return QHash<QString, QString>{};
+        });
+        ui.show();
+        fillConnection(ui, QStringLiteral("::1"), server.port(), QStringLiteral("42:7E:D7:4E:0F:77"));
+        child<QLineEdit>(*ui.connection, "psHostName")->setText(QStringLiteral("localhost"));
+        child<QPushButton>(*ui.connection, "psConnect")->click();
+        REQUIRE(waitFor([&] { return ui.session->link()->isReady(); }, 8000));
+        CHECK(ui.session->link()->host() == QStringLiteral("127.0.0.1"));
+        CHECK(ui.session->host() == QStringLiteral("127.0.0.1"));
+        CHECK(ui.session->hostName() == QStringLiteral("localhost"));
+        CHECK(child<QLineEdit>(*ui.connection, "psHost")->text() == QStringLiteral("127.0.0.1"));
+        CHECK_FALSE(searchedMac);
+    }
+
+    SECTION("имя в поле адреса: подключение по IPv4, имя в настройках остаётся")
+    {
+        Ui ui;
+        ui.show();
+        fillConnection(ui, QStringLiteral("localhost"), server.port());
+        child<QPushButton>(*ui.connection, "psConnect")->click();
+        CHECK(ui.session->searching());
+        REQUIRE(waitFor([&] { return ui.session->link()->isReady(); }, 8000));
+        CHECK(ui.session->link()->host() == QStringLiteral("127.0.0.1"));
+        CHECK(ui.session->host() == QStringLiteral("localhost"));
+        CHECK(child<QLineEdit>(*ui.connection, "psHost")->text() == QStringLiteral("localhost"));
+    }
+
+    SECTION("плата появилась в сети позже первого поиска — следующий поиск её находит")
+    {
+        Ui ui;
+        ui.session->setSearchRetryMs(300);
+        ui.session->macResolver()->setCandidateProvider([] { return QStringList{QStringLiteral("127.0.0.1")}; });
+        bool boardUp = false;
+        ui.session->macResolver()->setArpReader([&boardUp] {
+            return boardUp ? kBoardInArp : QHash<QString, QString>{};
+        });
+        ui.show();
+        fillConnection(ui, QStringLiteral("::1"), server.port(), QStringLiteral("42:7E:D7:4E:0F:77"));
+        child<QPushButton>(*ui.connection, "psConnect")->click();
+        // Первый поиск по MAC не находит плату: она ещё перезагружается.
+        REQUIRE(waitFor([&] {
+            return child<QLabel>(*ui.connection, "psMessage")->text().contains(QStringLiteral("не найдена"));
+        }, 6000));
+        CHECK_FALSE(ui.session->link()->isReady());
+        boardUp = true;
+        REQUIRE(waitFor([&] { return ui.session->link()->isReady(); }, 8000));
+        CHECK(ui.session->link()->host() == QStringLiteral("127.0.0.1"));
+    }
+
+    SECTION("«Отключиться» останавливает повторный поиск")
+    {
+        Ui ui;
+        ui.session->setSearchRetryMs(200);
+        int lookups = 0;
+        ui.session->macResolver()->setArpReader([&lookups] {
+            ++lookups;
+            return QHash<QString, QString>{};
+        });
+        ui.show();
+        fillConnection(ui, QString(), server.port(), QStringLiteral("11:22:33:44:55:66"));
+        child<QPushButton>(*ui.connection, "psConnect")->click();
+        REQUIRE(waitFor([&] { return lookups >= 2; }, 4000));
+        ui.session->disconnectFromPs();
+        const int stopped = lookups;
+        waitFor([&] { return false; }, 800);
+        CHECK(lookups == stopped);
     }
 }
 

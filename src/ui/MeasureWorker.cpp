@@ -709,6 +709,28 @@ void MeasureWorker::loadNativeState(const QString& path)
     }
 }
 
+void MeasureWorker::saveNativeState(const QString& path)
+{
+    const auto st = m_orch->state();
+    if (st != afar::RunState::Idle && st != afar::RunState::Complete
+        && st != afar::RunState::Aborted && st != afar::RunState::Error) {
+        emit nativeStateSaved(false, QStringLiteral("Сохранение состояния недоступно во время серии"));
+        return;
+    }
+    try {
+        auto* native = nativeControlsVna();
+        const QFileInfo file(path);
+        native->save_state(QDir::toNativeSeparators(file.absoluteFilePath()).toLocal8Bit().toStdString());
+        const QFileInfo saved(file.absoluteFilePath());
+        if (!saved.isFile() || saved.size() <= 0) {
+            throw std::runtime_error("S2VNA не создала файл состояния");
+        }
+        emit nativeStateSaved(true, QStringLiteral("Состояние S2VNA сохранено"));
+    } catch (const std::exception& e) {
+        emit nativeStateSaved(false, QString::fromUtf8(e.what()));
+    }
+}
+
 void MeasureWorker::undoNativeState()
 {
     const auto st = m_orch->state();

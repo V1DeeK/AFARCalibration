@@ -208,6 +208,14 @@ add_library(afar_ppkh4_frame STATIC
 target_include_directories(afar_ppkh4_frame PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ppkh4)
 afar_enable_warnings(afar_ppkh4_frame)
 
+# Состояние стенда (.afarstate) — настройки вкладки «Настройка 1 канала» в JSON.
+add_library(afar_ppkh4_state STATIC
+    ppkh4/Ppkh4State.cpp
+    ppkh4/Ppkh4State.h
+)
+target_link_libraries(afar_ppkh4_state PUBLIC afar_ppkh4_frame nlohmann_json::nlohmann_json)
+afar_enable_warnings(afar_ppkh4_state)
+
 find_package(Qt6 QUIET COMPONENTS SerialPort)
 add_library(afar_ppkh4 STATIC
     ppkh4/Ppkh4Link.cpp
@@ -215,7 +223,7 @@ add_library(afar_ppkh4 STATIC
 )
 set_target_properties(afar_ppkh4 PROPERTIES AUTOMOC ON)
 target_include_directories(afar_ppkh4 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ppkh4)
-target_link_libraries(afar_ppkh4 PUBLIC afar_ppkh4_frame Qt6::Core)
+target_link_libraries(afar_ppkh4 PUBLIC afar_ppkh4_frame afar_ppkh4_state Qt6::Core)
 if(TARGET Qt6::SerialPort)
     target_link_libraries(afar_ppkh4 PRIVATE Qt6::SerialPort)
     target_compile_definitions(afar_ppkh4 PRIVATE AFAR_HAVE_SERIALPORT)

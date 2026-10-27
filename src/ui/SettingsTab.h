@@ -100,6 +100,7 @@ private:
 
     // Подключение к плате
     QLineEdit* m_host = nullptr;
+    QLineEdit* m_hostName = nullptr;
     QLineEdit* m_mac = nullptr;
     QSpinBox* m_port = nullptr;
     QSpinBox* m_tlmPort = nullptr;
