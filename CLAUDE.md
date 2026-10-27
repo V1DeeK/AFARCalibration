@@ -35,7 +35,7 @@ ctest --test-dir build -R c2220_driver --output-on-failure   # один тест
 `hdf5_store`, `probe_run`, `pause_resume`, `crash_recovery`, `faults`,
 `export_manifest`, `two_port_export`, `c2220_driver`, `full_sim_run`,
 `lut_perf`, `at12_soak`, `verify_series_tool` (только при PowerShell),
-`ui_interactions`, `ppkh4_frame`. Подробности и типовые ошибки — скилл `build-and-test`.
+`ui_interactions`, `ppkh4_frame`, `ppkh4_state`. Подробности и типовые ошибки — скилл `build-and-test`.
 
 ## Жёсткие ограничения
 

@@ -173,6 +173,60 @@ bool format_valid(const FrameFormat& format)
            && field_ok(format.atten);
 }
 
+namespace {
+
+std::vector<int> range_codes(const SweepRange& r, const FieldFormat& field)
+{
+    std::vector<int> out;
+    const int step = std::max(1, std::abs(r.step));
+    if (r.from <= r.to) {
+        for (int c = r.from; c <= r.to; c += step) {
+            out.push_back(std::min(std::max(c, 0), max_code(field.width)));
+        }
+    } else {
+        for (int c = r.from; c >= r.to; c -= step) {
+            out.push_back(std::min(std::max(c, 0), max_code(field.width)));
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+std::vector<std::pair<int, int>> sweep_points(SweepMode mode, const SweepRange& phase, const SweepRange& atten,
+                                              int current_phase, int current_atten, const FrameFormat& format)
+{
+    const auto ph = range_codes(phase, format.phase);
+    const auto at = range_codes(atten, format.atten);
+    std::vector<std::pair<int, int>> out;
+    switch (mode) {
+    case SweepMode::Phase:
+        for (const int p : ph) {
+            out.emplace_back(p, current_atten);
+        }
+        break;
+    case SweepMode::Atten:
+        for (const int a : at) {
+            out.emplace_back(current_phase, a);
+        }
+        break;
+    case SweepMode::Grid:
+        out.reserve(ph.size() * at.size());
+        for (const int a : at) {
+            for (const int p : ph) {
+                out.emplace_back(p, a);
+            }
+        }
+        break;
+    case SweepMode::Together:
+        for (std::size_t i = 0; i < std::min(ph.size(), at.size()); ++i) {
+            out.emplace_back(ph[i], at[i]);
+        }
+        break;
+    }
+    return out;
+}
+
 std::string send_command(const FrameFormat& format, int phase_code, int atten_code)
 {
     const auto bits = build_frame(format, phase_code, atten_code);

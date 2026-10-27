@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include <vector>
 
 /// Кадр фазы и аттенюации одного канала для платы ППКХ4 (разъём X2).
@@ -60,6 +61,27 @@ struct LineConfig {
 [[nodiscard]] bool fields_outside(const FrameFormat& format);
 /// Раскладку можно отправлять в плату: размеры в пределах прошивки.
 [[nodiscard]] bool format_valid(const FrameFormat& format);
+
+/// Что перебирать на вкладке: одно поле, все сочетания или оба поля шагом вместе.
+enum class SweepMode {
+    Phase,     ///< только фаза, аттенюация не меняется
+    Atten,     ///< только аттенюация, фаза не меняется
+    Grid,      ///< все сочетания: аттенюация — внешний цикл, фаза — внутренний
+    Together,  ///< оба кода шагают одновременно, пока не кончится более короткий диапазон
+};
+
+/// Диапазон кодов «от»…«до» с шагом; «от» > «до» — перебор вниз.
+struct SweepRange {
+    int from = 0;
+    int to = 63;
+    int step = 1;
+};
+
+/// Пары (фаза, аттенюация) одного прохода перебора. Коды обрезаются по ширине поля,
+/// неперебираемое поле остаётся равным текущему коду.
+[[nodiscard]] std::vector<std::pair<int, int>> sweep_points(SweepMode mode, const SweepRange& phase,
+                                                            const SweepRange& atten, int current_phase,
+                                                            int current_atten, const FrameFormat& format);
 
 /// «SEND <бит> <hex>».
 [[nodiscard]] std::string send_command(const FrameFormat& format, int phase_code, int atten_code);

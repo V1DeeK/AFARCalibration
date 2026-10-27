@@ -81,3 +81,26 @@ TEST_CASE("ППКХ4: команды CFG в порядке исходной ст
     CHECK(cmds[4] == "CFG HALFUS 5");
     CHECK(cmds[5] == "CFG LEUS 1");
 }
+
+TEST_CASE("ППКХ4: перебор фазы и аттенюации вместе", "[ppkh4][sweep]")
+{
+    const FrameFormat f;
+    using P = std::pair<int, int>;
+
+    const auto phase = sweep_points(SweepMode::Phase, {0, 4, 2}, {0, 63, 1}, 7, 30, f);
+    CHECK(phase == std::vector<P>{{0, 30}, {2, 30}, {4, 30}});
+
+    const auto atten = sweep_points(SweepMode::Atten, {0, 63, 1}, {5, 3, 1}, 7, 30, f);
+    CHECK(atten == std::vector<P>{{7, 5}, {7, 4}, {7, 3}});
+
+    const auto grid = sweep_points(SweepMode::Grid, {0, 2, 1}, {10, 11, 1}, 0, 0, f);
+    CHECK(grid == std::vector<P>{{0, 10}, {1, 10}, {2, 10}, {0, 11}, {1, 11}, {2, 11}});
+    CHECK(sweep_points(SweepMode::Grid, {0, 63, 1}, {0, 63, 1}, 0, 0, f).size() == 64 * 64);
+
+    const auto together = sweep_points(SweepMode::Together, {0, 10, 5}, {63, 0, 1}, 0, 0, f);
+    CHECK(together == std::vector<P>{{0, 63}, {5, 62}, {10, 61}});
+
+    // Коды выше ширины поля обрезаются, как в одиночном переборе.
+    const auto clipped = sweep_points(SweepMode::Phase, {62, 65, 1}, {0, 0, 1}, 0, 0, f);
+    CHECK(clipped == std::vector<P>{{62, 0}, {63, 0}, {63, 0}, {63, 0}});
+}

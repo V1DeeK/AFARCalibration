@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Ppkh4Frame.h"
+#include "Ppkh4State.h"
 
 #include <QWidget>
 
@@ -40,6 +41,17 @@ public:
     void setPhaseCode(int code);
     void setAttenCode(int code);
 
+    /// Настройки вкладки для файла состояния стенда.
+    [[nodiscard]] afar::ppkh4::ChannelState channelState() const;
+    /// Применить сохранённые настройки; при связи с платой сразу шлёт CFG и SEND.
+    void applyChannelState(const afar::ppkh4::ChannelState& state);
+    [[nodiscard]] bool boardConnected() const;
+
+signals:
+    /// Кнопки «Сохранить/Загрузить состояние»: диалоги и S2VNA ведёт MainWindow через MeasureWorker.
+    void stateSaveRequested();
+    void stateLoadRequested();
+
 private:
     QWidget* makeConnectionBox();
     QWidget* makePhaseBox();
@@ -70,6 +82,7 @@ private:
     void startSweep();
     void stopSweep();
     void sweepTick();
+    void updateSweepRows();
 
     void appendLog(const QString& line);
 
@@ -83,7 +96,8 @@ private:
     QTimer* m_sendDebounce = nullptr;
     QTimer* m_sweepTimer = nullptr;
     bool m_sweeping = false;
-    int m_sweepCode = 0;
+    std::vector<std::pair<int, int>> m_sweepPoints;
+    std::size_t m_sweepIndex = 0;
 
     // Подключение
     QComboBox* m_port = nullptr;
@@ -115,6 +129,11 @@ private:
     QSpinBox* m_swFrom = nullptr;
     QSpinBox* m_swTo = nullptr;
     QSpinBox* m_swStep = nullptr;
+    QSpinBox* m_swAtFrom = nullptr;
+    QSpinBox* m_swAtTo = nullptr;
+    QSpinBox* m_swAtStep = nullptr;
+    QWidget* m_swPhaseRow = nullptr;
+    QWidget* m_swAttenRow = nullptr;
     QSpinBox* m_swDwell = nullptr;
     QPushButton* m_swStart = nullptr;
     QPushButton* m_swStop = nullptr;

@@ -24,6 +24,11 @@ target_link_libraries(test_ppkh4_frame PRIVATE Catch2::Catch2WithMain afar_ppkh4
 afar_enable_warnings(test_ppkh4_frame)
 add_test(NAME ppkh4_frame COMMAND test_ppkh4_frame)
 
+add_executable(test_ppkh4_state test_ppkh4_state.cpp)
+target_link_libraries(test_ppkh4_state PRIVATE Catch2::Catch2WithMain afar_ppkh4_state)
+afar_enable_warnings(test_ppkh4_state)
+add_test(NAME ppkh4_state COMMAND test_ppkh4_state)
+
 # Переносимость Linux/macOS/Windows: числа без локали, телеметрия процесса.
 add_executable(test_portability test_portability.cpp)
 target_link_libraries(test_portability PRIVATE Catch2::Catch2WithMain afar_core)

@@ -27,7 +27,10 @@
 #include <QDir>
 #include <QDebug>
 #include <QFrame>
+#include <QDateTime>
+#include <QFile>
 #include <QFileDialog>
+#include <QSaveFile>
 #include <QComboBox>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -173,9 +176,13 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     calLayout->addWidget(m_measure->calibrationPanel());
     m_connections->setMiddleWidget(calBox);
     m_connections->setSweepWidget(m_measure->sweepPanel());
-    auto* singleChannel = new SingleChannelPanel(root);
-    m_measure->setSingleChannelControls(singleChannel->createQuickControls());
-    m_connections->setSingleChannelWidget(singleChannel);
+    m_singleChannel = new SingleChannelPanel(root);
+    m_measure->setSingleChannelControls(m_singleChannel->createQuickControls());
+    m_connections->setSingleChannelWidget(m_singleChannel);
+    connect(m_singleChannel, &SingleChannelPanel::stateSaveRequested,
+            this, &MainWindow::onBenchStateSaveRequested);
+    connect(m_singleChannel, &SingleChannelPanel::stateLoadRequested,
+            this, &MainWindow::onBenchStateLoadRequested);
     connect(m_measure, &MeasureTab::sweepSettingsRequested,
             m_connections, &ConnectionBar::showSweepSettings);
     // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Настройки».
@@ -389,6 +396,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
             });
     connect(m_worker, &MeasureWorker::nativeMarkersChanged, m_measure,
             &MeasureTab::setNativeMarkerValues, Qt::QueuedConnection);
+    connect(m_worker, &MeasureWorker::nativeStateSaved, this, &MainWindow::onBenchStateS2VnaSaved);
     connect(m_worker, &MeasureWorker::nativeStateLoaded, this,
             [this](bool ok, const QString& message) {
                 m_measure->setNativeStateLoading(false);
@@ -399,6 +407,22 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
                 } else {
                     m_connections->setDiagnostic(message);
                     statusBar()->showMessage(message, 12000);
+                }
+                // Загрузка состояния стенда: после .sta применяются настройки 1 канала.
+                if (m_benchLoadPending) {
+                    const auto channel = *m_benchLoadPending;
+                    m_benchLoadPending.reset();
+                    if (ok || QMessageBox::question(
+                                  this, QStringLiteral("Состояние стенда"),
+                                  QStringLiteral("Состояние S2VNA не восстановлено. Применить только "
+                                                 "настройки 1 канала?"),
+                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+                                  == QMessageBox::Yes) {
+                        m_singleChannel->applyChannelState(channel);
+                        statusBar()->showMessage(ok ? QStringLiteral("Состояние стенда загружено")
+                                                    : QStringLiteral("Применены только настройки 1 канала"),
+                                                 12000);
+                    }
                 }
                 QTimer::singleShot(300, m_measure, [this] {
                     if (m_tabs->currentIndex() == 1) {
@@ -765,6 +789,141 @@ void MainWindow::onNativeStateUndoRequested()
     m_measure->setNativeStateLoading(true);
     setOperationProgress(QStringLiteral("Откат состояния S2VNA"), 0, 1);
     QMetaObject::invokeMethod(m_worker, "undoNativeState", Qt::QueuedConnection);
+}
+
+void MainWindow::onBenchStateSaveRequested()
+{
+    if (m_benchSavePending || m_benchLoadPending) {
+        return;
+    }
+    QSettings settings;
+    const QString dir = settings.value(QStringLiteral("ui/bench_state_dir"),
+                                       QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
+                            .toString();
+    QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("Сохранить состояние стенда"),
+        QDir(dir).filePath(QDateTime::currentDateTime().toString(QStringLiteral("'состояние-'yyyyMMdd-HHmm"))),
+        QStringLiteral("Состояние стенда (*.afarstate)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    if (!path.endsWith(QStringLiteral(".afarstate"), Qt::CaseInsensitive)) {
+        path += QStringLiteral(".afarstate");
+    }
+    const QFileInfo info(path);
+    settings.setValue(QStringLiteral("ui/bench_state_dir"), info.absolutePath());
+
+    afar::ppkh4::BenchState state;
+    state.name = info.completeBaseName().toStdString();
+    state.saved_at = QDateTime::currentDateTime().toString(Qt::ISODate).toStdString();
+    state.s2vna_state_file = (info.completeBaseName() + QStringLiteral(".sta")).toStdString();
+    state.channel = m_singleChannel->channelState();
+    m_benchSavePending = std::make_pair(info.absoluteFilePath(), state);
+    setOperationProgress(QStringLiteral("Сохранение состояния S2VNA"), 0, 1);
+    QMetaObject::invokeMethod(m_worker, "saveNativeState", Qt::QueuedConnection,
+                              Q_ARG(QString, info.absoluteDir().filePath(
+                                                 QString::fromStdString(state.s2vna_state_file))));
+}
+
+void MainWindow::onBenchStateS2VnaSaved(bool ok, const QString& message)
+{
+    if (!m_benchSavePending) {
+        return;
+    }
+    auto [path, state] = *m_benchSavePending;
+    m_benchSavePending.reset();
+    if (!ok) {
+        setOperationProgress(QStringLiteral("S2VNA не сохранила состояние"), 1, 1);
+        if (QMessageBox::question(this, QStringLiteral("Состояние стенда"),
+                                  QStringLiteral("Состояние S2VNA не сохранено: %1\n\n"
+                                                 "Сохранить только настройки 1 канала?")
+                                      .arg(message),
+                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+            != QMessageBox::Yes) {
+            return;
+        }
+        state.s2vna_state_file.clear();
+    }
+    QSaveFile file(path);
+    const QByteArray text = QByteArray::fromStdString(afar::ppkh4::to_json_text(state));
+    if (!file.open(QIODevice::WriteOnly) || file.write(text) != text.size() || !file.commit()) {
+        QMessageBox::warning(this, QStringLiteral("Состояние стенда"),
+                             QStringLiteral("Не удалось записать %1: %2").arg(path, file.errorString()));
+        return;
+    }
+    const QString done = state.s2vna_state_file.empty()
+                             ? QStringLiteral("Сохранены настройки 1 канала: %1").arg(path)
+                             : QStringLiteral("Состояние стенда сохранено: %1").arg(path);
+    setOperationProgress(done, 1, 1);
+    statusBar()->showMessage(done, 12000);
+}
+
+void MainWindow::onBenchStateLoadRequested()
+{
+    if (m_benchSavePending || m_benchLoadPending) {
+        return;
+    }
+    QSettings settings;
+    const QString dir = settings.value(QStringLiteral("ui/bench_state_dir"),
+                                       QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
+                            .toString();
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Загрузить состояние стенда"), dir,
+                                                      QStringLiteral("Состояние стенда (*.afarstate)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    const QFileInfo info(path);
+    settings.setValue(QStringLiteral("ui/bench_state_dir"), info.absolutePath());
+    QFile file(path);
+    afar::ppkh4::BenchState state;
+    std::string error;
+    if (!file.open(QIODevice::ReadOnly)
+        || !afar::ppkh4::from_json_text(file.readAll().toStdString(), state, &error)) {
+        QMessageBox::warning(this, QStringLiteral("Состояние стенда"),
+                             QStringLiteral("Файл %1 не прочитан: %2")
+                                 .arg(path, error.empty() ? file.errorString() : QString::fromStdString(error)));
+        return;
+    }
+    const QString sta = state.s2vna_state_file.empty()
+                            ? QString()
+                            : info.absoluteDir().filePath(QString::fromStdString(state.s2vna_state_file));
+    const auto& ch = state.channel;
+    const QString summary = QStringLiteral("Фаза %1°, аттенюация %2 дБ (коды %3 / %4).")
+                                .arg(QString::number(afar::ppkh4::phase_deg(ch.phase_code, ch.format.phase), 'f', 3),
+                                     QString::number(afar::ppkh4::atten_db(ch.atten_code, ch.format.atten), 'f', 2))
+                                .arg(ch.phase_code)
+                                .arg(ch.atten_code);
+    if (sta.isEmpty() || !QFileInfo(sta).isFile()) {
+        const QString why = sta.isEmpty() ? QStringLiteral("В состоянии нет файла S2VNA.")
+                                          : QStringLiteral("Файл S2VNA не найден: %1").arg(sta);
+        if (QMessageBox::question(this, QStringLiteral("Состояние стенда"),
+                                  QStringLiteral("%1\n\nПрименить только настройки 1 канала?\n%2")
+                                      .arg(why, summary),
+                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+            == QMessageBox::Yes) {
+            m_singleChannel->applyChannelState(ch);
+            statusBar()->showMessage(QStringLiteral("Применены настройки 1 канала"), 12000);
+        }
+        return;
+    }
+    if (QMessageBox::question(
+            this, QStringLiteral("Применить состояние стенда?"),
+            QStringLiteral("S2VNA: частоты, число точек, мощность, графики и калибровка будут заменены, "
+                           "ВЧ-выход может включиться. Предыдущее состояние можно будет откатить.\n"
+                           "1 канал: %1%2\n\n%3\n\nПродолжить?")
+                .arg(summary,
+                     m_singleChannel->boardConnected()
+                         ? QStringLiteral(" Коды сразу уйдут в плату.")
+                         : QStringLiteral(" Плата не подключена: коды уйдут при подключении."),
+                     path),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+    m_benchLoadPending = ch;
+    m_measure->stopEmbeddedGraph();
+    m_measure->setNativeStateLoading(true);
+    setOperationProgress(QStringLiteral("Восстановление состояния стенда"), 0, 1);
+    QMetaObject::invokeMethod(m_worker, "loadNativeState", Qt::QueuedConnection, Q_ARG(QString, sta));
 }
 
 void MainWindow::onApplyNativeSweep()
