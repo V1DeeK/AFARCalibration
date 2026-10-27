@@ -160,6 +160,8 @@ private:
     afar::ps::Mode m_mode = afar::ps::Mode::Idle;
     std::optional<afar::ps::Mode> m_modeAfterIdle;  ///< цель requestMode, ждём выхода в IDLE
     std::optional<afar::ps::Mode> m_modeAfterState;  ///< цель requestMode, ждём ответа get_state
+    /// msg_count нашего get_state: ответ на чужой, отправленный раньше, может нести старое состояние.
+    int m_modeAfterStateCount = -1;
     QString m_state;
     std::optional<afar::ps::Telemetry> m_telemetry;
     QVector<LogLine> m_log;

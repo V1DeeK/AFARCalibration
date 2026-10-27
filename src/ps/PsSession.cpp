@@ -445,15 +445,21 @@ int PsSession::requestModeNow(ps::Mode target, bool stateFresh)
     m_modeAfterIdle.reset();
     m_modeAfterState.reset();
     QString why;
-    if (!canLeaveMode(&why)) {
-        if (!stateFresh) {
-            // Состояние могло смениться без нас (обзор закончился, цель потеряна) — уточняем.
-            const int count = send(ps::msg::GetState);
-            if (count >= 0) {
-                m_modeAfterState = target;
-            }
-            return count;
+    // Состояние вложенного КА в OPERATIONAL и FULL_SCAN_FREQ меняется без нас (поиск запущен,
+    // обзор закончился, цель потеряна), а телеметрия его не несёт, поэтому перед уходом из
+    // этих режимов состояние всегда уточняется get_state.
+    const bool hasSubstate = m_mode == ps::Mode::Operational || m_mode == ps::Mode::FullScanFreq;
+    const bool leaving = m_modeKnown && target != m_mode;
+    const bool allowed = canLeaveMode(&why);
+    if (!stateFresh && (!allowed || (leaving && hasSubstate))) {
+        const int count = send(ps::msg::GetState);
+        if (count >= 0) {
+            m_modeAfterState = target;
+            m_modeAfterStateCount = count;
         }
+        return count;
+    }
+    if (!allowed) {
         refuse(QStringLiteral("Режим не сменён: %1").arg(why));
         emit modeRequestRefused(m_lastError);
         return -1;
@@ -478,7 +484,9 @@ void PsSession::onResponse(const ps::Envelope& r, ps::Status status)
         emit modeRequestRefused(QStringLiteral("Режим не сменён: PS ответил %1 (%2)")
                                     .arg(qs(ps::toString(status)), QString::fromStdString(ps::statusRu(status))));
     }
-    if (r.msg_type == ps::msg::GetState && status != ps::Status::Ok) {
+    const bool ownStateReply = r.msg_type == ps::msg::GetState && m_modeAfterState
+                               && static_cast<int>(r.msg_count) == m_modeAfterStateCount;
+    if (ownStateReply && status != ps::Status::Ok) {
         m_modeAfterState.reset();
     }
     if (status != ps::Status::Ok) {
@@ -493,7 +501,7 @@ void PsSession::onResponse(const ps::Envelope& r, ps::Status status)
         if (ps::StateInfo::fromJson(r.payload, info, &error)) {
             setMode(info.mode, QString::fromStdString(info.state));
         }
-        if (m_modeAfterState) {
+        if (ownStateReply) {
             const ps::Mode target = *m_modeAfterState;
             m_modeAfterState.reset();
             requestModeNow(target, true);
