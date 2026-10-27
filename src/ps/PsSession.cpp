@@ -2,6 +2,8 @@
 
 #include "MacResolver.h"
 
+#include <QHostAddress>
+#include <QHostInfo>
 #include <QSettings>
 #include <QTimer>
 
@@ -23,12 +25,18 @@ quint16 savedPort(const QString& key, quint16 fallback)
     return (p > 0 && p <= 65535) ? static_cast<quint16>(p) : fallback;
 }
 
+bool isIpLiteral(const QString& host)
+{
+    return !QHostAddress(host).isNull();
+}
+
 }  // namespace
 
 PsSession::PsSession(QObject* parent)
     : QObject(parent)
     , m_link(new PsLink(this))
     , m_resolver(new MacResolver(this))
+    , m_retry(new QTimer(this))
 {
     qRegisterMetaType<PsSession::LogLine>();
     {
@@ -47,6 +55,16 @@ PsSession::PsSession(QObject* parent)
         emit message(QStringLiteral("Нет ответа PS на %1 №%2").arg(type).arg(count));
     });
 
+    m_retry->setSingleShot(true);
+    m_retry->setInterval(kSearchRetryMs);
+    connect(m_retry, &QTimer::timeout, this, [this] {
+        if (!autoConnect() || m_seriesActive || m_link->isReady() || searching()) {
+            return;
+        }
+        m_macSearchDone = false;
+        findBoard();
+    });
+
     connect(m_resolver, &MacResolver::portOpenHosts, this,
             [this](const QVector<QPair<QString, QString>>& hosts) {
                 if (hosts.size() == 1) {
@@ -61,28 +79,33 @@ PsSession::PsSession(QObject* parent)
         m_searchText.clear();
         m_lastError = reason;
         emit message(reason);
+        scheduleRetry();
         emit statusChanged();
     });
     connect(m_resolver, &MacResolver::resolved, this, [this](const QString& ip, const QString& mac) {
         m_searchText.clear();
-        // Оператор успел нажать «Отключиться» — найденный адрес только запоминаем.
-        QSettings s;
-        s.setValue(kGroup + QStringLiteral("host"), ip);
-        emit hostResolved(ip);
         emit message(QStringLiteral("Плата %1 найдена по MAC: %2").arg(mac, ip));
-        if (!s.value(kGroup + QStringLiteral("auto_connect"), false).toBool() || m_seriesActive) {
-            emit statusChanged();
-            return;
-        }
-        if (m_link->isReady() && m_link->host() == ip) {
-            emit statusChanged();
-            return;
-        }
-        const bool searched = m_macSearchDone;
-        m_link->connectToPs(ip, port(), telemetryPort());
-        m_macSearchDone = searched;
-        emit statusChanged();
+        connectToFound(ip);
     });
+}
+
+void PsSession::connectToFound(const QString& ip)
+{
+    // Имя, введённое оператором в поле адреса, найденный IP не затирает.
+    const QString saved = host();
+    if (saved.isEmpty() || isIpLiteral(saved)) {
+        QSettings().setValue(kGroup + QStringLiteral("host"), ip);
+        emit hostResolved(ip);
+    }
+    // Оператор успел нажать «Отключиться» — найденный адрес только запоминаем.
+    if (!autoConnect() || m_seriesActive || (m_link->isReady() && m_link->host() == ip)) {
+        emit statusChanged();
+        return;
+    }
+    const bool searched = m_macSearchDone;
+    m_link->connectToPs(ip, port(), telemetryPort());
+    m_macSearchDone = searched;
+    emit statusChanged();
 }
 
 PsSession::~PsSession() = default;
@@ -116,6 +139,19 @@ QString PsSession::mac() const
         return MacResolver::formatMac(legacy);
     }
     return QString::fromLatin1(kDefaultMac);
+}
+
+QString PsSession::hostName() const
+{
+    QSettings s;
+    const QString key = kGroup + QStringLiteral("hostname");
+    // Пустое поле — оператор решил по имени не искать.
+    return s.contains(key) ? s.value(key).toString().trimmed() : QString::fromLatin1(kDefaultHostName);
+}
+
+void PsSession::setHostName(const QString& name)
+{
+    QSettings().setValue(kGroup + QStringLiteral("hostname"), name.trimmed());
 }
 
 int PsSession::keepAliveMs() const
@@ -176,11 +212,20 @@ bool PsSession::connectTo(const QString& host, quint16 port, quint16 telemetryPo
         return false;
     }
     if (h.isEmpty()) {
-        if (m.isEmpty()) {
-            refuse(QStringLiteral("Укажите IP-адрес или MAC-адрес платы"));
-            return false;
+        if (hostName().isEmpty()) {
+            if (m.isEmpty()) {
+                refuse(QStringLiteral("Укажите IP-адрес, имя в сети или MAC-адрес платы"));
+                return false;
+            }
+            return findByMac(m, port, telemetryPort);
         }
-        return findByMac(m, port, telemetryPort);
+        m_lastError.clear();
+        saveSettings(QString(), port, telemetryPort, m);
+        stopSearch();
+        m_link->disconnectFromPs();
+        m_macSearchDone = true;
+        lookupName(hostName());
+        return true;
     }
     m_lastError.clear();
     saveSettings(h, port, telemetryPort, m);
@@ -202,7 +247,7 @@ bool PsSession::findByMac(const QString& mac, quint16 port, quint16 telemetryPor
     saveSettings(QString(), port, telemetryPort, mac);
     m_link->disconnectFromPs();
     m_macSearchDone = true;
-    m_resolver->cancel();
+    stopSearch();
     m_resolver->resolve(mac, port);
     emit statusChanged();
     return true;
@@ -210,18 +255,102 @@ bool PsSession::findByMac(const QString& mac, quint16 port, quint16 telemetryPor
 
 void PsSession::startLink(const QString& host, quint16 port, quint16 telemetryPort)
 {
-    m_resolver->cancel();
-    m_searchText.clear();
+    stopSearch();
+    if (!isIpLiteral(host)) {
+        // Имя вместо IP: сначала узнаём адрес сами. Подключение по имени могло бы
+        // уйти по IPv6, а hello передаёт PS адрес для телеметрии — нужен IPv4.
+        m_link->disconnectFromPs();
+        m_macSearchDone = true;
+        lookupName(host);
+        return;
+    }
     m_macSearchDone = false;
     m_link->connectToPs(host, port, telemetryPort);
+}
+
+void PsSession::stopSearch()
+{
+    m_resolver->cancel();
+    if (m_nameLookupId >= 0) {
+        QHostInfo::abortHostLookup(m_nameLookupId);
+        m_nameLookupId = -1;
+    }
+    m_retry->stop();
+    m_searchText.clear();
+}
+
+void PsSession::lookupName(const QString& name)
+{
+    if (m_nameLookupId >= 0) {
+        QHostInfo::abortHostLookup(m_nameLookupId);
+    }
+    m_lookupName = name;
+    m_searchText = QStringLiteral("поиск платы по имени %1…").arg(name);
+    m_nameLookupId = QHostInfo::lookupHost(name, this, &PsSession::onNameLookup);
+    emit statusChanged();
+}
+
+void PsSession::onNameLookup(const QHostInfo& info)
+{
+    if (info.lookupId() != m_nameLookupId) {
+        return;
+    }
+    m_nameLookupId = -1;
+    m_searchText.clear();
+    QString ip;
+    for (const QHostAddress& a : info.addresses()) {
+        if (a.protocol() == QAbstractSocket::IPv4Protocol) {
+            ip = a.toString();
+            break;
+        }
+    }
+    if (ip.isEmpty()) {
+        emit message(QStringLiteral("Имя %1 в сети не найдено").arg(m_lookupName));
+        startMacSearch();
+        emit statusChanged();
+        return;
+    }
+    if (ip == m_link->host() && !m_link->isReady() && !m_link->lastError().isEmpty()) {
+        // Имя указывает на тот же адрес, что не отвечает: плата ещё загружается.
+        emit message(QStringLiteral("%1 = %2, плата пока не отвечает — пробую снова").arg(m_lookupName, ip));
+        scheduleRetry();
+        emit statusChanged();
+        return;
+    }
+    emit message(QStringLiteral("Плата найдена по имени %1: %2").arg(m_lookupName, ip));
+    connectToFound(ip);
+}
+
+void PsSession::startMacSearch()
+{
+    const QString m = mac();
+    if (!MacResolver::isValidMac(m)) {
+        m_lastError = QStringLiteral("Плата по имени %1 не найдена, MAC не задан").arg(m_lookupName);
+        scheduleRetry();
+        return;
+    }
+    emit message(QStringLiteral("Ищу плату по MAC %1").arg(m));
+    m_resolver->resolve(m, port());
+}
+
+void PsSession::setSearchRetryMs(int ms)
+{
+    m_retry->setInterval(ms);
+}
+
+void PsSession::scheduleRetry()
+{
+    if (!autoConnect() || m_seriesActive || m_link->isReady() || m_retry->isActive()) {
+        return;
+    }
+    m_retry->start();
 }
 
 void PsSession::disconnectFromPs()
 {
     QSettings().setValue(kGroup + QStringLiteral("auto_connect"), false);
     m_reconnectAfterSeries = false;
-    m_resolver->cancel();
-    m_searchText.clear();
+    stopSearch();
     m_link->disconnectFromPs();
     emit statusChanged();
 }
@@ -234,32 +363,45 @@ void PsSession::connectFromSettings()
     const QString h = host();
     if (!h.isEmpty()) {
         startLink(h, port(), telemetryPort());
-    } else if (MacResolver::isValidMac(mac())) {
-        findByMac(mac(), port(), telemetryPort());
+    } else if (!hostName().isEmpty() || MacResolver::isValidMac(mac())) {
+        connectTo(QString(), port(), telemetryPort(), mac());
     }
 }
 
 bool PsSession::searching() const
 {
-    return m_resolver->busy();
+    return m_resolver->busy() || m_nameLookupId >= 0;
 }
 
 bool PsSession::busy() const
 {
-    return m_resolver->busy() || m_link->isTrying();
+    return searching() || m_link->isTrying();
 }
 
-// Адрес не ответил — ищем плату по MAC: IP у неё мог смениться. Один раз на
-// попытку подключения, дальше PsLink переподключается сам.
-void PsSession::searchByMac()
+// Адрес не ответил — IP у платы мог смениться: ищем её по имени в сети, затем
+// по MAC. PsLink тем временем сам стучится на старый адрес.
+void PsSession::findBoard()
 {
+    if (m_macSearchDone || searching() || !autoConnect() || m_seriesActive) {
+        return;
+    }
+    QString name = hostName();
+    if (name.isEmpty() && !host().isEmpty() && !isIpLiteral(host())) {
+        name = host();
+    }
     const QString m = mac();
-    if (m_macSearchDone || m_resolver->busy() || !MacResolver::isValidMac(m) || !autoConnect()) {
+    if (name.isEmpty() && !MacResolver::isValidMac(m)) {
         return;
     }
     m_macSearchDone = true;
-    emit message(QStringLiteral("%1 не отвечает, ищу плату по MAC %2").arg(m_link->host(), m));
-    m_resolver->resolve(m, m_link->port());
+    const QString who = m_link->host().isEmpty() ? QStringLiteral("Плата") : m_link->host();
+    if (!name.isEmpty()) {
+        emit message(QStringLiteral("%1 не отвечает, ищу плату по имени %2").arg(who, name));
+        lookupName(name);
+        return;
+    }
+    emit message(QStringLiteral("%1 не отвечает, ищу плату по MAC %2").arg(who, m));
+    m_resolver->resolve(m, port());
 }
 
 QString PsSession::statusText() const
@@ -267,8 +409,8 @@ QString PsSession::statusText() const
     if (m_seriesActive) {
         return QStringLiteral("идёт серия: PS управляет оркестратор");
     }
-    if (m_resolver->busy()) {
-        return m_searchText.isEmpty() ? QStringLiteral("поиск платы по MAC…") : m_searchText;
+    if (searching()) {
+        return m_searchText.isEmpty() ? QStringLiteral("поиск платы…") : m_searchText;
     }
     switch (m_link->state()) {
     case PsLink::State::Disconnected: {
@@ -304,11 +446,16 @@ void PsSession::onLinkState(PsLink::State state)
         m_state.clear();
         emit modeChanged();
         if (!m_link->lastError().isEmpty()) {
-            searchByMac();
+            if (m_macSearchDone) {
+                scheduleRetry();
+            } else {
+                findBoard();
+            }
         }
         break;
     case PsLink::State::Ready:
         m_macSearchDone = false;
+        m_retry->stop();
         m_lastError.clear();
         m_link->sendCommand(ps::msg::GetState);
         // Адрес платы уже в таблице ARP: берём её настоящий MAC, чтобы поиск по MAC не искал чужой.
@@ -341,7 +488,7 @@ void PsSession::setSeriesActive(bool active)
     }
     m_seriesActive = active;
     if (active) {
-        m_resolver->cancel();
+        stopSearch();
         if (m_link->state() != PsLink::State::Disconnected) {
             // PS держит одно соединение: на время серии его занимает контроллер.
             m_reconnectAfterSeries = true;
