@@ -224,6 +224,35 @@ else()
 endif()
 afar_enable_warnings(afar_ppkh4)
 
+# Гетеродин ADF4355-3: кадр RS-485 и серия измерений с R&S FSW.
+add_library(afar_heter STATIC
+    heter/HeterTypes.h
+    heter/HeterFrame.cpp
+    heter/HeterFrame.h
+    heter/HeterRegs.cpp
+    heter/HeterRegs.h
+    heter/HeterSession.cpp
+    heter/HeterSession.h
+    heter/HeterFsw.cpp
+    heter/HeterFsw.h
+    heter/HeterMeasure.cpp
+    heter/HeterMeasure.h
+    heter/HeterReport.cpp
+    heter/HeterReport.h
+    heter/heter.qrc
+)
+set_target_properties(afar_heter PROPERTIES AUTOMOC ON AUTORCC ON)
+target_include_directories(afar_heter PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/heter
+)
+target_link_libraries(afar_heter PUBLIC Qt6::Core Qt6::Gui Qt6::Network)
+if(TARGET Qt6::SerialPort)
+    target_link_libraries(afar_heter PRIVATE Qt6::SerialPort)
+    target_compile_definitions(afar_heter PRIVATE AFAR_HAVE_SERIALPORT)
+endif()
+afar_enable_warnings(afar_heter)
+
 # IDutController через PS изделия: блокирующий драйвер для рабочего потока.
 add_library(afar_dut_ps STATIC
     dut/PsDutController.cpp
@@ -313,6 +342,8 @@ add_library(afar_app_ui STATIC
     ui/PsServiceCheckPage.h
     ui/SingleChannelPanel.cpp
     ui/SingleChannelPanel.h
+    ui/HeterodyneTab.cpp
+    ui/HeterodyneTab.h
 )
 target_include_directories(afar_app_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -343,6 +374,7 @@ target_link_libraries(afar_app_ui PUBLIC
     afar_ps
     afar_dut_ps
     afar_ppkh4
+    afar_heter
 )
 if(WIN32)
     target_link_libraries(afar_app_ui PUBLIC Psapi)

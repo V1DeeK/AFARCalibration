@@ -132,6 +132,16 @@ struct Window {
         engine.reset();
         QSettings().clear();
     }
+    void openNamed(const QString& name)
+    {
+        for (int i = 0; i < tabs->count(); ++i) {
+            if (tabs->tabText(i) == name) {
+                openTab(i);
+                return;
+            }
+        }
+        FAIL("нет вкладки " << name.toStdString());
+    }
     void openTab(int index)
     {
         tabs->setCurrentIndex(index);
@@ -310,7 +320,7 @@ TEST_CASE("VNA switch connects, disconnects and reconnects the demo stand", "[ui
     }
 }
 
-TEST_CASE("Главное окно: пять вкладок в порядке эскиза", "[ui][window]")
+TEST_CASE("Главное окно: вкладки в порядке эскиза", "[ui][window]")
 {
     app();
     Window w;
@@ -318,7 +328,8 @@ TEST_CASE("Главное окно: пять вкладок в порядке э
     for (int i = 0; i < w.tabs->count(); ++i) {
         names << w.tabs->tabText(i);
     }
-    CHECK(names == QStringList{QStringLiteral("Настройки"), QStringLiteral("Измерение S-параметров"), QStringLiteral("Спектр"),
+    CHECK(names == QStringList{QStringLiteral("Настройки"), QStringLiteral("Измерение S-параметров"),
+                               QStringLiteral("Настройка гетеродина"), QStringLiteral("Спектр"),
                                QStringLiteral("Тестовый прогон"), QStringLiteral("Приёмка")});
     // Окно умещается на небольшом экране: содержимое вкладок прокручивается, а не растягивает окно.
     CHECK(w.window->minimumSizeHint().width() <= 920);
@@ -658,7 +669,7 @@ TEST_CASE("Главное окно: IP платы вводится с клави
     REQUIRE(waitFor([&] { return child<QPushButton>(*w.window, "psWriteCodes")->isEnabled(); }));
     CHECK(child<QLabel>(*w.window, "psMode")->text().contains(QStringLiteral("сервисный")));
 
-    w.openTab(3);
+    w.openNamed(QStringLiteral("Тестовый прогон"));
     auto* journal = child<QTableWidget>(*w.window, "testRunJournal");
     CHECK(journal->rowCount() > 3);
     child<QPushButton>(*w.window, "udpCheckStart")->click();
@@ -667,7 +678,7 @@ TEST_CASE("Главное окно: IP платы вводится с клави
                     14000));
     CHECK(child<QLabel>(*w.window, "udpVerdict")->text().startsWith(QStringLiteral("Норма")));
 
-    w.openTab(4);
+    w.openNamed(QStringLiteral("Приёмка"));
     auto* start = child<QPushButton>(*w.window, "psCheckStart");
     CHECK(start->isEnabled());
 
@@ -696,7 +707,7 @@ TEST_CASE("Спектр запрашивает SERVICE и адрес PS посл
     CHECK(w.engine->state().ps_control_connected.load());
     CHECK_FALSE(w.engine->state().ps_service_mode.load());
 
-    w.openTab(2);
+    w.openNamed(QStringLiteral("Спектр"));
     REQUIRE(waitFor([&] { return server.mode() == afar::ps::Mode::Service; }));
     REQUIRE(waitFor([&] { return w.engine->state().ps_service_mode.load(); }));
     REQUIRE(waitFor([&] { return w.engine->state().connect_requested.load(); }));
@@ -827,14 +838,14 @@ TEST_CASE("Снимки вкладок в обеих темах для пров�
     // Набираем состояния, как их видит оператор: журнал, результаты сканирования, стресс-тест, приёмка.
     child<QPushButton>(*w.window, "sffStart")->click();
     REQUIRE(waitFor([&] { return child<QTableWidget>(*w.window, "sffResults")->rowCount() == 3; }));
-    w.openTab(3);
+    w.openNamed(QStringLiteral("Тестовый прогон"));
     child<QSpinBox>(*w.window, "stressDuration")->setValue(2);
     child<QSpinBox>(*w.window, "stressCount")->setValue(60);
     child<QPushButton>(*w.window, "stressStart")->click();
     waitFor([&] { return false; }, 2500);
     child<QPushButton>(*w.window, "udpCheckStart")->click();
     waitFor([&] { return false; }, 3500);
-    w.openTab(4);
+    w.openNamed(QStringLiteral("Приёмка"));
     child<QPushButton>(*w.window, "psCheckStart")->click();
     waitFor([&] { return false; }, 2500);
 

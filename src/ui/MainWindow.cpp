@@ -3,6 +3,7 @@
 #include "AcceptanceAtTab.h"
 #include "CodeMatrixTab.h"
 #include "ConnectionBar.h"
+#include "HeterodyneTab.h"
 #include "SingleChannelPanel.h"
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
@@ -185,6 +186,9 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     rootLayout->addWidget(m_measure, 1);
     viewport->setWidget(root);
 
+    // --- Настройка гетеродина: плата ADF4355-3 по RS-485 и серия с анализатором FSW ---
+    m_heterodyne = new HeterodyneTab(m_tabs);
+
     // --- Спектр ---
     // Без OpenGL (платформа offscreen в автотестах) вкладка показывает пояснение вместо спектра.
     QWidget* spectrumPage = nullptr;
@@ -218,6 +222,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     // Страницы прокручиваются: при тесной рамке окна появляется прокрутка, а виджеты не налезают друг на друга.
     m_tabs->addTab(ui::scrollPage(m_settingsTab), QStringLiteral("Настройки"));
     m_tabs->addTab(viewport, QStringLiteral("Измерение S-параметров"));
+    m_tabs->addTab(ui::scrollPage(m_heterodyne), QStringLiteral("Настройка гетеродина"));
     m_spectrumPage = spectrumPage;
     m_tabs->addTab(spectrumPage, QStringLiteral("Спектр"));
     m_tabs->addTab(ui::scrollPage(m_testRun), QStringLiteral("Тестовый прогон"));

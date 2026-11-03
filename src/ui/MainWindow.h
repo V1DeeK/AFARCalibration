@@ -12,6 +12,7 @@ class QCloseEvent;
 class AcceptanceAtTab;
 class BoardParametersPage;
 class CodeMatrixTab;
+class HeterodyneTab;
 class ConnectionBar;
 class MeasureTab;
 class MeasureWorker;
@@ -147,6 +148,7 @@ private:
     BoardParametersPage* m_boardPage = nullptr;
     SpectrumOpenGLWidget* m_spectrum = nullptr;
     QWidget* m_spectrumPage = nullptr;  ///< страница «Спектр» (без OpenGL — пояснение)
+    HeterodyneTab* m_heterodyne = nullptr;
     QTimer* m_spectrumConnectTimer = nullptr;
     bool m_spectrumServiceRequested = false;
     bool m_spectrumConnectedFromPs = false;

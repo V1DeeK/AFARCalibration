@@ -88,7 +88,7 @@ int main(int argc, char* argv[])
             "AFAR_TEST_SWITCH_COUNT", &switchCountValid);
         if (switchCountValid && switchCount > 0) {
             auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("mainTabs"));
-            if (!tabs || tabs->count() != 5) {
+            if (!tabs || tabs->count() != 6) {
                 QTimer::singleShot(0, &app, [&app] { app.exit(3); });
             } else {
                 const int originalTab = tabs->currentIndex();
