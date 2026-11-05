@@ -141,6 +141,7 @@ bool S2VnaGraphHost::attach(QString* error)
     m_originalY = rect.top;
     m_originalWidth = rect.right - rect.left;
     m_originalHeight = rect.bottom - rect.top;
+    m_originalStyle = static_cast<long long>(GetWindowLongPtrW(view, GWL_STYLE));
     if (!SetWindowPos(view, nullptr, 0, 0, width(), height(),
                       SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW)) {
         const DWORD moveError = GetLastError();
@@ -166,12 +167,30 @@ void S2VnaGraphHost::detach()
     const HWND host = static_cast<HWND>(m_host);
     if (view && IsWindow(view) && original && IsWindow(original) && GetParent(view) == host) {
         SetParent(view, original);
-        SetWindowPos(view, nullptr, m_originalX, m_originalY,
-                     m_originalWidth, m_originalHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (m_originalStyle != 0) {
+            SetWindowLongPtrW(view, GWL_STYLE, static_cast<LONG_PTR>(m_originalStyle));
+        }
+        const int width = m_originalWidth > 100 ? m_originalWidth : 100;
+        const int height = m_originalHeight > 100 ? m_originalHeight : 100;
+        SetWindowPos(view, nullptr, m_originalX, m_originalY, width, height,
+                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+        ShowWindow(view, SW_SHOW);
+        RECT client{};
+        if (GetClientRect(original, &client)) {
+            SendMessageW(original, WM_SIZE, SIZE_RESTORED,
+                         MAKELPARAM(client.right - client.left, client.bottom - client.top));
+        }
+        const HWND root = GetAncestor(original, GA_ROOT);
+        if (root && IsWindow(root)) {
+            ShowWindow(root, SW_SHOWNA);
+            RedrawWindow(root, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_UPDATENOW);
+        }
     }
     m_view = nullptr;
     m_originalParent = nullptr;
     m_host = nullptr;
+    m_originalStyle = 0;
 #endif
 }
 

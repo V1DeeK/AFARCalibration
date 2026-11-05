@@ -7,7 +7,6 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDoubleSpinBox>
-#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -18,8 +17,10 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QTimer>
-#include <QVariant>
+#include <QToolButton>
 #include <QVBoxLayout>
+
+#include <vector>
 
 #include <algorithm>
 
@@ -29,8 +30,7 @@ using namespace afar::ppkh4;
 
 constexpr int kLogLines = 200;
 constexpr int kSendDebounceMs = 60;
-constexpr int kChannels = 16;
-constexpr int kPerBoard = 4;
+constexpr int kChannels = 4;
 
 QString key(const char* name)
 {
@@ -42,37 +42,10 @@ QString channelKey(const char* field, int index)
     return QStringLiteral("fourChannel/%1/%2").arg(QLatin1String(field)).arg(index);
 }
 
-/// Раскладка кадра — та же, что на вкладке «Настройка 1 канала».
-void readSharedFormat(FrameFormat& format, LineConfig& lines)
+void defaultFormat(FrameFormat& format, LineConfig& lines)
 {
-    QSettings s;
-    const FrameFormat d;
-    const LineConfig l;
-    auto raw = [&](const char* name, const QVariant& fallback) {
-        return s.value(QStringLiteral("singleChannel/") + QLatin1String(name), fallback);
-    };
-    format.total_bits = raw("totalBits", d.total_bits).toInt();
-    format.fixed_hex = raw("fixedHex", QString::fromStdString(d.fixed_hex)).toString().toStdString();
-    format.phase.offset = raw("phOff", d.phase.offset).toInt();
-    format.phase.width = raw("phW", d.phase.width).toInt();
-    format.phase.lsb = raw("phLsb", d.phase.lsb).toDouble();
-    format.phase.invert = raw("phInv", d.phase.invert).toBool();
-    format.phase.reverse = raw("phRev", d.phase.reverse).toBool();
-    format.atten.offset = raw("atOff", d.atten.offset).toInt();
-    format.atten.width = raw("atW", d.atten.width).toInt();
-    format.atten.lsb = raw("atLsb", d.atten.lsb).toDouble();
-    format.atten.invert = raw("atInv", d.atten.invert).toBool();
-    format.atten.reverse = raw("atRev", d.atten.reverse).toBool();
-    lines.lsb_first = raw("lsbFirst", l.lsb_first).toInt();
-    lines.clk_idle = raw("clkIdle", l.clk_idle).toInt();
-    lines.le_active = raw("leActive", l.le_active).toInt();
-    lines.le_mode = raw("leMode", l.le_mode).toInt();
-    lines.half_us = raw("halfUs", l.half_us).toInt();
-    lines.le_us = raw("leUs", l.le_us).toInt();
-    if (!format_valid(format)) {
-        format = d;
-        lines = l;
-    }
+    format = FrameFormat{};
+    lines = LineConfig{};
 }
 
 QString codeText(int code, const FieldFormat& field, bool phase)
@@ -81,6 +54,71 @@ QString codeText(int code, const FieldFormat& field, bool phase)
     const int digits = phase ? 3 : 2;
     const QString unit = phase ? QStringLiteral("°") : QStringLiteral(" дБ");
     return QString::number(value, 'f', digits) + unit;
+}
+
+constexpr const char* kChannelColor[4] = {"#1d4ed8", "#15803d", "#c2410c", "#be123c"};
+constexpr const char* kPhaseColor = "#6d28d9";
+constexpr const char* kAttenColor = "#b45309";
+constexpr int kWordBits = 12;
+
+QString bitCell(bool one, const QString& color)
+{
+    return QStringLiteral("<td align=\"center\" style=\"color:%1;padding:1px 2px\">%2</td>")
+        .arg(color, one ? QStringLiteral("<b>1</b>") : QStringLiteral("0"));
+}
+
+QString packetHtml(const std::vector<bool>& bits)
+{
+    const int count = static_cast<int>(bits.size()) / kWordBits;
+    QString header;
+    QString values;
+    QString numbers;
+    for (int ch = count - 1; ch >= 0; --ch) {
+        const QString color = QLatin1String(kChannelColor[ch]);
+        header += QStringLiteral(
+                      "<td colspan=\"%1\" align=\"center\" style=\"color:%2\"><b>Канал %3</b></td>")
+                      .arg(kWordBits)
+                      .arg(color)
+                      .arg(ch + 1);
+        for (int i = kWordBits - 1; i >= 0; --i) {
+            const bool one = bits[static_cast<std::size_t>(ch * kWordBits + i)];
+            values += bitCell(one, color);
+            numbers += QStringLiteral("<td align=\"center\"><small>%1</small></td>").arg(i);
+        }
+        if (ch > 0) {
+            header += QStringLiteral("<td>&nbsp;</td>");
+            values += QStringLiteral("<td></td>");
+            numbers += QStringLiteral("<td></td>");
+        }
+    }
+    return QStringLiteral(
+               "<table cellspacing=\"0\" cellpadding=\"1\" style=\"font-family:monospace\">"
+               "<tr>%1</tr><tr>%2</tr><tr>%3</tr></table>")
+        .arg(header, values, numbers);
+}
+
+QString channelBitsHtml(const std::vector<bool>& bits, int channel, bool flip, const FrameFormat& format)
+{
+    const int base = channel * kWordBits;
+    QString top;
+    QString bottom;
+    for (int i = kWordBits - 1; i >= 0; --i) {
+        const int src = flip ? (kWordBits - 1 - i) : i;
+        QString color = QStringLiteral("#64748b");
+        if (src >= format.phase.offset && src < format.phase.offset + format.phase.width) {
+            color = QLatin1String(kPhaseColor);
+        } else if (src >= format.atten.offset && src < format.atten.offset + format.atten.width) {
+            color = QLatin1String(kAttenColor);
+        }
+        const bool one = base + i < static_cast<int>(bits.size())
+                         && bits[static_cast<std::size_t>(base + i)];
+        top += bitCell(one, color);
+        bottom += QStringLiteral("<td align=\"center\"><small>%1</small></td>").arg(i);
+    }
+    return QStringLiteral(
+               "<table cellspacing=\"2\" cellpadding=\"2\" style=\"font-family:monospace\">"
+               "<tr>%1</tr><tr>%2</tr></table>")
+        .arg(top, bottom);
 }
 
 }  // namespace
@@ -124,11 +162,6 @@ FourChannelPanel::FourChannelPanel(QWidget* parent)
     updateButtons();
 }
 
-int FourChannelPanel::boardIndex() const
-{
-    return m_board->currentIndex();
-}
-
 int FourChannelPanel::slotIndex() const
 {
     return m_slot->currentIndex();
@@ -141,7 +174,7 @@ int FourChannelPanel::globalChannel() const
 
 int FourChannelPanel::selectedIndex() const
 {
-    return m_board->currentIndex() * kPerBoard + m_slot->currentIndex();
+    return m_slot->currentIndex();
 }
 
 QWidget* FourChannelPanel::makeConnectionBox()
@@ -183,26 +216,21 @@ QWidget* FourChannelPanel::makeConnectionBox()
 
 QWidget* FourChannelPanel::makeSelectBox()
 {
-    auto* box = new QGroupBox(QStringLiteral("Изделие и канал на кабелях C2220"), this);
+    auto* box = new QGroupBox(QStringLiteral("Четыре канала одной цепочки"), this);
     auto* lay = new QVBoxLayout(box);
     ui::applyGroupLayout(lay);
 
     auto* pick = new QHBoxLayout();
-    m_board = new QComboBox(box);
-    m_board->setObjectName(QStringLiteral("fourChannelBoard"));
     m_slot = new QComboBox(box);
     m_slot->setObjectName(QStringLiteral("fourChannelSlot"));
-    for (int i = 1; i <= kPerBoard; ++i) {
-        m_board->addItem(QStringLiteral("Изделие %1").arg(i));
+    for (int i = 1; i <= kChannels; ++i) {
         m_slot->addItem(QStringLiteral("Канал %1").arg(i));
     }
     m_global = new QLabel(box);
     m_global->setObjectName(QStringLiteral("fourChannelGlobal"));
-    m_apply = new QPushButton(QStringLiteral("Выставить сохранённое"), box);
+    m_apply = new QPushButton(QStringLiteral("Выставить цепочку"), box);
     m_apply->setObjectName(QStringLiteral("fourChannelApply"));
     ui::setButtonRole(m_apply, ui::ButtonRole::Primary);
-    pick->addWidget(ui::captionLabel(QStringLiteral("Изделие"), box));
-    pick->addWidget(m_board);
     pick->addWidget(ui::captionLabel(QStringLiteral("Канал"), box));
     pick->addWidget(m_slot);
     pick->addWidget(m_global, 1);
@@ -210,23 +238,36 @@ QWidget* FourChannelPanel::makeSelectBox()
     lay->addLayout(pick);
 
     lay->addWidget(ui::hintLabel(
-        QStringLiteral("У C2220 один вход и один выход. Переставьте кабели на нужный канал и выберите его здесь. "
-                       "Программа выставит сохранённые фазу и аттенюацию. Коды хранятся в программе: "
-                       "прошивка ППКХ4 номер изделия и каналы не запоминает. Раскладка кадра берётся "
-                       "из вкладки «Настройка 1 канала». Если порт занят той вкладкой, сначала отключите её."),
+        QStringLiteral("Каналы стоят в одном SPI. Любая правка сдвигает все четыре слова подряд. "
+                       "Канал 1 — ближайший к плате: младшие 12 бит, сдвигаются последними. "
+                       "Канал 4 — дальний конец: старшие 12 бит, уходят первыми. "
+                       "Если первый физический канал стоит у разъёма платы, выбирайте канал 1. "
+                       "В каждом слове биты 11…6 — аттенюация, 5…0 — фаза."),
         box));
 
-    auto* grid = new QGridLayout();
-    grid->setHorizontalSpacing(ui::kGap);
-    grid->setVerticalSpacing(4);
-    for (int i = 0; i < kPerBoard; ++i) {
+    m_packet = new QLabel(box);
+    m_packet->setObjectName(QStringLiteral("fourChannelPacket"));
+    m_packet->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_packet->setStyleSheet(QStringLiteral("font-family: monospace;"));
+    m_packetBits = new QLabel(box);
+    m_packetBits->setObjectName(QStringLiteral("fourChannelPacketBits"));
+    m_packetBits->setTextFormat(Qt::RichText);
+    m_packetBits->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    lay->addWidget(m_packet);
+    lay->addWidget(m_packetBits);
+    lay->addWidget(ui::hintLabel(
+        QStringLiteral("Общий пакет, 48 бит. Цвет — канал. Слева канал 4 (уходит первым), "
+                       "справа канал 1 (остаётся у платы). Под битом — его номер в слове канала."),
+        box));
+
+    for (int i = 0; i < kChannels; ++i) {
         auto* row = new QPushButton(box);
         row->setObjectName(QStringLiteral("fourChannelRow%1").arg(i));
         row->setCheckable(true);
         row->setAutoExclusive(true);
         ui::setButtonRole(row, ui::ButtonRole::Secondary);
         m_rows[static_cast<std::size_t>(i)] = row;
-        grid->addWidget(row, i, 0);
+        lay->addWidget(row);
         connect(row, &QPushButton::clicked, this, [this, i]() {
             if (m_slot->currentIndex() == i) {
                 if (m_connected) {
@@ -236,10 +277,47 @@ QWidget* FourChannelPanel::makeSelectBox()
                 m_slot->setCurrentIndex(i);
             }
         });
-    }
-    lay->addLayout(grid);
 
-    connect(m_board, &QComboBox::currentIndexChanged, this, &FourChannelPanel::onSelectionChanged);
+        auto* toggle = new QToolButton(box);
+        toggle->setObjectName(QStringLiteral("fourChannelBitsToggle%1").arg(i));
+        toggle->setText(QStringLiteral("Биты канала %1").arg(i + 1));
+        toggle->setCheckable(true);
+        toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        toggle->setArrowType(Qt::RightArrow);
+        toggle->setAutoRaise(true);
+        m_bitToggles[static_cast<std::size_t>(i)] = toggle;
+
+        auto* panel = new QWidget(box);
+        panel->setVisible(false);
+        auto* panelLay = new QVBoxLayout(panel);
+        panelLay->setContentsMargins(16, 0, 0, 4);
+        auto* order = new QComboBox(panel);
+        order->setObjectName(QStringLiteral("fourChannelOrder%1").arg(i));
+        order->addItem(QStringLiteral("старшим битом вперёд"));
+        order->addItem(QStringLiteral("младшим битом вперёд"));
+        auto* bits = new QLabel(panel);
+        bits->setObjectName(QStringLiteral("fourChannelBits%1").arg(i));
+        bits->setTextFormat(Qt::RichText);
+        panelLay->addWidget(order);
+        panelLay->addWidget(ui::hintLabel(
+            QStringLiteral("Фиолетовый — фаза, коричневый — аттенюация. "
+                           "Слева бит, который у этого канала уходит раньше. "
+                           "Порядок переворачивает только эти 12 бит."),
+            panel));
+        panelLay->addWidget(bits);
+        m_order[static_cast<std::size_t>(i)] = order;
+        m_bitViews[static_cast<std::size_t>(i)] = bits;
+        m_bitPanels[static_cast<std::size_t>(i)] = panel;
+        lay->addWidget(toggle);
+        lay->addWidget(panel);
+        connect(toggle, &QToolButton::toggled, this, [toggle, panel](bool on) {
+            toggle->setArrowType(on ? Qt::DownArrow : Qt::RightArrow);
+            panel->setVisible(on);
+        });
+        connect(order, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this, i](int index) { setChannelOrder(i, index); });
+    }
+
     connect(m_slot, &QComboBox::currentIndexChanged, this, &FourChannelPanel::onSelectionChanged);
     connect(m_apply, &QPushButton::clicked, this, &FourChannelPanel::sendFrame);
     return box;
@@ -431,7 +509,7 @@ void FourChannelPanel::updateButtons()
 
 void FourChannelPanel::loadFormat()
 {
-    readSharedFormat(m_format, m_lines);
+    defaultFormat(m_format, m_lines);
     for (int i = 0; i < kChannels; ++i) {
         m_phase[static_cast<std::size_t>(i)] = clamp_code(m_phase[static_cast<std::size_t>(i)], m_format.phase);
         m_atten[static_cast<std::size_t>(i)] = clamp_code(m_atten[static_cast<std::size_t>(i)], m_format.atten);
@@ -447,10 +525,10 @@ void FourChannelPanel::loadSettings()
             clamp_code(s.value(channelKey("phase", i), 0).toInt(), m_format.phase);
         m_atten[static_cast<std::size_t>(i)] =
             clamp_code(s.value(channelKey("atten", i), 0).toInt(), m_format.atten);
+        m_lsb[static_cast<std::size_t>(i)] =
+            s.value(channelKey("lsb", i), 0).toInt() != 0 ? 1 : 0;
     }
-    const int board = std::clamp(s.value(key("board"), 0).toInt(), 0, kPerBoard - 1);
-    const int slot = std::clamp(s.value(key("slot"), 0).toInt(), 0, kPerBoard - 1);
-    m_board->setCurrentIndex(board);
+    const int slot = std::clamp(s.value(key("slot"), 0).toInt(), 0, kChannels - 1);
     m_slot->setCurrentIndex(slot);
     m_port->setEditText(s.value(key("port")).toString());
     m_loading = false;
@@ -459,7 +537,6 @@ void FourChannelPanel::loadSettings()
 void FourChannelPanel::saveSelection() const
 {
     QSettings s;
-    s.setValue(key("board"), m_board->currentIndex());
     s.setValue(key("slot"), m_slot->currentIndex());
 }
 
@@ -468,7 +545,7 @@ void FourChannelPanel::saveChannel(int index) const
     QSettings s;
     s.setValue(channelKey("phase", index), m_phase[static_cast<std::size_t>(index)]);
     s.setValue(channelKey("atten", index), m_atten[static_cast<std::size_t>(index)]);
-    s.setValue(key("board"), m_board->currentIndex());
+    s.setValue(channelKey("lsb", index), m_lsb[static_cast<std::size_t>(index)]);
     s.setValue(key("slot"), m_slot->currentIndex());
 }
 
@@ -487,11 +564,8 @@ void FourChannelPanel::showSelected(bool sendNow)
     const int index = selectedIndex();
     m_phCode = m_phase[static_cast<std::size_t>(index)];
     m_atCode = m_atten[static_cast<std::size_t>(index)];
-    m_global->setText(QStringLiteral("Изделие %1 · канал %2")
-                          .arg(m_board->currentIndex() + 1)
-                          .arg(m_slot->currentIndex() + 1));
+    m_global->setText(QStringLiteral("Канал %1 из 4").arg(m_slot->currentIndex() + 1));
     render();
-    refreshRows();
     if (sendNow && m_connected) {
         sendFrame();
     }
@@ -500,17 +574,21 @@ void FourChannelPanel::showSelected(bool sendNow)
 void FourChannelPanel::refreshRows()
 {
     const int slot = m_slot->currentIndex();
-    const int board = m_board->currentIndex();
-    for (int i = 0; i < kPerBoard; ++i) {
-        const int index = board * kPerBoard + i;
-        const int phase = m_phase[static_cast<std::size_t>(index)];
-        const int atten = m_atten[static_cast<std::size_t>(index)];
+    for (int i = 0; i < kChannels; ++i) {
+        const int phase = m_phase[static_cast<std::size_t>(i)];
+        const int atten = m_atten[static_cast<std::size_t>(i)];
         auto* row = m_rows[static_cast<std::size_t>(i)];
-        row->setText(QStringLiteral("Изделие %1 · канал %2 · фаза %3 · аттенюация %4")
-                         .arg(board + 1)
-                         .arg(i + 1)
-                         .arg(codeText(phase, m_format.phase, true))
-                         .arg(codeText(atten, m_format.atten, false)));
+        QString text = QStringLiteral("Канал %1 · фаза %2 · аттенюация %3")
+                           .arg(i + 1)
+                           .arg(codeText(phase, m_format.phase, true))
+                           .arg(codeText(atten, m_format.atten, false));
+        if (m_lsb[static_cast<std::size_t>(i)] != 0) {
+            text += QStringLiteral(" · младшим вперёд");
+        }
+        row->setText(text);
+        if (m_sideValue[static_cast<std::size_t>(i)] != nullptr) {
+            m_sideValue[static_cast<std::size_t>(i)]->setText(text);
+        }
         const QSignalBlocker block(row);
         row->setChecked(i == slot);
     }
@@ -518,33 +596,99 @@ void FourChannelPanel::refreshRows()
 
 void FourChannelPanel::setPhaseCode(int code)
 {
-    const int next = clamp_code(code, m_format.phase);
-    if (next == m_phCode) {
+    setChannelPhase(selectedIndex(), code);
+}
+
+void FourChannelPanel::setAttenCode(int code)
+{
+    setChannelAtten(selectedIndex(), code);
+}
+
+int FourChannelPanel::phaseCodeAt(int index) const
+{
+    if (index < 0 || index >= kChannels) {
+        return 0;
+    }
+    return m_phase[static_cast<std::size_t>(index)];
+}
+
+int FourChannelPanel::attenCodeAt(int index) const
+{
+    if (index < 0 || index >= kChannels) {
+        return 0;
+    }
+    return m_atten[static_cast<std::size_t>(index)];
+}
+
+void FourChannelPanel::setChannelPhase(int index, int code)
+{
+    if (m_loading || index < 0 || index >= kChannels) {
         return;
     }
-    m_phCode = next;
-    const int index = selectedIndex();
+    const int next = clamp_code(code, m_format.phase);
+    const bool switchTo = index != selectedIndex();
+    if (!switchTo && m_phase[static_cast<std::size_t>(index)] == next) {
+        return;
+    }
+    if (switchTo) {
+        const QSignalBlocker block(m_slot);
+        m_slot->setCurrentIndex(index);
+    }
     m_phase[static_cast<std::size_t>(index)] = next;
+    m_phCode = m_phase[static_cast<std::size_t>(selectedIndex())];
+    m_atCode = m_atten[static_cast<std::size_t>(selectedIndex())];
+    m_global->setText(QStringLiteral("Канал %1 из 4").arg(selectedIndex() + 1));
     saveChannel(index);
     render();
-    refreshRows();
     if (m_connected) {
         m_sendDebounce->start();
     }
 }
 
-void FourChannelPanel::setAttenCode(int code)
+void FourChannelPanel::setChannelAtten(int index, int code)
 {
-    const int next = clamp_code(code, m_format.atten);
-    if (next == m_atCode) {
+    if (m_loading || index < 0 || index >= kChannels) {
         return;
     }
-    m_atCode = next;
-    const int index = selectedIndex();
+    const int next = clamp_code(code, m_format.atten);
+    const bool switchTo = index != selectedIndex();
+    if (!switchTo && m_atten[static_cast<std::size_t>(index)] == next) {
+        return;
+    }
+    if (switchTo) {
+        const QSignalBlocker block(m_slot);
+        m_slot->setCurrentIndex(index);
+    }
     m_atten[static_cast<std::size_t>(index)] = next;
+    m_phCode = m_phase[static_cast<std::size_t>(selectedIndex())];
+    m_atCode = m_atten[static_cast<std::size_t>(selectedIndex())];
+    m_global->setText(QStringLiteral("Канал %1 из 4").arg(selectedIndex() + 1));
     saveChannel(index);
     render();
-    refreshRows();
+    if (m_connected) {
+        m_sendDebounce->start();
+    }
+}
+
+void FourChannelPanel::setChannelOrder(int index, int lsbFirst)
+{
+    if (m_loading || index < 0 || index >= kChannels) {
+        return;
+    }
+    const int next = lsbFirst != 0 ? 1 : 0;
+    if (m_lsb[static_cast<std::size_t>(index)] == next) {
+        return;
+    }
+    if (index != selectedIndex()) {
+        const QSignalBlocker block(m_slot);
+        m_slot->setCurrentIndex(index);
+        m_phCode = m_phase[static_cast<std::size_t>(index)];
+        m_atCode = m_atten[static_cast<std::size_t>(index)];
+        m_global->setText(QStringLiteral("Канал %1 из 4").arg(index + 1));
+    }
+    m_lsb[static_cast<std::size_t>(index)] = next;
+    saveChannel(index);
+    render();
     if (m_connected) {
         m_sendDebounce->start();
     }
@@ -584,6 +728,156 @@ void FourChannelPanel::render()
     }
     m_phVal->setText(codeText(m_phCode, m_format.phase, true));
     m_atVal->setText(codeText(m_atCode, m_format.atten, false));
+    refreshPacket();
+    refreshRows();
+}
+
+void FourChannelPanel::refreshPacket()
+{
+    const auto bits = chain_bits(m_format, m_phase, m_atten, m_lsb);
+    if (m_packet != nullptr) {
+        m_packet->setText(QString::fromStdString(
+            send_chain_command(m_format, m_phase, m_atten, m_lsb)));
+    }
+    if (m_packetBits != nullptr) {
+        m_packetBits->setText(packetHtml(bits));
+    }
+    const int phMax = max_code(m_format.phase.width);
+    const int atMax = max_code(m_format.atten.width);
+    for (int i = 0; i < kChannels; ++i) {
+        const auto index = static_cast<std::size_t>(i);
+        const bool flip = m_lsb[index] != 0;
+        if (m_order[index] != nullptr && m_order[index]->currentIndex() != (flip ? 1 : 0)) {
+            const QSignalBlocker block(m_order[index]);
+            m_order[index]->setCurrentIndex(flip ? 1 : 0);
+        }
+        if (m_bitViews[index] != nullptr) {
+            m_bitViews[index]->setText(channelBitsHtml(bits, i, flip, m_format));
+        }
+        const int phase = m_phase[index];
+        const int atten = m_atten[index];
+        if (m_sidePhaseSlider[index] != nullptr) {
+            const QSignalBlocker block(m_sidePhaseSlider[index]);
+            m_sidePhaseSlider[index]->setRange(0, phMax);
+            m_sidePhaseSlider[index]->setValue(phase);
+        }
+        if (m_sidePhase[index] != nullptr) {
+            const QSignalBlocker block(m_sidePhase[index]);
+            m_sidePhase[index]->setRange(0, phMax);
+            if (!m_sidePhase[index]->hasFocus()) {
+                m_sidePhase[index]->setValue(phase);
+            }
+        }
+        if (m_sidePhaseDeg[index] != nullptr) {
+            const QSignalBlocker block(m_sidePhaseDeg[index]);
+            m_sidePhaseDeg[index]->setRange(0.0, phase_deg(phMax, m_format.phase));
+            m_sidePhaseDeg[index]->setSingleStep(m_format.phase.lsb);
+            if (!m_sidePhaseDeg[index]->hasFocus()) {
+                m_sidePhaseDeg[index]->setValue(phase_deg(phase, m_format.phase));
+            }
+        }
+        if (m_sideAttenSlider[index] != nullptr) {
+            const QSignalBlocker block(m_sideAttenSlider[index]);
+            m_sideAttenSlider[index]->setRange(0, atMax);
+            m_sideAttenSlider[index]->setValue(atten);
+        }
+        if (m_sideAtten[index] != nullptr) {
+            const QSignalBlocker block(m_sideAtten[index]);
+            m_sideAtten[index]->setRange(0, atMax);
+            if (!m_sideAtten[index]->hasFocus()) {
+                m_sideAtten[index]->setValue(atten);
+            }
+        }
+        if (m_sideAttenDb[index] != nullptr) {
+            const QSignalBlocker block(m_sideAttenDb[index]);
+            m_sideAttenDb[index]->setRange(atten_db(0, m_format.atten), 0.0);
+            m_sideAttenDb[index]->setSingleStep(m_format.atten.lsb);
+            if (!m_sideAttenDb[index]->hasFocus()) {
+                m_sideAttenDb[index]->setValue(atten_db(atten, m_format.atten));
+            }
+        }
+    }
+}
+
+QWidget* FourChannelPanel::sideControl(QWidget* parent)
+{
+    if (m_side == nullptr) {
+        buildSideControl(parent);
+        render();
+    } else if (parent != nullptr) {
+        m_side->setParent(parent);
+    }
+    return m_side;
+}
+
+void FourChannelPanel::buildSideControl(QWidget* parent)
+{
+    auto* box = new QGroupBox(QStringLiteral("Каналы ППКХ4"), parent);
+    box->setObjectName(QStringLiteral("graphChannelPanel"));
+    auto* lay = new QVBoxLayout(box);
+    ui::applyGroupLayout(lay);
+    lay->addWidget(ui::hintLabel(
+        QStringLiteral("Те же коды, что на вкладке «Настройка 4 каналов». "
+                       "Код 0 аттенюации — −31.5 дБ, код 63 — 0 дБ."),
+        box));
+    for (int i = 0; i < kChannels; ++i) {
+        const auto index = static_cast<std::size_t>(i);
+        auto* title = new QLabel(box);
+        title->setObjectName(QStringLiteral("graphChannelValue%1").arg(i));
+        title->setWordWrap(true);
+        m_sideValue[index] = title;
+        lay->addWidget(title);
+
+        auto* phaseRow = new QHBoxLayout();
+        auto* phaseSlider = new QSlider(Qt::Horizontal, box);
+        phaseSlider->setObjectName(QStringLiteral("graphChannelPhaseSlider%1").arg(i));
+        auto* phaseDeg = new QDoubleSpinBox(box);
+        phaseDeg->setDecimals(3);
+        phaseDeg->setSuffix(QStringLiteral("°"));
+        auto* phaseCode = new QSpinBox(box);
+        phaseCode->setObjectName(QStringLiteral("graphChannelPhase%1").arg(i));
+        phaseCode->setPrefix(QStringLiteral("код "));
+        m_sidePhaseSlider[index] = phaseSlider;
+        m_sidePhaseDeg[index] = phaseDeg;
+        m_sidePhase[index] = phaseCode;
+        phaseRow->addWidget(phaseSlider, 1);
+        phaseRow->addWidget(phaseDeg);
+        phaseRow->addWidget(phaseCode);
+        lay->addLayout(phaseRow);
+
+        auto* attenRow = new QHBoxLayout();
+        auto* attenSlider = new QSlider(Qt::Horizontal, box);
+        attenSlider->setObjectName(QStringLiteral("graphChannelAttenSlider%1").arg(i));
+        auto* attenDb = new QDoubleSpinBox(box);
+        attenDb->setDecimals(2);
+        attenDb->setSuffix(QStringLiteral(" дБ"));
+        auto* attenCode = new QSpinBox(box);
+        attenCode->setObjectName(QStringLiteral("graphChannelAtten%1").arg(i));
+        attenCode->setPrefix(QStringLiteral("код "));
+        m_sideAttenSlider[index] = attenSlider;
+        m_sideAttenDb[index] = attenDb;
+        m_sideAtten[index] = attenCode;
+        attenRow->addWidget(attenSlider, 1);
+        attenRow->addWidget(attenDb);
+        attenRow->addWidget(attenCode);
+        lay->addLayout(attenRow);
+
+        connect(phaseSlider, &QSlider::valueChanged, this,
+                [this, i](int value) { setChannelPhase(i, value); });
+        connect(phaseCode, &QSpinBox::valueChanged, this,
+                [this, i](int value) { setChannelPhase(i, value); });
+        connect(phaseDeg, &QDoubleSpinBox::editingFinished, this, [this, i, phaseDeg]() {
+            setChannelPhase(i, phase_code_from_deg(phaseDeg->value(), m_format.phase));
+        });
+        connect(attenSlider, &QSlider::valueChanged, this,
+                [this, i](int value) { setChannelAtten(i, value); });
+        connect(attenCode, &QSpinBox::valueChanged, this,
+                [this, i](int value) { setChannelAtten(i, value); });
+        connect(attenDb, &QDoubleSpinBox::editingFinished, this, [this, i, attenDb]() {
+            setChannelAtten(i, atten_code_from_db(attenDb->value(), m_format.atten));
+        });
+    }
+    m_side = box;
 }
 
 void FourChannelPanel::applyCfg()
@@ -599,24 +893,17 @@ void FourChannelPanel::sendFrame()
     if (!m_connected) {
         return;
     }
-    const auto bits = build_frame(m_format, m_phCode, m_atCode);
-    const QString hex = QString::fromStdString(frame_hex(bits));
-    const int product = m_board->currentIndex() + 1;
+    const QString command = QString::fromStdString(
+        send_chain_command(m_format, m_phase, m_atten, m_lsb));
     const int channel = m_slot->currentIndex() + 1;
-    const int phase = m_phCode;
-    const int atten = m_atCode;
-    const QString command = QString::fromStdString(send_command(m_format, phase, atten));
-    m_link->send(command, [this, hex, product, channel, phase, atten](const QString& reply) {
+    m_link->send(command, [this, command, channel](const QString& reply) {
         if (reply.startsWith(QLatin1String("OK"))) {
-            m_lastSent->setText(QStringLiteral("изделие %1, канал %2 записан: %3, %4 (0x%5)")
-                                    .arg(product)
+            m_lastSent->setText(QStringLiteral("цепочка записана, правится канал %1: %2")
                                     .arg(channel)
-                                    .arg(codeText(phase, m_format.phase, true))
-                                    .arg(codeText(atten, m_format.atten, false))
-                                    .arg(hex));
+                                    .arg(command));
             ui::setTone(m_lastSent, ui::Tone::Ok);
         } else if (reply.startsWith(QLatin1String("ERR"))) {
-            m_lastSent->setText(QStringLiteral("изделие %1, канал %2: %3").arg(product).arg(channel).arg(reply));
+            m_lastSent->setText(QStringLiteral("канал %1: %2").arg(channel).arg(reply));
             ui::setTone(m_lastSent, ui::Tone::Error);
         }
     });

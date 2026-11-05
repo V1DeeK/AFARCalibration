@@ -15,22 +15,25 @@ class QSlider;
 class QDoubleSpinBox;
 class QSpinBox;
 class QTimer;
+class QToolButton;
 
-/// «Настройка 4 каналов»: четыре платы по четыре канала (изделие 1…16).
-/// К C2220 подключён один канал. В плату уходит один кадр выбранного канала,
-/// те же команды, что у «Настройка 1 канала». Коды помнит программа.
+/// «Настройка 4 каналов»: четыре канала одной SPI-цепочки.
+/// Любое изменение сдвигает все четыре слова подряд. Коды помнит программа.
 class FourChannelPanel final : public QWidget {
     Q_OBJECT
 
 public:
     explicit FourChannelPanel(QWidget* parent = nullptr);
 
-    [[nodiscard]] int boardIndex() const;
     [[nodiscard]] int slotIndex() const;
-    /// Номер канала изделия, 1…16.
+    /// Номер канала цепочки, 1…4.
     [[nodiscard]] int globalChannel() const;
     [[nodiscard]] int phaseCode() const { return m_phCode; }
     [[nodiscard]] int attenCode() const { return m_atCode; }
+    [[nodiscard]] int phaseCodeAt(int index) const;
+    [[nodiscard]] int attenCodeAt(int index) const;
+    /// Компактные регуляторы тех же четырёх каналов. Состояния своего не хранит.
+    [[nodiscard]] QWidget* sideControl(QWidget* parent);
 
 private:
     QWidget* makeConnectionBox();
@@ -38,6 +41,7 @@ private:
     QWidget* makePhaseBox();
     QWidget* makeAttenBox();
     QWidget* makeLogBox();
+    void buildSideControl(QWidget* parent);
 
     void refreshPorts();
     void toggleConnection();
@@ -58,7 +62,11 @@ private:
 
     void setPhaseCode(int code);
     void setAttenCode(int code);
+    void setChannelPhase(int index, int code);
+    void setChannelAtten(int index, int code);
+    void setChannelOrder(int index, int lsbFirst);
     void render();
+    void refreshPacket();
     void applyCfg();
     void sendFrame();
     void appendLog(const QString& line);
@@ -66,8 +74,9 @@ private:
     Ppkh4Link* m_link = nullptr;
     afar::ppkh4::FrameFormat m_format;
     afar::ppkh4::LineConfig m_lines;
-    std::array<int, 16> m_phase{};
-    std::array<int, 16> m_atten{};
+    std::array<int, 4> m_phase{};
+    std::array<int, 4> m_atten{};
+    std::array<int, 4> m_lsb{};
     int m_phCode = 0;
     int m_atCode = 0;
     bool m_connected = false;
@@ -81,11 +90,26 @@ private:
     QLabel* m_conn = nullptr;
     QLabel* m_lastSent = nullptr;
 
-    QComboBox* m_board = nullptr;
     QComboBox* m_slot = nullptr;
     QLabel* m_global = nullptr;
     QPushButton* m_apply = nullptr;
     std::array<QPushButton*, 4> m_rows{};
+
+    QLabel* m_packet = nullptr;
+    QLabel* m_packetBits = nullptr;
+    std::array<QToolButton*, 4> m_bitToggles{};
+    std::array<QWidget*, 4> m_bitPanels{};
+    std::array<QComboBox*, 4> m_order{};
+    std::array<QLabel*, 4> m_bitViews{};
+
+    QWidget* m_side = nullptr;
+    std::array<QLabel*, 4> m_sideValue{};
+    std::array<QSlider*, 4> m_sidePhaseSlider{};
+    std::array<QSpinBox*, 4> m_sidePhase{};
+    std::array<QDoubleSpinBox*, 4> m_sidePhaseDeg{};
+    std::array<QSlider*, 4> m_sideAttenSlider{};
+    std::array<QSpinBox*, 4> m_sideAtten{};
+    std::array<QDoubleSpinBox*, 4> m_sideAttenDb{};
 
     QLabel* m_phVal = nullptr;
     QSlider* m_phRange = nullptr;

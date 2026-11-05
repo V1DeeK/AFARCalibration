@@ -5,7 +5,6 @@
 #include "ConnectionBar.h"
 #include "FourChannelPanel.h"
 #include "HeterodyneTab.h"
-#include "SingleChannelPanel.h"
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
 #include "BoardParametersPage.h"
@@ -175,10 +174,9 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     calLayout->addWidget(m_measure->calibrationPanel());
     m_connections->setMiddleWidget(calBox);
     m_connections->setSweepWidget(m_measure->sweepPanel());
-    auto* singleChannel = new SingleChannelPanel(root);
-    m_measure->setSingleChannelControls(singleChannel->createQuickControls());
-    m_connections->setSingleChannelWidget(singleChannel);
-    m_connections->setFourChannelWidget(new FourChannelPanel(root));
+    auto* channels = new FourChannelPanel(root);
+    m_connections->setFourChannelWidget(channels);
+    m_measure->setGraphChannelControl(channels->sideControl(m_measure));
     connect(m_measure, &MeasureTab::sweepSettingsRequested,
             m_connections, &ConnectionBar::showSweepSettings);
     // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Настройки».
@@ -238,8 +236,6 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     connect(m_tabs, &QTabWidget::currentChanged, this, [this, viewport](int index) {
         if (m_tabs->widget(index) != viewport) {
             m_measure->stopEmbeddedGraph();
-        } else if (m_vnaConnected && m_connections->vnaBackend() == MeasureWorker::BackendSocket) {
-            QTimer::singleShot(0, m_measure, [this] { m_measure->showEmbeddedGraph(); });
         }
     });
     m_spectrumConnectTimer = new QTimer(this);
@@ -486,6 +482,11 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // Вернуть область графика в S2VNA до того, как окно программы скроется
+    // и Windows уничтожит встроенный чужой HWND вместе с нашим.
+    if (m_measure) {
+        m_measure->stopEmbeddedGraph();
+    }
     QSettings().setValue(QStringLiteral("ui/window_geometry_v1"), saveGeometry());
     QMainWindow::closeEvent(event);
 }
@@ -1178,14 +1179,12 @@ void MainWindow::onProbeFinished(bool ok, const QString& idnOrError)
     const bool measureAfterSuccess = m_measureAfterProbe;
     m_measureAfterProbe = false;
     refreshDataSourceBadge(ok, idnOrError);
-    if (ok) {
+        if (ok) {
         m_s2vnaRuntime.hideOwnedWindow();
         m_connections->setDiagnostic(QStringLiteral("Связь OK: %1").arg(idnOrError));
         statusBar()->showMessage(QStringLiteral("VNA IDN: %1").arg(idnOrError), 8000);
-        if (m_tabs->currentIndex() == 1
-            && m_connections->vnaBackend() == MeasureWorker::BackendSocket) {
-            QTimer::singleShot(300, m_measure, [this] { m_measure->showEmbeddedGraph(); });
-        }
+        // График остаётся в окне S2VNA: так развёртка продолжает рисоваться,
+        // пока оператор крутит каналы. Встроить его можно кнопкой.
         if (measureAfterSuccess) {
             onMeasureNow();
         }

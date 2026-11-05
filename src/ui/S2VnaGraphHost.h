@@ -33,5 +33,6 @@ private:
     int m_originalY = 0;
     int m_originalWidth = 0;
     int m_originalHeight = 0;
+    long long m_originalStyle = 0;
 #endif
 };

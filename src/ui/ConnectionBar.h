@@ -19,9 +19,7 @@ public:
     /// Третья страница общей области рядом с подключением и контроллером.
     void setMiddleWidget(QWidget* widget);
     void setSweepWidget(QWidget* widget);
-    /// «Настройка 1 канала» (плата ППКХ4) — сразу после «Настройки частоты».
-    void setSingleChannelWidget(QWidget* widget);
-    /// «Настройка 4 каналов» — сразу после «Настройка 1 канала».
+    /// «Настройка 4 каналов» — сразу после «Настройки частоты».
     void setFourChannelWidget(QWidget* widget);
     void showSweepSettings();
     /// Очередь ошибок SCPI; MainWindow переносит её в «Тех. состояние».

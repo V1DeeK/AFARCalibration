@@ -43,6 +43,8 @@ public:
     /// Показ графика S2VNA: запомнить текущий запуск и включить непрерывную развертку.
     TriggerState enable_native_continuous();
     void restore_native_trigger(const TriggerState& previous);
+    /// После закрытия программы оставить на экране S2VNA живую развёртку.
+    void resume_live_display();
     /// SCPI-состояние S2VNA; содержит настройки каналов и может содержать калибровку.
     void load_state(const std::string& path);
     /// Сохранить полный снимок S2VNA для отката, не меняя постоянный тип сохранения.

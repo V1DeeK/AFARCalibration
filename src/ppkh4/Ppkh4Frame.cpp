@@ -179,6 +179,37 @@ std::string send_command(const FrameFormat& format, int phase_code, int atten_co
     return "SEND " + std::to_string(bits.size()) + " " + frame_hex(bits);
 }
 
+std::vector<bool> chain_bits(const FrameFormat& format, std::span<const int> phase,
+                            std::span<const int> atten, std::span<const int> lsb_first)
+{
+    const int width = std::clamp(format.total_bits, 1, kMaxFrameBits);
+    const int count = static_cast<int>(std::min(phase.size(), atten.size()));
+    const int total = width * count;
+    std::vector<bool> bits(static_cast<std::size_t>(std::min(total, kMaxFrameBits)), false);
+    FrameFormat one = format;
+    one.total_bits = width;
+    const int used = static_cast<int>(bits.size()) / width;
+    for (int ch = 0; ch < used; ++ch) {
+        const auto word = build_frame(one, phase[static_cast<std::size_t>(ch)],
+                                       atten[static_cast<std::size_t>(ch)]);
+        const bool flip = ch < static_cast<int>(lsb_first.size())
+                          && lsb_first[static_cast<std::size_t>(ch)] != 0;
+        const int base = ch * width;
+        for (int i = 0; i < width; ++i) {
+            const int src = flip ? (width - 1 - i) : i;
+            bits[static_cast<std::size_t>(base + i)] = word[static_cast<std::size_t>(src)];
+        }
+    }
+    return bits;
+}
+
+std::string send_chain_command(const FrameFormat& format, std::span<const int> phase,
+                               std::span<const int> atten, std::span<const int> lsb_first)
+{
+    const auto bits = chain_bits(format, phase, atten, lsb_first);
+    return "SEND " + std::to_string(bits.size()) + " " + frame_hex(bits);
+}
+
 std::vector<std::string> cfg_commands(const LineConfig& lines)
 {
     return {

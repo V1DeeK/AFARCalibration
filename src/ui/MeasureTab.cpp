@@ -505,9 +505,9 @@ QWidget* MeasureTab::makeGraphsPage()
     auto* side = new QWidget(page);
     side->setMinimumWidth(250);
     auto* sideLayout = new QVBoxLayout(side);
-    m_graphSideLayout = sideLayout;
     sideLayout->setContentsMargins(8, 0, 0, 0);
     sideLayout->setSpacing(10);
+    m_graphSideLayout = sideLayout;
 
     m_measureNow = new QPushButton(QStringLiteral("Снять измерение для отчёта"), side);
     m_measureNow->setObjectName(QStringLiteral("captureForReport"));
@@ -702,9 +702,12 @@ QWidget* MeasureTab::makeGraphsPage()
     return page;
 }
 
-void MeasureTab::setSingleChannelControls(QWidget* controls)
+void MeasureTab::setGraphChannelControl(QWidget* widget)
 {
-    m_graphSideLayout->insertWidget(1, controls);
+    if (m_graphSideLayout == nullptr || widget == nullptr) {
+        return;
+    }
+    m_graphSideLayout->insertWidget(0, widget);
 }
 
 void MeasureTab::stopEmbeddedGraph()

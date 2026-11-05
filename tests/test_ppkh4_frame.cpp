@@ -1,4 +1,4 @@
-// Кадр платы ППКХ4 (вкладка «Настройка 1 канала»): совпадение с исходной
+// Кадр платы ППКХ4 (вкладка «Настройка 4 каналов»): совпадение с исходной
 // страницей V1DeeK/1Chanel и контрактом docs/contracts/ppkh4-usb-cdc.md.
 #include "Ppkh4Frame.h"
 
@@ -66,6 +66,33 @@ TEST_CASE("ППКХ4: проверки раскладки", "[ppkh4]")
     f.total_bits = kMaxFrameBits;
     CHECK(format_valid(f));
     CHECK(frame_hex(build_frame(f, 0, 0)).size() == kMaxFrameBits / 4);
+}
+
+TEST_CASE("ППКХ4: четыре канала одной цепочкой, канал 1 в младших битах", "[ppkh4]")
+{
+    const FrameFormat f;
+    const int zero_phase[4] = {0, 0, 0, 0};
+    const int zero_atten[4] = {0, 0, 0, 0};
+    CHECK(send_chain_command(f, zero_phase, zero_atten) == "SEND 48 000000000000");
+
+    int phase[4] = {1, 0, 0, 0};
+    CHECK(send_chain_command(f, phase, zero_atten) == "SEND 48 000000000001");
+    phase[0] = 0;
+    phase[3] = 1;
+    CHECK(send_chain_command(f, phase, zero_atten) == "SEND 48 001000000000");
+
+    int atten[4] = {63, 0, 0, 0};
+    phase[3] = 0;
+    CHECK(send_chain_command(f, phase, atten) == "SEND 48 000000000FC0");
+
+    int lsb[4] = {1, 0, 0, 0};
+    phase[0] = 1;
+    CHECK(send_chain_command(f, phase, zero_atten, lsb) == "SEND 48 000000000800");
+    lsb[0] = 0;
+    lsb[3] = 1;
+    phase[0] = 0;
+    phase[3] = 1;
+    CHECK(send_chain_command(f, phase, zero_atten, lsb) == "SEND 48 800000000000");
 }
 
 TEST_CASE("ППКХ4: команды CFG в порядке исходной страницы", "[ppkh4]")

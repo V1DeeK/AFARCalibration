@@ -118,11 +118,6 @@ void ConnectionBar::setSweepWidget(QWidget* widget)
     m_panels->addTab(widget, QStringLiteral("Настройка частоты"));
 }
 
-void ConnectionBar::setSingleChannelWidget(QWidget* widget)
-{
-    m_panels->addTab(widget, QStringLiteral("Настройка 1 канала"));
-}
-
 void ConnectionBar::setFourChannelWidget(QWidget* widget)
 {
     m_panels->addTab(widget, QStringLiteral("Настройка 4 каналов"));

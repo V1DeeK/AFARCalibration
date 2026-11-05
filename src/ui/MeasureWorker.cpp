@@ -2021,6 +2021,14 @@ void MeasureWorker::requestCellPreview(int channel, int attCode, int phase)
 void MeasureWorker::shutdown()
 {
     leaveNativeGraph();
+    if (m_c2220 && m_c2220->connected()) {
+        try {
+            m_c2220->resume_live_display();
+        } catch (const std::exception& e) {
+            emit diagnostic(QStringLiteral("График S2VNA при выходе: %1")
+                                .arg(QString::fromUtf8(e.what())));
+        }
+    }
     if (m_nativeC2220) m_nativeC2220->abort();
     m_timer->stop();
     if (m_orch && (m_orch->state() == afar::RunState::Running

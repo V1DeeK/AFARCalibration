@@ -281,6 +281,17 @@ C2220Vna::TriggerState C2220Vna::enable_native_continuous()
     return previous;
 }
 
+void C2220Vna::resume_live_display()
+{
+    require_connected("resume_live_display");
+    if (trim_scpi_text(query("TRIG:SOUR?")) != "INT") {
+        write_cmd("TRIG:SOUR INT");
+    }
+    if (!scpi_state_is_on(query("INIT:CONT?"))) {
+        write_cmd("INIT:CONT ON");
+    }
+}
+
 void C2220Vna::restore_native_trigger(const TriggerState& previous)
 {
     require_connected("restore_native_trigger");

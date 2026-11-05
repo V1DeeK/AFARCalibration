@@ -9,7 +9,6 @@
 #include "MeasureTab.h"
 #include "PsSession.h"
 #include "FourChannelPanel.h"
-#include "SingleChannelPanel.h"
 #include "S2VnaGraphHost.h"
 #include "TestPsServer.h"
 #include "Theme.h"
@@ -38,7 +37,6 @@
 #include <QScreen>
 #include <QScrollBar>
 #include <QSettings>
-#include <QSlider>
 #include <QSpinBox>
 #include <QStackedLayout>
 #include <QStackedWidget>
@@ -394,12 +392,10 @@ TEST_CASE("Настройка частоты открывается рядом �
     auto* tabs = child<QTabWidget>(*w.window, "connectionTabs");
     auto* calibration = child<QTabWidget>(*w.window, "calibrationTabs");
     auto* frequency = child<QDoubleSpinBox>(*w.window, "frequencyStart");
-    REQUIRE(tabs->count() == 6);
+    REQUIRE(tabs->count() == 5);
     CHECK(tabs->tabText(3) == QStringLiteral("Настройка частоты"));
-    CHECK(tabs->tabText(4) == QStringLiteral("Настройка 1 канала"));
-    CHECK(tabs->tabText(5) == QStringLiteral("Настройка 4 каналов"));
-    CHECK(tabs->widget(4)->objectName() == QStringLiteral("singleChannelPanel"));
-    CHECK(tabs->widget(5)->objectName() == QStringLiteral("fourChannelPanel"));
+    CHECK(tabs->tabText(4) == QStringLiteral("Настройка 4 каналов"));
+    CHECK(tabs->widget(4)->objectName() == QStringLiteral("fourChannelPanel"));
     CHECK(tabs->widget(3)->isAncestorOf(frequency));
     CHECK(calibration->indexOf(tabs->widget(3)) == -1);
 
@@ -419,33 +415,53 @@ TEST_CASE("Настройка частоты открывается рядом �
     CHECK(tabs->maximumHeight() <= tabBar->sizeHint().height() + 2);
 }
 
-TEST_CASE("Настройка 4 каналов помнит фазу и аттенюацию каждого из 16", "[ui][window][measurement]")
+TEST_CASE("Настройка 4 каналов помнит фазу и аттенюацию каждого канала цепочки",
+          "[ui][window][measurement]")
 {
     app();
     Window w;
     w.openTab(1);
     auto* panel = child<FourChannelPanel>(*w.window, "fourChannelPanel");
-    auto* board = child<QComboBox>(*w.window, "fourChannelBoard");
     auto* slot = child<QComboBox>(*w.window, "fourChannelSlot");
     auto* phase = child<QSpinBox>(*w.window, "fourChannelPhaseCode");
     auto* atten = child<QSpinBox>(*w.window, "fourChannelAttenCode");
     auto* global = child<QLabel>(*w.window, "fourChannelGlobal");
 
-    // Изделие 2, канал 3. В памяти это индекс 6, на экране — «Изделие 2 · канал 3».
-    board->setCurrentIndex(1);
+    auto* packet = child<QLabel>(*w.window, "fourChannelPacket");
+    auto* sidePhase0 = child<QSpinBox>(*w.window, "graphChannelPhase0");
+    auto* order0 = child<QComboBox>(*w.window, "fourChannelOrder0");
+    CHECK(packet->text() == QStringLiteral("SEND 48 000000000000"));
+    phase->setValue(1);
+    CHECK(panel->phaseCode() == 1);
+    CHECK(sidePhase0->value() == 1);
+    CHECK(packet->text() == QStringLiteral("SEND 48 000000000001"));
+    order0->setCurrentIndex(1);
+    CHECK(packet->text() == QStringLiteral("SEND 48 000000000800"));
+    order0->setCurrentIndex(0);
+    phase->setValue(0);
+    CHECK(packet->text() == QStringLiteral("SEND 48 000000000000"));
+
     slot->setCurrentIndex(2);
-    CHECK(panel->globalChannel() == 7);
-    CHECK(global->text() == QStringLiteral("Изделие 2 · канал 3"));
+    CHECK(panel->globalChannel() == 3);
+    CHECK(global->text() == QStringLiteral("Канал 3 из 4"));
     phase->setValue(8);
     atten->setValue(43);
     CHECK(panel->phaseCode() == 8);
     CHECK(panel->attenCode() == 43);
+    CHECK(child<QSpinBox>(*w.window, "graphChannelPhase2")->value() == 8);
+    CHECK(child<QSpinBox>(*w.window, "graphChannelAtten2")->value() == 43);
+    CHECK(sidePhase0->value() == 0);
+    child<QSpinBox>(*w.window, "graphChannelPhase2")->setValue(4);
+    CHECK(panel->phaseCode() == 4);
+    CHECK(phase->value() == 4);
+    phase->setValue(8);
+    CHECK(child<QSpinBox>(*w.window, "graphChannelPhase2")->value() == 8);
     CHECK(child<QLabel>(*w.window, "fourChannelPhaseValue")->text() == QStringLiteral("45.000°"));
-    CHECK(child<QPushButton>(*w.window, "fourChannelRow0")->text().startsWith(QStringLiteral("Изделие 2 · канал 1")));
-    CHECK(child<QPushButton>(*w.window, "fourChannelRow2")->text().startsWith(QStringLiteral("Изделие 2 · канал 3")));
+    CHECK(child<QPushButton>(*w.window, "fourChannelRow0")->text().startsWith(QStringLiteral("Канал 1")));
+    CHECK(child<QPushButton>(*w.window, "fourChannelRow2")->text().startsWith(QStringLiteral("Канал 3")));
 
     slot->setCurrentIndex(0);
-    CHECK(panel->globalChannel() == 5);
+    CHECK(panel->globalChannel() == 1);
     CHECK(panel->phaseCode() == 0);
     CHECK(panel->attenCode() == 0);
 
@@ -456,64 +472,9 @@ TEST_CASE("Настройка 4 каналов помнит фазу и атте
     CHECK(atten->value() == 43);
 
     QSettings stored;
-    CHECK(stored.value(QStringLiteral("fourChannel/phase/6")).toInt() == 8);
-    CHECK(stored.value(QStringLiteral("fourChannel/atten/6")).toInt() == 43);
-    CHECK(stored.value(QStringLiteral("fourChannel/board")).toInt() == 1);
+    CHECK(stored.value(QStringLiteral("fourChannel/phase/2")).toInt() == 8);
+    CHECK(stored.value(QStringLiteral("fourChannel/atten/2")).toInt() == 43);
     CHECK(stored.value(QStringLiteral("fourChannel/slot")).toInt() == 2);
-}
-
-TEST_CASE("Быстрая настройка канала на графиках синхронизирована с основной панелью",
-          "[ui][window][measurement]")
-{
-    app();
-    Window w;
-    auto* channel = child<SingleChannelPanel>(*w.window, "singleChannelPanel");
-    auto* quick = child<QGroupBox>(*w.window, "quickSingleChannelControls");
-    auto* action = child<QGroupBox>(*w.window, "graphActionBox");
-    auto* format = child<QComboBox>(*w.window, "graphDisplayFormat");
-    auto* side = quick->parentWidget()->layout();
-    REQUIRE(side != nullptr);
-    CHECK(side->indexOf(quick) == side->indexOf(action) + 1);
-    CHECK(side->indexOf(format->parentWidget()) == side->indexOf(quick) + 1);
-
-    auto* phaseSlider = child<QSlider>(*w.window, "quickChannelPhaseSlider");
-    auto* phaseValue = child<QDoubleSpinBox>(*w.window, "quickChannelPhaseValue");
-    auto* attenSlider = child<QSlider>(*w.window, "quickChannelAttenSlider");
-    auto* attenValue = child<QDoubleSpinBox>(*w.window, "quickChannelAttenValue");
-    phaseSlider->setValue(8);
-    CHECK(channel->phaseCode() == 8);
-    CHECK(phaseValue->value() == 45.0);
-    CHECK(child<QSpinBox>(*w.window, "singleChannelPhaseCode")->value() == 8);
-    phaseValue->setValue(90.0);
-    QMetaObject::invokeMethod(phaseValue, "editingFinished", Qt::DirectConnection);
-    CHECK(channel->phaseCode() == 16);
-    CHECK(phaseSlider->value() == 16);
-    child<QPushButton>(*w.window, "quickChannelPhaseUp")->click();
-    CHECK(channel->phaseCode() == 17);
-    CHECK(phaseSlider->value() == 17);
-    child<QPushButton>(*w.window, "quickChannelPhaseDown")->click();
-    CHECK(channel->phaseCode() == 16);
-
-    attenSlider->setValue(43);
-    CHECK(channel->attenCode() == 43);
-    CHECK(attenValue->value() == -10.0);
-    attenValue->setValue(-5.0);
-    QMetaObject::invokeMethod(attenValue, "editingFinished", Qt::DirectConnection);
-    CHECK(channel->attenCode() == 53);
-    CHECK(attenSlider->value() == 53);
-    CHECK(child<QSpinBox>(*w.window, "singleChannelAttenCode")->value() == 53);
-    child<QPushButton>(*w.window, "quickChannelAttenUp")->click();
-    CHECK(channel->attenCode() == 54);
-    CHECK(attenValue->value() == -4.5);
-    child<QPushButton>(*w.window, "quickChannelAttenDown")->click();
-    CHECK(channel->attenCode() == 53);
-    CHECK(attenValue->value() == -5.0);
-    channel->setPhaseCode(63);
-    child<QPushButton>(*w.window, "quickChannelPhaseUp")->click();
-    CHECK(channel->phaseCode() == 63);
-    channel->setAttenCode(0);
-    child<QPushButton>(*w.window, "quickChannelAttenDown")->click();
-    CHECK(channel->attenCode() == 0);
 }
 
 TEST_CASE("График S2VNA возвращается при переходе на другую вкладку",

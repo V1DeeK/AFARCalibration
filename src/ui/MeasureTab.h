@@ -11,6 +11,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
 class QGridLayout;
+class QVBoxLayout;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -20,7 +21,6 @@ class QPushButton;
 class QSpinBox;
 class QStackedWidget;
 class QTabWidget;
-class QVBoxLayout;
 class S21PlotWidget;
 class S2VnaGraphHost;
 
@@ -99,7 +99,6 @@ public:
     void setMeasureNowEnabled(bool enabled);
     void setTwoPortExportEnabled(bool enabled);
     void setTwoPortExportInProgress(bool inProgress);
-    void setSingleChannelControls(QWidget* controls);
     void stopEmbeddedGraph();
     void showEmbeddedGraph();
     void setNativeGraphState(const QStringList& parameters,
@@ -114,6 +113,8 @@ public:
     void setInstrumentSweepSettings(double fStartHz, double fStopHz, int points,
                                     int ifbwHz, double powerDbm, int averages);
     void setNativeOperatingState(bool rfOutput, bool correction);
+    /// Регуляторы четырёх каналов справа от графиков. Виджет не копирует коды.
+    void setGraphChannelControl(QWidget* widget);
     void onCalibrateStepFinished(bool ok, int step, const QString& message);
 
     [[nodiscard]] double fStartHz() const;
@@ -191,9 +192,6 @@ private:
     [[nodiscard]] int calApplyStep() const;
     [[nodiscard]] int calStepCount() const;
     [[nodiscard]] bool isOnePortCal() const;
-
-    QVBoxLayout* m_graphSideLayout = nullptr;
-
 
     QComboBox* m_frequencyEntryMode = nullptr;
     QWidget* m_fStartRow = nullptr;
@@ -274,6 +272,7 @@ private:
     std::array<QVector<double>, 6> m_graphPhase;
     std::array<QPushButton*, 6> m_graphTraceButtons{};
     QStackedWidget* m_graphStack = nullptr;
+    QVBoxLayout* m_graphSideLayout = nullptr;
     S2VnaGraphHost* m_s2vnaGraphHost = nullptr;
     QPushButton* m_nativeGraphButton = nullptr;
     QPushButton* m_nativeStateButton = nullptr;

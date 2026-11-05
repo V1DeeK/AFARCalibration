@@ -1,5 +1,6 @@
 #pragma once
 
+#include <span>
 #include <string>
 #include <vector>
 
@@ -61,8 +62,21 @@ struct LineConfig {
 /// Раскладку можно отправлять в плату: размеры в пределах прошивки.
 [[nodiscard]] bool format_valid(const FrameFormat& format);
 
-/// «SEND <бит> <hex>».
+/// «SEND <бит> <hex>» для одного слова.
 [[nodiscard]] std::string send_command(const FrameFormat& format, int phase_code, int atten_code);
+/// Биты цепочки, индекс = номер бита (0 — младший). Канал `ch` занимает биты
+/// `[ch * width, ch * width + width)`. `lsb_first[ch] != 0` переворачивает
+/// 12-битное слово этого канала: его младший бит оказывается на старшем месте
+/// слота и уходит по проводу раньше. Пустой `lsb_first` — у всех старшим вперёд.
+[[nodiscard]] std::vector<bool> chain_bits(const FrameFormat& format, std::span<const int> phase,
+                                           std::span<const int> atten,
+                                           std::span<const int> lsb_first = {});
+/// Четыре слова одной SPI-цепочки. Канал 1 — младшие биты (сдвигается последним,
+/// остаётся в первом регистре у платы). Канал 4 — старшие биты (уходит первым,
+/// доезжает до дальнего конца цепочки).
+[[nodiscard]] std::string send_chain_command(const FrameFormat& format, std::span<const int> phase,
+                                             std::span<const int> atten,
+                                             std::span<const int> lsb_first = {});
 /// Команды CFG в том порядке, в каком их шлёт исходная страница 1Chanel.
 [[nodiscard]] std::vector<std::string> cfg_commands(const LineConfig& lines);
 
