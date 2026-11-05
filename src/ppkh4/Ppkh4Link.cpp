@@ -40,8 +40,28 @@ QList<Ppkh4Link::PortInfo> Ppkh4Link::availablePorts()
     QList<PortInfo> out;
 #ifdef AFAR_HAVE_SERIALPORT
     for (const QSerialPortInfo& info : QSerialPortInfo::availablePorts()) {
+        const QString name = info.portName();
+        const QString blob = (name + QLatin1Char(' ') + info.description() + QLatin1Char(' ')
+                              + info.manufacturer())
+                                 .toLower();
+        // macOS показывает служебные порты (отладка, Bluetooth, парный tty.*).
+        // tty.* открывается только при несущей и вешает подключение. ППКХ4 — USB CDC.
+        if (name.startsWith(QStringLiteral("tty."))) {
+            continue;
+        }
+        if (blob.contains(QStringLiteral("bluetooth")) || blob.contains(QStringLiteral("debug-console"))
+            || blob.contains(QStringLiteral("wlan")) || blob.contains(QStringLiteral("incoming-port"))) {
+            continue;
+        }
+#ifdef Q_OS_MAC
+        const bool usb = info.hasVendorIdentifier() || blob.contains(QStringLiteral("usb"))
+                         || blob.contains(QStringLiteral("serial")) || blob.contains(QStringLiteral("uart"));
+        if (!usb) {
+            continue;
+        }
+#endif
         PortInfo p;
-        p.name = info.portName();
+        p.name = name;
         p.description = info.description();
         p.board = info.hasVendorIdentifier() && info.hasProductIdentifier()
                   && info.vendorIdentifier() == kVendorId && info.productIdentifier() == kProductId;

@@ -123,6 +123,11 @@ void ConnectionBar::setSingleChannelWidget(QWidget* widget)
     m_panels->addTab(widget, QStringLiteral("Настройка 1 канала"));
 }
 
+void ConnectionBar::setFourChannelWidget(QWidget* widget)
+{
+    m_panels->addTab(widget, QStringLiteral("Настройка 4 каналов"));
+}
+
 void ConnectionBar::showSweepSettings()
 {
     if (m_panels->count() > 3) {

@@ -342,6 +342,8 @@ add_library(afar_app_ui STATIC
     ui/PsServiceCheckPage.h
     ui/SingleChannelPanel.cpp
     ui/SingleChannelPanel.h
+    ui/FourChannelPanel.cpp
+    ui/FourChannelPanel.h
     ui/HeterodyneTab.cpp
     ui/HeterodyneTab.h
 )

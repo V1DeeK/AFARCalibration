@@ -8,6 +8,7 @@
 #include "MainWindow.h"
 #include "MeasureTab.h"
 #include "PsSession.h"
+#include "FourChannelPanel.h"
 #include "SingleChannelPanel.h"
 #include "S2VnaGraphHost.h"
 #include "TestPsServer.h"
@@ -393,10 +394,12 @@ TEST_CASE("Настройка частоты открывается рядом �
     auto* tabs = child<QTabWidget>(*w.window, "connectionTabs");
     auto* calibration = child<QTabWidget>(*w.window, "calibrationTabs");
     auto* frequency = child<QDoubleSpinBox>(*w.window, "frequencyStart");
-    REQUIRE(tabs->count() == 5);
+    REQUIRE(tabs->count() == 6);
     CHECK(tabs->tabText(3) == QStringLiteral("Настройка частоты"));
     CHECK(tabs->tabText(4) == QStringLiteral("Настройка 1 канала"));
+    CHECK(tabs->tabText(5) == QStringLiteral("Настройка 4 каналов"));
     CHECK(tabs->widget(4)->objectName() == QStringLiteral("singleChannelPanel"));
+    CHECK(tabs->widget(5)->objectName() == QStringLiteral("fourChannelPanel"));
     CHECK(tabs->widget(3)->isAncestorOf(frequency));
     CHECK(calibration->indexOf(tabs->widget(3)) == -1);
 
@@ -414,6 +417,49 @@ TEST_CASE("Настройка частоты открывается рядом �
     auto* tabBar = tabs->tabBar();
     QMetaObject::invokeMethod(tabBar, "tabBarClicked", Qt::DirectConnection, Q_ARG(int, 3));
     CHECK(tabs->maximumHeight() <= tabBar->sizeHint().height() + 2);
+}
+
+TEST_CASE("Настройка 4 каналов помнит фазу и аттенюацию каждого из 16", "[ui][window][measurement]")
+{
+    app();
+    Window w;
+    w.openTab(1);
+    auto* panel = child<FourChannelPanel>(*w.window, "fourChannelPanel");
+    auto* board = child<QComboBox>(*w.window, "fourChannelBoard");
+    auto* slot = child<QComboBox>(*w.window, "fourChannelSlot");
+    auto* phase = child<QSpinBox>(*w.window, "fourChannelPhaseCode");
+    auto* atten = child<QSpinBox>(*w.window, "fourChannelAttenCode");
+    auto* global = child<QLabel>(*w.window, "fourChannelGlobal");
+
+    // Изделие 2, канал 3. В памяти это индекс 6, на экране — «Изделие 2 · канал 3».
+    board->setCurrentIndex(1);
+    slot->setCurrentIndex(2);
+    CHECK(panel->globalChannel() == 7);
+    CHECK(global->text() == QStringLiteral("Изделие 2 · канал 3"));
+    phase->setValue(8);
+    atten->setValue(43);
+    CHECK(panel->phaseCode() == 8);
+    CHECK(panel->attenCode() == 43);
+    CHECK(child<QLabel>(*w.window, "fourChannelPhaseValue")->text() == QStringLiteral("45.000°"));
+    CHECK(child<QPushButton>(*w.window, "fourChannelRow0")->text().startsWith(QStringLiteral("Изделие 2 · канал 1")));
+    CHECK(child<QPushButton>(*w.window, "fourChannelRow2")->text().startsWith(QStringLiteral("Изделие 2 · канал 3")));
+
+    slot->setCurrentIndex(0);
+    CHECK(panel->globalChannel() == 5);
+    CHECK(panel->phaseCode() == 0);
+    CHECK(panel->attenCode() == 0);
+
+    slot->setCurrentIndex(2);
+    CHECK(panel->phaseCode() == 8);
+    CHECK(panel->attenCode() == 43);
+    CHECK(phase->value() == 8);
+    CHECK(atten->value() == 43);
+
+    QSettings stored;
+    CHECK(stored.value(QStringLiteral("fourChannel/phase/6")).toInt() == 8);
+    CHECK(stored.value(QStringLiteral("fourChannel/atten/6")).toInt() == 43);
+    CHECK(stored.value(QStringLiteral("fourChannel/board")).toInt() == 1);
+    CHECK(stored.value(QStringLiteral("fourChannel/slot")).toInt() == 2);
 }
 
 TEST_CASE("Быстрая настройка канала на графиках синхронизирована с основной панелью",

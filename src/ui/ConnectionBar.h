@@ -21,6 +21,8 @@ public:
     void setSweepWidget(QWidget* widget);
     /// «Настройка 1 канала» (плата ППКХ4) — сразу после «Настройки частоты».
     void setSingleChannelWidget(QWidget* widget);
+    /// «Настройка 4 каналов» — сразу после «Настройка 1 канала».
+    void setFourChannelWidget(QWidget* widget);
     void showSweepSettings();
     /// Очередь ошибок SCPI; MainWindow переносит её в «Тех. состояние».
     [[nodiscard]] QWidget* scpiPanel() const { return m_scpiPanel; }
