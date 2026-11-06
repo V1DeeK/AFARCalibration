@@ -4,15 +4,22 @@
 #include "Ppkh4Link.h"
 #include "UiStyle.h"
 
+#include <QAbstractItemView>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDir>
 #include <QDoubleSpinBox>
+#include <QHeaderView>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPixmap>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
+#include <QStandardPaths>
+#include <QTableWidget>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QSpinBox>
@@ -123,6 +130,8 @@ QString channelBitsHtml(const std::vector<bool>& bits, int channel, bool flip, c
 
 }  // namespace
 
+using namespace afar::ppkh4;
+
 FourChannelPanel::FourChannelPanel(QWidget* parent)
     : QWidget(parent)
 {
@@ -142,9 +151,10 @@ FourChannelPanel::FourChannelPanel(QWidget* parent)
     row->addWidget(makePhaseBox(), 1);
     row->addWidget(makeAttenBox(), 1);
     root->addLayout(row);
+    root->addWidget(makeMeasureBox());
     root->addWidget(makeLogBox());
 
-    connect(m_sendDebounce, &QTimer::timeout, this, &FourChannelPanel::sendFrame);
+    connect(m_sendDebounce, &QTimer::timeout, this, [this] { sendFrame(); });
     connect(m_link, &Ppkh4Link::opened, this, &FourChannelPanel::onOpened);
     connect(m_link, &Ppkh4Link::closed, this, &FourChannelPanel::onClosed);
     connect(m_link, &Ppkh4Link::commandSent, this,
@@ -319,7 +329,7 @@ QWidget* FourChannelPanel::makeSelectBox()
     }
 
     connect(m_slot, &QComboBox::currentIndexChanged, this, &FourChannelPanel::onSelectionChanged);
-    connect(m_apply, &QPushButton::clicked, this, &FourChannelPanel::sendFrame);
+    connect(m_apply, &QPushButton::clicked, this, [this] { sendFrame(); });
     return box;
 }
 
@@ -622,7 +632,7 @@ int FourChannelPanel::attenCodeAt(int index) const
 
 void FourChannelPanel::setChannelPhase(int index, int code)
 {
-    if (m_loading || index < 0 || index >= kChannels) {
+    if (m_running || m_loading || index < 0 || index >= kChannels) {
         return;
     }
     const int next = clamp_code(code, m_format.phase);
@@ -647,7 +657,7 @@ void FourChannelPanel::setChannelPhase(int index, int code)
 
 void FourChannelPanel::setChannelAtten(int index, int code)
 {
-    if (m_loading || index < 0 || index >= kChannels) {
+    if (m_running || m_loading || index < 0 || index >= kChannels) {
         return;
     }
     const int next = clamp_code(code, m_format.atten);
@@ -889,15 +899,24 @@ void FourChannelPanel::applyCfg()
 
 void FourChannelPanel::sendFrame()
 {
+    sendFrame({});
+}
+
+void FourChannelPanel::sendFrame(const std::function<void(bool)>& after)
+{
     m_sendDebounce->stop();
     if (!m_connected) {
+        if (after) {
+            after(false);
+        }
         return;
     }
     const QString command = QString::fromStdString(
         send_chain_command(m_format, m_phase, m_atten, m_lsb));
     const int channel = m_slot->currentIndex() + 1;
-    m_link->send(command, [this, command, channel](const QString& reply) {
-        if (reply.startsWith(QLatin1String("OK"))) {
+    m_link->send(command, [this, command, channel, after](const QString& reply) {
+        const bool ok = reply.startsWith(QLatin1String("OK"));
+        if (ok) {
             m_lastSent->setText(QStringLiteral("цепочка записана, правится канал %1: %2")
                                     .arg(channel)
                                     .arg(command));
@@ -906,7 +925,284 @@ void FourChannelPanel::sendFrame()
             m_lastSent->setText(QStringLiteral("канал %1: %2").arg(channel).arg(reply));
             ui::setTone(m_lastSent, ui::Tone::Error);
         }
+        if (after) {
+            after(ok);
+        }
     });
+}
+
+QWidget* FourChannelPanel::makeMeasureBox()
+{
+    auto* box = new QGroupBox(QStringLiteral("Измерение S-параметров"), this);
+    auto* lay = new QVBoxLayout(box);
+    ui::applyGroupLayout(lay);
+    lay->addWidget(ui::hintLabel(
+        QStringLiteral("Кабель C2220 уже на выбранном канале. Программа проходит все коды аттенюации "
+                       "при текущей фазе, затем все коды фазы при текущей аттенюации, затем оба кода "
+                       "одним шагом. На каждом шаге снимаются S11, S21, S12 и S22, график пишется в PDF. "
+                       "«Все каналы» перед каналом 2, 3 и 4 ждёт перестановки кабеля."),
+        box));
+    auto* buttons = new QHBoxLayout();
+    for (int i = 0; i < kChannels; ++i) {
+        auto* button = new QPushButton(QStringLiteral("Канал %1").arg(i + 1), box);
+        button->setObjectName(QStringLiteral("fourChannelMeasure%1").arg(i + 1));
+        ui::setButtonRole(button, ui::ButtonRole::Primary);
+        m_measureOne[static_cast<std::size_t>(i)] = button;
+        buttons->addWidget(button);
+        connect(button, &QPushButton::clicked, this, [this, i] { startMeasure({i}); });
+    }
+    m_measureAll = new QPushButton(QStringLiteral("Все каналы"), box);
+    m_measureAll->setObjectName(QStringLiteral("fourChannelMeasureAll"));
+    ui::setButtonRole(m_measureAll, ui::ButtonRole::Success);
+    m_measureStop = new QPushButton(QStringLiteral("Остановить"), box);
+    m_measureStop->setObjectName(QStringLiteral("fourChannelMeasureStop"));
+    ui::setButtonRole(m_measureStop, ui::ButtonRole::Danger);
+    m_measureCable = new QPushButton(QStringLiteral("Кабель переставлен"), box);
+    m_measureCable->setObjectName(QStringLiteral("fourChannelMeasureCable"));
+    buttons->addWidget(m_measureAll);
+    buttons->addWidget(m_measureStop);
+    buttons->addWidget(m_measureCable);
+    lay->addLayout(buttons);
+    connect(m_measureAll, &QPushButton::clicked, this, [this] { startMeasure({0, 1, 2, 3}); });
+    connect(m_measureStop, &QPushButton::clicked, this, [this] { m_stopAsked = true; if (m_waitCable) stopMeasure(QStringLiteral("остановлено")); });
+    connect(m_measureCable, &QPushButton::clicked, this, [this] {
+        if (m_waitCable) {
+            m_waitCable = false;
+            continueMeasure();
+        }
+    });
+
+    m_measureStatus = ui::hintLabel(QStringLiteral("Измерение не запущено."), box);
+    m_measureStatus->setObjectName(QStringLiteral("fourChannelMeasureStatus"));
+    m_measureBar = new QProgressBar(box);
+    m_measureBar->setObjectName(QStringLiteral("fourChannelMeasureBar"));
+    m_measureBar->setTextVisible(true);
+    m_measureTable = new QTableWidget(0, 8, box);
+    m_measureTable->setObjectName(QStringLiteral("fourChannelMeasureTable"));
+    m_measureTable->setHorizontalHeaderLabels({QStringLiteral("Канал"), QStringLiteral("Этап"),
+                                               QStringLiteral("Фаза"), QStringLiteral("Аттен."),
+                                               QStringLiteral("S11"), QStringLiteral("S21"),
+                                               QStringLiteral("S12"), QStringLiteral("S22")});
+    m_measureTable->horizontalHeader()->setStretchLastSection(true);
+    m_measureTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_measureTable->setSelectionMode(QAbstractItemView::NoSelection);
+    m_measureTable->setMaximumHeight(120);
+    m_measureGraph = new QLabel(box);
+    m_measureGraph->setObjectName(QStringLiteral("fourChannelMeasureGraph"));
+    m_measureGraph->setAlignment(Qt::AlignCenter);
+    m_measureGraph->setMinimumHeight(120);
+    m_measureGraph->setMaximumHeight(180);
+    lay->addWidget(m_measureStatus);
+    lay->addWidget(m_measureBar);
+    lay->addWidget(m_measureTable);
+    lay->addWidget(m_measureGraph);
+    setMeasureUi();
+    return box;
+}
+
+void FourChannelPanel::startMeasure(const QVector<int>& channels)
+{
+    if (m_running) {
+        return;
+    }
+    if (!m_connected) {
+        m_measureStatus->setText(QStringLiteral("Сначала подключите плату ППКХ4."));
+        ui::setTone(m_measureStatus, ui::Tone::Warn);
+        return;
+    }
+    m_savedPhase = m_phase;
+    m_savedAtten = m_atten;
+    m_steps = buildChannelSteps(channels, max_code(m_format.phase.width), max_code(m_format.atten.width),
+                                m_savedPhase, m_savedAtten);
+    if (m_steps.isEmpty()) {
+        m_measureStatus->setText(QStringLiteral("Нет шагов для измерения."));
+        return;
+    }
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                         + QStringLiteral("/channel-reports");
+    m_runTitle = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss"));
+    m_runDir = root + QLatin1Char('/') + m_runTitle;
+    QDir().mkpath(m_runDir + QStringLiteral("/graphs"));
+    m_points.clear();
+    m_measureTable->setRowCount(0);
+    m_stepIndex = 0;
+    m_cableChannel = -1;
+    m_stopAsked = false;
+    m_waitCable = false;
+    m_running = true;
+    m_measureBar->setRange(0, m_steps.size());
+    m_measureBar->setValue(0);
+    setMeasureUi();
+    continueMeasure();
+}
+
+void FourChannelPanel::stopMeasure(const QString& outcome)
+{
+    if (!m_running && m_points.isEmpty()) {
+        return;
+    }
+    m_running = false;
+    m_waitCable = false;
+    m_stopAsked = false;
+    restoreSavedCodes();
+    finishMeasurePdf();
+    m_measureStatus->setText(outcome + QStringLiteral(" PDF: ") + m_runDir + QStringLiteral("/report.pdf"));
+    ui::setTone(m_measureStatus, ui::Tone::Info);
+    setMeasureUi();
+}
+
+void FourChannelPanel::continueMeasure()
+{
+    if (!m_running) {
+        return;
+    }
+    if (m_stopAsked) {
+        stopMeasure(QStringLiteral("Остановлено."));
+        return;
+    }
+    if (m_stepIndex >= m_steps.size()) {
+        stopMeasure(QStringLiteral("Готово."));
+        return;
+    }
+    const ChannelStep& step = m_steps.at(m_stepIndex);
+    if (m_cableChannel >= 0 && step.channel != m_cableChannel) {
+        m_waitCable = true;
+        m_measureStatus->setText(QStringLiteral("Переставьте кабель C2220 на канал %1 и нажмите «Кабель переставлен».")
+                                     .arg(step.channel + 1));
+        ui::setTone(m_measureStatus, ui::Tone::Warn);
+        setMeasureUi();
+        m_cableChannel = step.channel;
+        return;
+    }
+    m_cableChannel = step.channel;
+    m_waitCable = false;
+    applyMeasureStep();
+}
+
+void FourChannelPanel::applyMeasureStep()
+{
+    const ChannelStep& step = m_steps.at(m_stepIndex);
+    m_phase = m_savedPhase;
+    m_atten = m_savedAtten;
+    m_phase[static_cast<std::size_t>(step.channel)] = step.phase;
+    m_atten[static_cast<std::size_t>(step.channel)] = step.atten;
+    {
+        const QSignalBlocker block(m_slot);
+        m_slot->setCurrentIndex(step.channel);
+    }
+    m_phCode = m_phase[static_cast<std::size_t>(step.channel)];
+    m_atCode = m_atten[static_cast<std::size_t>(step.channel)];
+    m_global->setText(QStringLiteral("Канал %1 из 4").arg(step.channel + 1));
+    render();
+    refreshRows();
+    m_measureStatus->setText(QStringLiteral("Канал %1 · %2 · %3 / %4")
+                                 .arg(step.channel + 1)
+                                 .arg(channelStageName(step.stage))
+                                 .arg(m_stepIndex + 1)
+                                 .arg(m_steps.size()));
+    ui::setTone(m_measureStatus, ui::Tone::Info);
+    sendFrame([this](bool ok) {
+        if (!m_running) {
+            return;
+        }
+        if (m_stopAsked) {
+            stopMeasure(QStringLiteral("Остановлено."));
+            return;
+        }
+        if (!ok) {
+            stopMeasure(QStringLiteral("Плата не приняла кадр."));
+            return;
+        }
+        emit channelSweepRequested();
+    });
+}
+
+void FourChannelPanel::onSweepFinished(bool ok, const QString& message, const QVector<double>& freqGhz,
+                                       const QVector<double>& s11mag, const QVector<double>& s21mag,
+                                       const QVector<double>& s12mag, const QVector<double>& s22mag)
+{
+    if (!m_running || m_waitCable) {
+        return;
+    }
+    if (!ok) {
+        stopMeasure(message.isEmpty() ? QStringLiteral("Анализатор не измерил S-параметры.") : message);
+        return;
+    }
+    const ChannelStep& step = m_steps.at(m_stepIndex);
+    ChannelPoint point;
+    point.step = step;
+    point.phaseDeg = phase_deg(step.phase, m_format.phase);
+    point.attenDb = atten_db(step.atten, m_format.atten);
+    point.freqGhz = freqGhz;
+    point.s11mag = s11mag;
+    point.s21mag = s21mag;
+    point.s12mag = s12mag;
+    point.s22mag = s22mag;
+    point.s11Db = channelMidDb(s11mag);
+    point.s21Db = channelMidDb(s21mag);
+    point.s12Db = channelMidDb(s12mag);
+    point.s22Db = channelMidDb(s22mag);
+    const QImage graph = renderChannelGraph(point);
+    const QString imagePath = m_runDir + QStringLiteral("/graphs/%1.png").arg(m_stepIndex + 1, 4, 10, QLatin1Char('0'));
+    graph.save(imagePath);
+    point.imageFile = imagePath;
+    m_points.append(point);
+    m_measureGraph->setPixmap(QPixmap::fromImage(graph.scaled(m_measureGraph->width() > 0 ? m_measureGraph->width() : 640,
+                                                              160, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+
+    const int row = m_measureTable->rowCount();
+    m_measureTable->insertRow(row);
+    const QStringList cells{QString::number(step.channel + 1), channelStageName(step.stage),
+                            QStringLiteral("%1°").arg(point.phaseDeg, 0, 'f', 1),
+                            QStringLiteral("%1").arg(point.attenDb, 0, 'f', 1),
+                            QString::number(point.s11Db, 'f', 1), QString::number(point.s21Db, 'f', 1),
+                            QString::number(point.s12Db, 'f', 1), QString::number(point.s22Db, 'f', 1)};
+    for (int c = 0; c < cells.size(); ++c) {
+        m_measureTable->setItem(row, c, new QTableWidgetItem(cells.at(c)));
+    }
+    m_measureTable->scrollToBottom();
+    m_measureBar->setValue(m_stepIndex + 1);
+    ++m_stepIndex;
+    continueMeasure();
+}
+
+void FourChannelPanel::finishMeasurePdf()
+{
+    if (m_runDir.isEmpty()) {
+        return;
+    }
+    const QString error = writeChannelReport(m_runDir, m_runTitle, m_points);
+    if (!error.isEmpty()) {
+        m_measureStatus->setText(error);
+        ui::setTone(m_measureStatus, ui::Tone::Error);
+    }
+}
+
+void FourChannelPanel::restoreSavedCodes()
+{
+    m_phase = m_savedPhase;
+    m_atten = m_savedAtten;
+    m_phCode = m_phase[static_cast<std::size_t>(selectedIndex())];
+    m_atCode = m_atten[static_cast<std::size_t>(selectedIndex())];
+    for (int i = 0; i < kChannels; ++i) {
+        saveChannel(i);
+    }
+    render();
+    refreshRows();
+    if (m_connected) {
+        sendFrame();
+    }
+}
+
+void FourChannelPanel::setMeasureUi()
+{
+    for (QPushButton* button : m_measureOne) {
+        button->setEnabled(!m_running);
+    }
+    m_measureAll->setEnabled(!m_running);
+    m_measureStop->setEnabled(m_running);
+    m_measureCable->setEnabled(m_waitCable);
+    m_measureBar->setVisible(m_running || m_measureBar->value() > 0);
 }
 
 void FourChannelPanel::appendLog(const QString& line)

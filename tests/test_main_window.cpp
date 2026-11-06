@@ -8,6 +8,7 @@
 #include "MainWindow.h"
 #include "MeasureTab.h"
 #include "PsSession.h"
+#include "ChannelRun.h"
 #include "FourChannelPanel.h"
 #include "S2VnaGraphHost.h"
 #include "TestPsServer.h"
@@ -23,6 +24,9 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QDir>
+#include <QFile>
+#include <QImage>
+#include <QTemporaryDir>
 #include <QElapsedTimer>
 #include <QGroupBox>
 #include <QLabel>
@@ -475,6 +479,52 @@ TEST_CASE("Настройка 4 каналов помнит фазу и атте
     CHECK(stored.value(QStringLiteral("fourChannel/phase/2")).toInt() == 8);
     CHECK(stored.value(QStringLiteral("fourChannel/atten/2")).toInt() == 43);
     CHECK(stored.value(QStringLiteral("fourChannel/slot")).toInt() == 2);
+}
+
+TEST_CASE("Проход канала пишет три этапа и PDF", "[ui][channel]")
+{
+    std::array<int, 4> phase{1, 0, 0, 0};
+    std::array<int, 4> atten{2, 0, 0, 0};
+    const QVector<ChannelStep> steps = buildChannelSteps({0}, 1, 1, phase, atten);
+    REQUIRE(steps.size() == 6);
+    CHECK(steps.at(0).stage == 0);
+    CHECK(steps.at(0).phase == 1);
+    CHECK(steps.at(0).atten == 0);
+    CHECK(steps.at(2).stage == 1);
+    CHECK(steps.at(4).stage == 2);
+
+    ChannelPoint point;
+    point.step = steps.at(0);
+    point.phaseDeg = 5.625;
+    point.attenDb = -31.5;
+    point.s21Db = -10.0;
+    point.freqGhz = {1.0, 2.0};
+    point.s11mag = {-20.0, -21.0};
+    point.s21mag = {-10.0, -11.0};
+    point.s12mag = {-30.0, -31.0};
+    point.s22mag = {-22.0, -23.0};
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    const QString folder = dir.path();
+    REQUIRE(QDir().mkpath(folder + QStringLiteral("/graphs")));
+    const QImage graph = renderChannelGraph(point);
+    point.imageFile = folder + QStringLiteral("/graphs/0001.png");
+    REQUIRE(graph.save(point.imageFile));
+    CHECK(writeChannelReport(folder, QStringLiteral("test"), {point}).isEmpty());
+    QFile pdf(folder + QStringLiteral("/report.pdf"));
+    REQUIRE(pdf.open(QIODevice::ReadOnly));
+    CHECK(pdf.read(5) == "%PDF-");
+}
+
+TEST_CASE("Измерение канала без платы не стартует", "[ui][window][channel]")
+{
+    app();
+    Window w;
+    w.openTab(1);
+    auto* button = child<QPushButton>(*w.window, "fourChannelMeasure1");
+    button->click();
+    const QString status = child<QLabel>(*w.window, "fourChannelMeasureStatus")->text();
+    CHECK(status.contains(QStringLiteral("ППКХ4")));
 }
 
 TEST_CASE("График S2VNA возвращается при переходе на другую вкладку",

@@ -1,16 +1,20 @@
 #pragma once
 
+#include "ChannelRun.h"
 #include "Ppkh4Frame.h"
 
 #include <QWidget>
 
 #include <array>
+#include <functional>
 
 class Ppkh4Link;
 class QComboBox;
 class QLabel;
 class QPlainTextEdit;
+class QProgressBar;
 class QPushButton;
+class QTableWidget;
 class QSlider;
 class QDoubleSpinBox;
 class QSpinBox;
@@ -34,6 +38,15 @@ public:
     [[nodiscard]] int attenCodeAt(int index) const;
     /// Компактные регуляторы тех же четырёх каналов. Состояния своего не хранит.
     [[nodiscard]] QWidget* sideControl(QWidget* parent);
+    [[nodiscard]] bool measuring() const { return m_running; }
+    /// Ответ анализатора на один шаг. Векторы — |S| в дБ по частоте.
+    void onSweepFinished(bool ok, const QString& message, const QVector<double>& freqGhz,
+                         const QVector<double>& s11mag, const QVector<double>& s21mag,
+                         const QVector<double>& s12mag, const QVector<double>& s22mag);
+
+signals:
+    /// Нужен один полный снимок S11/S21/S12/S22 текущими настройками свипа.
+    void channelSweepRequested();
 
 private:
     QWidget* makeConnectionBox();
@@ -41,6 +54,7 @@ private:
     QWidget* makePhaseBox();
     QWidget* makeAttenBox();
     QWidget* makeLogBox();
+    QWidget* makeMeasureBox();
     void buildSideControl(QWidget* parent);
 
     void refreshPorts();
@@ -69,7 +83,16 @@ private:
     void refreshPacket();
     void applyCfg();
     void sendFrame();
+    void sendFrame(const std::function<void(bool)>& after);
     void appendLog(const QString& line);
+
+    void startMeasure(const QVector<int>& channels);
+    void stopMeasure(const QString& outcome);
+    void continueMeasure();
+    void applyMeasureStep();
+    void finishMeasurePdf();
+    void restoreSavedCodes();
+    void setMeasureUi();
 
     Ppkh4Link* m_link = nullptr;
     afar::ppkh4::FrameFormat m_format;
@@ -121,4 +144,24 @@ private:
     QSpinBox* m_atNum = nullptr;
 
     QPlainTextEdit* m_log = nullptr;
+
+    bool m_running = false;
+    bool m_waitCable = false;
+    bool m_stopAsked = false;
+    int m_stepIndex = 0;
+    int m_cableChannel = -1;
+    QString m_runDir;
+    QString m_runTitle;
+    std::array<int, 4> m_savedPhase{};
+    std::array<int, 4> m_savedAtten{};
+    QVector<ChannelStep> m_steps;
+    QVector<ChannelPoint> m_points;
+    std::array<QPushButton*, 4> m_measureOne{};
+    QPushButton* m_measureAll = nullptr;
+    QPushButton* m_measureStop = nullptr;
+    QPushButton* m_measureCable = nullptr;
+    QLabel* m_measureStatus = nullptr;
+    QProgressBar* m_measureBar = nullptr;
+    QTableWidget* m_measureTable = nullptr;
+    QLabel* m_measureGraph = nullptr;
 };

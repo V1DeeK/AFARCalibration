@@ -12,6 +12,7 @@ class QCloseEvent;
 class AcceptanceAtTab;
 class BoardParametersPage;
 class CodeMatrixTab;
+class FourChannelPanel;
 class HeterodyneTab;
 class ConnectionBar;
 class MeasureTab;
@@ -149,6 +150,13 @@ private:
     SpectrumOpenGLWidget* m_spectrum = nullptr;
     QWidget* m_spectrumPage = nullptr;  ///< страница «Спектр» (без OpenGL — пояснение)
     HeterodyneTab* m_heterodyne = nullptr;
+    FourChannelPanel* m_fourChannel = nullptr;
+    bool m_channelRunOwnsSweep = false;
+    QVector<double> m_channelFreq;
+    QVector<double> m_channelS11;
+    QVector<double> m_channelS21;
+    QVector<double> m_channelS12;
+    QVector<double> m_channelS22;
     QTimer* m_spectrumConnectTimer = nullptr;
     bool m_spectrumServiceRequested = false;
     bool m_spectrumConnectedFromPs = false;

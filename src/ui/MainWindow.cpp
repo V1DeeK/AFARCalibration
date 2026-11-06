@@ -174,9 +174,33 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     calLayout->addWidget(m_measure->calibrationPanel());
     m_connections->setMiddleWidget(calBox);
     m_connections->setSweepWidget(m_measure->sweepPanel());
-    auto* channels = new FourChannelPanel(root);
-    m_connections->setFourChannelWidget(channels);
-    m_measure->setGraphChannelControl(channels->sideControl(m_measure));
+    m_fourChannel = new FourChannelPanel(root);
+    m_connections->setFourChannelWidget(m_fourChannel);
+    m_measure->setGraphChannelControl(m_fourChannel->sideControl(m_measure));
+    connect(m_fourChannel, &FourChannelPanel::channelSweepRequested, this, [this] {
+        if (m_liveSweepInFlight) {
+            m_fourChannel->onSweepFinished(false, QStringLiteral("Измерение уже идёт"), {}, {}, {}, {}, {});
+            return;
+        }
+        if (!(m_measure->fStartHz() < m_measure->fStopHz())) {
+            m_fourChannel->onSweepFinished(
+                false, QStringLiteral("f нач. должна быть меньше f кон. — исправьте настройки измерения."),
+                {}, {}, {}, {}, {});
+            return;
+        }
+        m_channelFreq.clear();
+        m_channelS11.clear();
+        m_channelS21.clear();
+        m_channelS12.clear();
+        m_channelS22.clear();
+        m_channelRunOwnsSweep = true;
+        m_liveSweepInFlight = true;
+        QMetaObject::invokeMethod(m_worker, "measureNow", Qt::QueuedConnection,
+                                  Q_ARG(double, m_measure->fStartHz()),
+                                  Q_ARG(double, m_measure->fStopHz()), Q_ARG(int, m_measure->points()),
+                                  Q_ARG(int, m_measure->ifbwHz()), Q_ARG(double, m_measure->powerDbm()),
+                                  Q_ARG(int, m_measure->averages()));
+    });
     connect(m_measure, &MeasureTab::sweepSettingsRequested,
             m_connections, &ConnectionBar::showSweepSettings);
     // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Настройки».
@@ -431,6 +455,11 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     connect(m_worker, &MeasureWorker::measureNowFinished, this,
             [this](bool ok, const QString& message) {
                 m_liveSweepInFlight = false;
+                if (m_channelRunOwnsSweep && m_fourChannel != nullptr) {
+                    m_channelRunOwnsSweep = false;
+                    m_fourChannel->onSweepFinished(ok, message, m_channelFreq, m_channelS11, m_channelS21,
+                                                   m_channelS12, m_channelS22);
+                }
                 if (!ok) {
                     const bool editing = message.startsWith(
                         QStringLiteral("Некорректные параметры C2220"));
@@ -896,6 +925,13 @@ void MainWindow::onSparamsPreview(const QVector<double>& freqGhz,
 {
     m_measure->setSparamsCurves(freqGhz, s11mag, s11ph, s21mag, s21ph, s12mag, s12ph, s22mag,
                                 s22ph);
+    if (m_channelRunOwnsSweep) {
+        m_channelFreq = freqGhz;
+        m_channelS11 = s11mag;
+        m_channelS21 = s21mag;
+        m_channelS12 = s12mag;
+        m_channelS22 = s22mag;
+    }
 }
 
 void MainWindow::onSeriesArtifactsPreview(const QString& runId,
