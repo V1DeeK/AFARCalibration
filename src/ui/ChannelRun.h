@@ -45,3 +45,17 @@ struct ChannelPoint {
 
 /// Пишет report.pdf и кладёт снимки графиков в подкаталог graphs. Пустая строка — успех.
 [[nodiscard]] QString writeChannelReport(const QString& folder, const QString& title, const QVector<ChannelPoint>& points);
+
+struct RepeatStats {
+    int count = 0;
+    double mean = 0;
+    double stdev = 0;
+};
+
+/// Среднее и выборочное СКО. Пустой набор — нули. Один отсчёт — СКО 0.
+[[nodiscard]] RepeatStats repeatStats(const QVector<double>& values);
+
+/// PDF повторяемости: каждое значение получено после повторной установки того же кода.
+[[nodiscard]] QString writeRepeatReport(const QString& folder, const QString& title, int channel,
+                                       double phaseDeg, double attenDb, const QString& parameter,
+                                       const QVector<double>& valuesDb);

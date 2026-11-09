@@ -95,6 +95,35 @@ TEST_CASE("ППКХ4: четыре канала одной цепочкой, к�
     CHECK(send_chain_command(f, phase, zero_atten, lsb) == "SEND 48 800000000000");
 }
 
+TEST_CASE("ППКХ4: STATUS возвращает последний кадр, и он разбирается в коды", "[ppkh4]")
+{
+    const StatusFrame empty = parse_status(
+        "OK STATUS N5=1 P5=1 P8=1 BITS=0 FRAME=-");
+    CHECK(empty.ok);
+    CHECK_FALSE(empty.has_frame);
+    CHECK(empty.bits == 0);
+
+    const FrameFormat format;
+    const int phase_in[4] = {1, 0, 0, 0};
+    const int atten_in[4] = {9, 0, 63, 0};
+    const std::string command = send_chain_command(format, phase_in, atten_in);
+    const auto space = command.rfind(' ');
+    const std::string hex = command.substr(space + 1);
+    const StatusFrame status = parse_status("OK STATUS BITS=48 FRAME=" + hex);
+    REQUIRE(status.ok);
+    REQUIRE(status.has_frame);
+    CHECK(status.bits == 48);
+    int phase[4] = {};
+    int atten[4] = {};
+    REQUIRE(decode_chain(format, status.hex, phase, atten));
+    CHECK(phase[0] == 1);
+    CHECK(atten[0] == 9);
+    CHECK(atten_db(atten[0], format.atten) == Catch::Approx(-27.0));
+    CHECK(atten[2] == 63);
+    CHECK_FALSE(parse_status("OK PONG").ok);
+    CHECK_FALSE(decode_chain(format, "ZZ", phase, atten));
+}
+
 TEST_CASE("ППКХ4: команды CFG в порядке исходной страницы", "[ppkh4]")
 {
     LineConfig l;

@@ -80,4 +80,21 @@ struct LineConfig {
 /// Команды CFG в том порядке, в каком их шлёт исходная страница 1Chanel.
 [[nodiscard]] std::vector<std::string> cfg_commands(const LineConfig& lines);
 
+/// Ответ `STATUS`: `BITS` и `FRAME` последнего сдвинутого кадра.
+/// `FRAME=-` — прошивка ещё ничего не сдвигала. Это не измерение СВЧ,
+/// а кадр, который плата последним выдвинула в модуль.
+struct StatusFrame {
+    bool ok = false;
+    bool has_frame = false;
+    int bits = 0;
+    std::string hex;
+};
+
+[[nodiscard]] StatusFrame parse_status(const std::string& line);
+
+/// Обратное к `send_chain_command`: коды фазы и аттенюации из hex кадра.
+/// `lsb_first` тот же, каким кадр собирался. false — длина или число каналов не сошлись.
+[[nodiscard]] bool decode_chain(const FrameFormat& format, const std::string& hex, std::span<int> phase,
+                                std::span<int> atten, std::span<const int> lsb_first = {});
+
 }  // namespace afar::ppkh4

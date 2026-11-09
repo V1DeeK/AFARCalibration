@@ -1055,6 +1055,48 @@ void MeasureWorker::measureNow(double fStartHz,
     }
 }
 
+void MeasureWorker::captureLiveTrace()
+{
+    if (m_backend != BackendSocket || !m_c2220 || !m_c2220->connected()) {
+        emit liveTraceReady(false, QStringLiteral("Анализатор не подключён"), -1, {}, {});
+        return;
+    }
+    try {
+        SweepConfig observed;
+        const ComplexSweep sweep = m_c2220->read_current_trace(&observed);
+        const std::vector<std::complex<double>>* samples = nullptr;
+        switch (observed.s_parameter) {
+        case SParameter::S11:
+            samples = &sweep.s11;
+            break;
+        case SParameter::S21:
+            samples = &sweep.s21;
+            break;
+        case SParameter::S12:
+            samples = &sweep.s12;
+            break;
+        case SParameter::S22:
+            samples = &sweep.s22;
+            break;
+        }
+        if (samples == nullptr || samples->size() < 2 || sweep.frequency_hz.size() != samples->size()) {
+            emit liveTraceReady(false, QStringLiteral("В текущей трассе нет отсчётов"), -1, {}, {});
+            return;
+        }
+        QVector<double> freqGhz;
+        QVector<double> magDb;
+        freqGhz.reserve(static_cast<int>(samples->size()));
+        magDb.reserve(static_cast<int>(samples->size()));
+        for (std::size_t i = 0; i < samples->size(); ++i) {
+            freqGhz.push_back(static_cast<double>(sweep.frequency_hz[i]) / 1e9);
+            magDb.push_back(afar::cal::magnitude_db((*samples)[i]));
+        }
+        emit liveTraceReady(true, {}, static_cast<int>(observed.s_parameter), freqGhz, magDb);
+    } catch (const std::exception& ex) {
+        emit liveTraceReady(false, QString::fromUtf8(ex.what()), -1, {}, {});
+    }
+}
+
 void MeasureWorker::exportTwoPort(const QString& basePath,
                                   const QVector<double>& markerFrequenciesGhz,
                                   const QString& deviceName,

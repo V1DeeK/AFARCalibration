@@ -99,6 +99,8 @@ public slots:
                     int ifbwHz,
                     double powerDbm,
                     int averages);
+    /// |S| текущей трассы S2VNA. Запуск и частоту не меняет.
+    void captureLiveTrace();
     /// Сохраняет последний полный снимок без повторного измерения прибора.
     void exportTwoPort(const QString& basePath,
                        const QVector<double>& markerFrequenciesGhz,
@@ -145,6 +147,9 @@ signals:
     void vnaCalibrationDetected(const QString& calibrationId, bool correctionEnabled);
     void probeCodesFinished(bool ok, const QString& message);
     void measureNowFinished(bool ok, const QString& message);
+    /// parameter: 0 S11, 1 S21, 2 S12, 3 S22. Пустой вектор — снимка нет.
+    void liveTraceReady(bool ok, const QString& message, int parameter, const QVector<double>& freqGhz,
+                        const QVector<double>& magDb);
     void operationProgress(const QString& text, int completed, int total);
     void twoPortExportAvailable(bool available);
     void exportTwoPortFinished(bool ok,

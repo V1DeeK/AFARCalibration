@@ -12,7 +12,17 @@ Ppkh4Link::Ppkh4Link(QObject* parent)
 {
     m_timeout.setSingleShot(true);
     m_timeout.setInterval(kCommandTimeoutMs);
-    connect(&m_timeout, &QTimer::timeout, this, [this]() { finishCurrent(QStringLiteral("ERR timeout")); });
+    connect(&m_timeout, &QTimer::timeout, this, [this]() {
+        if (m_dropLate) {
+            // Поздний ответ так и не пришёл: следующую команду отпускаем только сейчас.
+            m_dropLate = false;
+            m_timeout.setInterval(kCommandTimeoutMs);
+            startNext();
+            noteIdle();
+            return;
+        }
+        finishCurrent(QStringLiteral("ERR timeout"));
+    });
 }
 
 Ppkh4Link::~Ppkh4Link()
@@ -186,9 +196,39 @@ void Ppkh4Link::onReadyRead()
 #endif
 }
 
+void Ppkh4Link::cancelQueued()
+{
+    if (m_busy && !m_queue.empty()) {
+        Job current = std::move(m_queue.front());
+        m_queue.pop_front();
+        std::deque<Job> dropped;
+        dropped.swap(m_queue);
+        m_queue.push_back(std::move(current));
+        for (Job& job : dropped) {
+            if (job.reply) {
+                job.reply(QStringLiteral("ERR cancelled"));
+            }
+        }
+        return;
+    }
+    dropAll(QStringLiteral("ERR cancelled"));
+    noteIdle();
+}
+
 void Ppkh4Link::onLine(const QString& line)
 {
     emit lineReceived(line);
+    if (m_dropLate) {
+        // Это ответ на команду, которую уже закрыли по тайм-ауту. Следующую им не закрываем.
+        if (line.startsWith(QLatin1String("OK")) || line.startsWith(QLatin1String("ERR"))) {
+            m_dropLate = false;
+            m_timeout.stop();
+            m_timeout.setInterval(kCommandTimeoutMs);
+            startNext();
+            noteIdle();
+        }
+        return;
+    }
     const bool err = line.startsWith(QLatin1String("ERR"));
     if (err) {
         emit boardError(line.mid(4));
@@ -212,7 +252,22 @@ void Ppkh4Link::finishCurrent(const QString& line)
     if (job.reply) {
         job.reply(line);
     }
+    if (line == QLatin1String("ERR timeout")) {
+        // Не шлём следующую, пока не придёт опоздавший OK/ERR или не пройдёт тишина.
+        m_dropLate = true;
+        m_timeout.setInterval(1500);
+        m_timeout.start();
+        return;
+    }
     startNext();
+    noteIdle();
+}
+
+void Ppkh4Link::noteIdle()
+{
+    if (!m_busy && m_queue.empty() && !m_dropLate) {
+        emit idle();
+    }
 }
 
 void Ppkh4Link::dropAll(const QString& line)

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace afar::ppkh4 {
 
@@ -208,6 +209,86 @@ std::string send_chain_command(const FrameFormat& format, std::span<const int> p
 {
     const auto bits = chain_bits(format, phase, atten, lsb_first);
     return "SEND " + std::to_string(bits.size()) + " " + frame_hex(bits);
+}
+
+StatusFrame parse_status(const std::string& line)
+{
+    StatusFrame status;
+    if (line.rfind("OK STATUS", 0) != 0) {
+        return status;
+    }
+    status.ok = true;
+    const auto field = [&line](const char* key) -> std::string {
+        const auto pos = line.find(key);
+        if (pos == std::string::npos) {
+            return {};
+        }
+        const auto value = pos + std::char_traits<char>::length(key);
+        const auto end = line.find(' ', value);
+        return line.substr(value, end == std::string::npos ? std::string::npos : end - value);
+    };
+    const std::string bits = field("BITS=");
+    const std::string frame = field("FRAME=");
+    if (bits.empty() || frame.empty()) {
+        status.ok = false;
+        return status;
+    }
+    try {
+        status.bits = std::stoi(bits);
+    } catch (const std::exception&) {
+        status.ok = false;
+        return status;
+    }
+    if (frame == "-") {
+        return status;
+    }
+    status.has_frame = true;
+    status.hex = frame;
+    return status;
+}
+
+bool decode_chain(const FrameFormat& format, const std::string& hex, std::span<int> phase,
+                  std::span<int> atten, std::span<const int> lsb_first)
+{
+    const int width = std::clamp(format.total_bits, 1, kMaxFrameBits);
+    const int count = static_cast<int>(std::min(phase.size(), atten.size()));
+    if (count <= 0 || hex.empty()) {
+        return false;
+    }
+    const int total = width * count;
+    if (static_cast<int>(hex.size()) != (total + 3) / 4) {
+        return false;
+    }
+    const std::vector<bool> bits = parse_fixed(hex, total);
+    auto extract = [](const std::vector<bool>& word, const FieldFormat& field) {
+        const int field_width = std::clamp(field.width, 1, kMaxFieldBits);
+        int value = 0;
+        for (int i = 0; i < field_width; ++i) {
+            const int pos = field.offset + i;
+            if (pos >= 0 && pos < static_cast<int>(word.size()) && word[static_cast<std::size_t>(pos)]) {
+                value |= 1 << i;
+            }
+        }
+        if (field.invert) {
+            value = ~value & max_code(field_width);
+        }
+        if (field.reverse) {
+            value = reverse_bits(value, field_width);
+        }
+        return value;
+    };
+    for (int ch = 0; ch < count; ++ch) {
+        const bool flip = ch < static_cast<int>(lsb_first.size()) && lsb_first[static_cast<std::size_t>(ch)] != 0;
+        std::vector<bool> word(static_cast<std::size_t>(width), false);
+        const int base = ch * width;
+        for (int i = 0; i < width; ++i) {
+            const int src = flip ? (width - 1 - i) : i;
+            word[static_cast<std::size_t>(src)] = bits[static_cast<std::size_t>(base + i)];
+        }
+        phase[static_cast<std::size_t>(ch)] = extract(word, format.phase);
+        atten[static_cast<std::size_t>(ch)] = extract(word, format.atten);
+    }
+    return true;
 }
 
 std::vector<std::string> cfg_commands(const LineConfig& lines)

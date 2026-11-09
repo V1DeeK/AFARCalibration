@@ -46,6 +46,10 @@ public:
     /// Команды идут по одной: следующая уходит после ответа или тайм-аута 2 с.
     /// Без связи reply сразу получает «ERR not connected».
     void send(const QString& command, Reply reply = {});
+    /// Снимает команды, которые ещё не ушли в порт. Уже отправленная дожидается ответа.
+    /// Снятым reply получает «ERR cancelled».
+    void cancelQueued();
+    [[nodiscard]] bool busy() const { return m_busy; }
     [[nodiscard]] int pendingCount() const { return static_cast<int>(m_queue.size()); }
 
 signals:
@@ -55,6 +59,8 @@ signals:
     void lineReceived(const QString& line);
     /// Плата ответила «ERR …»; текст после «ERR ».
     void boardError(const QString& text);
+    /// Очередь пуста и ничего не ждёт ответа.
+    void idle();
 
 private:
     struct Job {
@@ -67,12 +73,14 @@ private:
     void startNext();
     void finishCurrent(const QString& line);
     void dropAll(const QString& line);
+    void noteIdle();
 
     QSerialPort* m_port = nullptr;
     QTimer m_timeout;
     QByteArray m_rx;
     std::deque<Job> m_queue;
     bool m_busy = false;
+    bool m_dropLate = false;
     QString m_portName;
     QString m_lastError;
 };

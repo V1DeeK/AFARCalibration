@@ -238,11 +238,14 @@ QString writeChannelReport(const QString& folder, const QString& title, const QV
             y = 36;
             headerRow();
         }
+        const auto sText = [](const QVector<double>& mag, double db) {
+            return mag.isEmpty() ? QStringLiteral("—") : QString::number(db, 'f', 1);
+        };
         const QStringList cells{QString::number(point.step.channel + 1), channelStageName(point.step.stage),
                                 QStringLiteral("%1°").arg(point.phaseDeg, 0, 'f', 1),
                                 QStringLiteral("%1 дБ").arg(point.attenDb, 0, 'f', 1),
-                                QString::number(point.s11Db, 'f', 1), QString::number(point.s21Db, 'f', 1),
-                                QString::number(point.s12Db, 'f', 1), QString::number(point.s22Db, 'f', 1)};
+                                sText(point.s11mag, point.s11Db), sText(point.s21mag, point.s21Db),
+                                sText(point.s12mag, point.s12Db), sText(point.s22mag, point.s22Db)};
         font.setPixelSize(9);
         painter.setFont(font);
         painter.setPen(QColor(QStringLiteral("#193448")));
@@ -273,6 +276,81 @@ QString writeChannelReport(const QString& folder, const QString& title, const QV
         painter.drawImage(target, image);
         footer();
     }
+    painter.end();
+    return QString();
+}
+
+RepeatStats repeatStats(const QVector<double>& values)
+{
+    RepeatStats stats;
+    stats.count = static_cast<int>(values.size());
+    if (values.isEmpty()) {
+        return stats;
+    }
+    double sum = 0;
+    for (const double value : values) {
+        sum += value;
+    }
+    stats.mean = sum / static_cast<double>(values.size());
+    if (values.size() < 2) {
+        return stats;
+    }
+    double acc = 0;
+    for (const double value : values) {
+        const double delta = value - stats.mean;
+        acc += delta * delta;
+    }
+    stats.stdev = std::sqrt(acc / static_cast<double>(values.size() - 1));
+    return stats;
+}
+
+QString writeRepeatReport(const QString& folder, const QString& title, int channel, double phaseDeg,
+                          double attenDb, const QString& parameter, const QVector<double>& valuesDb)
+{
+    const QString path = folder + QStringLiteral("/repeat.pdf");
+    QPdfWriter pdf(path);
+    pdf.setTitle(title);
+    pdf.setPageSize(QPageSize(QPageSize::A4));
+    pdf.setPageOrientation(QPageLayout::Landscape);
+    pdf.setResolution(96);
+    QPainter painter(&pdf);
+    if (!painter.isActive()) {
+        return QStringLiteral("не удалось открыть PDF");
+    }
+    QFont font = reportFont();
+    const qreal w = painter.viewport().width();
+    const RepeatStats stats = repeatStats(valuesDb);
+    const auto label = [&](qreal x, qreal y, const QString& text, int size) {
+        font.setPixelSize(size);
+        painter.setFont(font);
+        painter.setPen(QColor(QStringLiteral("#193448")));
+        painter.drawText(QPointF(x, y), text);
+    };
+    label(28, 36, QStringLiteral("Повторяемость S-параметра"), 18);
+    label(28, 58, title, 11);
+    label(28, 80, QStringLiteral("Канал %1 · фаза %2° · аттенюация %3 дБ · %4")
+                      .arg(channel + 1)
+                      .arg(phaseDeg, 0, 'f', 3)
+                      .arg(attenDb, 0, 'f', 2)
+                      .arg(parameter),
+          12);
+    label(28, 104, QStringLiteral("Отсчётов %1 из повторных установок того же кода. Среднее %2 дБ, СКО %3 дБ.")
+                       .arg(stats.count)
+                       .arg(stats.mean, 0, 'f', 3)
+                       .arg(stats.stdev, 0, 'f', 3),
+          12);
+    qreal y = 132;
+    font.setPixelSize(10);
+    painter.setFont(font);
+    for (int i = 0; i < valuesDb.size(); ++i) {
+        if (y > painter.viewport().height() - 28) {
+            pdf.newPage();
+            y = 36;
+        }
+        painter.drawText(QPointF(28, y), QStringLiteral("%1. %2 дБ").arg(i + 1).arg(valuesDb.at(i), 0, 'f', 3));
+        y += 14;
+    }
+    Q_UNUSED(w);
     painter.end();
     return QString();
 }

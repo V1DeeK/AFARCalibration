@@ -178,28 +178,9 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_connections->setFourChannelWidget(m_fourChannel);
     m_measure->setGraphChannelControl(m_fourChannel->sideControl(m_measure));
     connect(m_fourChannel, &FourChannelPanel::channelSweepRequested, this, [this] {
-        if (m_liveSweepInFlight) {
-            m_fourChannel->onSweepFinished(false, QStringLiteral("Измерение уже идёт"), {}, {}, {}, {}, {});
-            return;
-        }
-        if (!(m_measure->fStartHz() < m_measure->fStopHz())) {
-            m_fourChannel->onSweepFinished(
-                false, QStringLiteral("f нач. должна быть меньше f кон. — исправьте настройки измерения."),
-                {}, {}, {}, {}, {});
-            return;
-        }
-        m_channelFreq.clear();
-        m_channelS11.clear();
-        m_channelS21.clear();
-        m_channelS12.clear();
-        m_channelS22.clear();
-        m_channelRunOwnsSweep = true;
-        m_liveSweepInFlight = true;
-        QMetaObject::invokeMethod(m_worker, "measureNow", Qt::QueuedConnection,
-                                  Q_ARG(double, m_measure->fStartHz()),
-                                  Q_ARG(double, m_measure->fStopHz()), Q_ARG(int, m_measure->points()),
-                                  Q_ARG(int, m_measure->ifbwHz()), Q_ARG(double, m_measure->powerDbm()),
-                                  Q_ARG(int, m_measure->averages()));
+        // Не measureNow: он ставит TRIG:SOUR BUS и останавливает живой график,
+        // а отказ анализатора раньше обрывал перебор и возвращал старые коды.
+        QMetaObject::invokeMethod(m_worker, "captureLiveTrace", Qt::QueuedConnection);
     });
     connect(m_measure, &MeasureTab::sweepSettingsRequested,
             m_connections, &ConnectionBar::showSweepSettings);
@@ -452,6 +433,13 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     };
     connect(m_worker, &MeasureWorker::calibrateTwoPortFinished, this, returnToNativeGraph);
     connect(m_worker, &MeasureWorker::calibrateOnePortFinished, this, returnToNativeGraph);
+    connect(m_worker, &MeasureWorker::liveTraceReady, this,
+            [this](bool ok, const QString& message, int parameter, const QVector<double>& freqGhz,
+                   const QVector<double>& magDb) {
+                if (m_fourChannel != nullptr && m_fourChannel->measuring()) {
+                    m_fourChannel->onLiveTrace(ok, message, parameter, freqGhz, magDb);
+                }
+            });
     connect(m_worker, &MeasureWorker::measureNowFinished, this,
             [this](bool ok, const QString& message) {
                 m_liveSweepInFlight = false;

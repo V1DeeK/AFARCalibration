@@ -521,10 +521,25 @@ TEST_CASE("Измерение канала без платы не стартуе
     app();
     Window w;
     w.openTab(1);
-    auto* button = child<QPushButton>(*w.window, "fourChannelMeasure1");
+    auto* button = child<QPushButton>(*w.window, "fourChannelMeasureStart");
     button->click();
     const QString status = child<QLabel>(*w.window, "fourChannelMeasureStatus")->text();
     CHECK(status.contains(QStringLiteral("ППКХ4")));
+}
+
+TEST_CASE("Повторяемость считает среднее и СКО", "[repeat]")
+{
+    const RepeatStats empty = repeatStats({});
+    CHECK(empty.count == 0);
+    CHECK(empty.stdev == 0.0);
+    const RepeatStats one = repeatStats({-10.0});
+    CHECK(one.count == 1);
+    CHECK(one.mean == -10.0);
+    CHECK(one.stdev == 0.0);
+    const RepeatStats stats = repeatStats({1.0, 2.0, 3.0});
+    CHECK(stats.count == 3);
+    CHECK(stats.mean == 2.0);
+    CHECK(stats.stdev == 1.0);
 }
 
 TEST_CASE("График S2VNA возвращается при переходе на другую вкладку",
