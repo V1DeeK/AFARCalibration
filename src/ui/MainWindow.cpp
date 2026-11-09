@@ -182,6 +182,16 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
         // а отказ анализатора раньше обрывал перебор и возвращал старые коды.
         QMetaObject::invokeMethod(m_worker, "captureLiveTrace", Qt::QueuedConnection);
     });
+    connect(m_fourChannel, &FourChannelPanel::channelGridRequested, this, [this] {
+        QMetaObject::invokeMethod(m_worker, "prepareChannelGrid", Qt::QueuedConnection);
+    });
+    connect(m_fourChannel, &FourChannelPanel::channelBandRestoreRequested, this, [this] {
+        QMetaObject::invokeMethod(m_worker, "restoreChannelGrid", Qt::QueuedConnection);
+    });
+    connect(m_fourChannel, &FourChannelPanel::channelMarkersRequested, this, [this](int stepIndex) {
+        QMetaObject::invokeMethod(m_worker, "captureChannelMarkers", Qt::QueuedConnection,
+                                  Q_ARG(int, stepIndex));
+    });
     connect(m_measure, &MeasureTab::sweepSettingsRequested,
             m_connections, &ConnectionBar::showSweepSettings);
     // Очередь ошибок SCPI показывается в «Тех. состоянии» на вкладке «Настройки».
@@ -438,6 +448,23 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
                    const QVector<double>& magDb) {
                 if (m_fourChannel != nullptr && m_fourChannel->measuring()) {
                     m_fourChannel->onLiveTrace(ok, message, parameter, freqGhz, magDb);
+                }
+            });
+    connect(m_worker, &MeasureWorker::channelGridReady, this,
+            [this](bool ok, const QString& message, double stepMhz, int settleMs) {
+                if (m_fourChannel != nullptr) {
+                    m_fourChannel->onChannelGrid(ok, message, stepMhz, settleMs);
+                }
+            });
+    connect(m_worker, &MeasureWorker::channelMarkersReady, this,
+            [this](bool ok, const QString& message, int stepIndex, double s11, bool s11Ok, bool s11Swr,
+                   double s22, bool s22Ok, bool s22Swr, double s21, bool s21Ok, double s12, bool s12Ok,
+                   double peak, bool peakOk, const QVector<double>& freqHz, const QVector<double>& gainDb,
+                   const QVector<double>& phaseDeg) {
+                if (m_fourChannel != nullptr) {
+                    m_fourChannel->onChannelMarkers(ok, message, stepIndex, s11, s11Ok, s11Swr, s22, s22Ok,
+                                                    s22Swr, s21, s21Ok, s12, s12Ok, peak, peakOk, freqHz, gainDb,
+                                                    phaseDeg);
                 }
             });
     connect(m_worker, &MeasureWorker::measureNowFinished, this,

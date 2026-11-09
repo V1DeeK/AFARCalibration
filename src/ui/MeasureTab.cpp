@@ -493,7 +493,8 @@ QWidget* MeasureTab::makeGraphsPage()
     m_graphStack = new QStackedWidget(page);
     m_graphStack->setObjectName(QStringLiteral("graphViewStack"));
     auto* graphHint = new QLabel(
-        QStringLiteral("Запустите S2VNA и нажмите «Показать график S2VNA»."), m_graphStack);
+        QStringLiteral("Запустите S2VNA. Программа покажет всё окно анализатора, не только трассу."),
+        m_graphStack);
     graphHint->setAlignment(Qt::AlignCenter);
     graphHint->setWordWrap(true);
     m_graphStack->addWidget(graphHint);
@@ -516,10 +517,10 @@ QWidget* MeasureTab::makeGraphsPage()
     connect(m_measureNow, &QPushButton::clicked,
             this, &MeasureTab::captureForReportRequested);
 
-    m_nativeGraphButton = new QPushButton(QStringLiteral("Показать график S2VNA"), side);
+    m_nativeGraphButton = new QPushButton(QStringLiteral("Показать окно S2VNA"), side);
     m_nativeGraphButton->setObjectName(QStringLiteral("showS2vnaGraph"));
     m_nativeGraphButton->setToolTip(QStringLiteral(
-        "Показать область графиков запущенной S2VNA внутри программы"));
+        "Показать всё окно запущенной S2VNA внутри программы. Само окно анализатора остаётся на месте."));
     connect(m_nativeGraphButton, &QPushButton::clicked, this, [this] {
         QString error;
         if (!m_s2vnaGraphHost->attach(&error)) {
@@ -527,7 +528,7 @@ QWidget* MeasureTab::makeGraphsPage()
             return;
         }
         m_graphStack->setCurrentWidget(m_s2vnaGraphHost);
-        m_nativeGraphButton->setText(QStringLiteral("График S2VNA подключён"));
+        m_nativeGraphButton->setText(QStringLiteral("Окно S2VNA на экране"));
         emit nativeGraphShown();
     });
     m_nativeStateButton = new QPushButton(QStringLiteral("Загрузить состояние S2VNA (.sta)"),
@@ -716,7 +717,7 @@ void MeasureTab::stopEmbeddedGraph()
     const bool wasActive = m_graphStack->currentWidget() == m_s2vnaGraphHost;
     m_s2vnaGraphHost->detach();
     m_graphStack->setCurrentIndex(0);
-    m_nativeGraphButton->setText(QStringLiteral("Показать график S2VNA"));
+    m_nativeGraphButton->setText(QStringLiteral("Показать окно S2VNA"));
     if (wasActive) emit nativeGraphHidden();
 }
 

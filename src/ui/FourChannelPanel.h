@@ -48,10 +48,21 @@ public:
     /// parameter: 0 S11, 1 S21, 2 S12, 3 S22.
     void onLiveTrace(bool ok, const QString& message, int parameter, const QVector<double>& freqGhz,
                      const QVector<double>& magDb);
+    void onChannelGrid(bool ok, const QString& message, double stepMhz, int settleMs);
+    void onChannelMarkers(bool ok, const QString& message, int stepIndex, double s11, bool s11Ok, bool s11Swr,
+                          double s22, bool s22Ok, bool s22Swr, double s21, bool s21Ok, double s12, bool s12Ok,
+                          double peak, bool peakOk, const QVector<double>& freqHz, const QVector<double>& gainDb,
+                          const QVector<double>& phaseDeg);
 
 signals:
     /// Нужен один полный снимок S11/S21/S12/S22 текущими настройками свипа.
     void channelSweepRequested();
+    /// Сузить свип до середины текущей полосы.
+    void channelGridRequested();
+    /// Вернуть полосу и число точек анализатора после прохода.
+    void channelBandRestoreRequested();
+    /// Прочитать маркеры max/min/peak со всех четырёх графиков.
+    void channelMarkersRequested(int stepIndex);
 
 private:
     QWidget* makeConnectionBox();
@@ -105,13 +116,24 @@ private:
     void appendLog(const QString& line);
 
     void startSweep();
+    void startAllChannels();
+    void beginSweep(bool allChannels);
     void startRepeat();
     void stopMeasure(const QString& outcome);
+    void askNextChannel();
+    void applyBestAndSave();
+    void restoreProduct();
     void continueMeasure();
     void applyMeasureStep();
     void onStepTimer();
-    void finishMeasurePdf();
+    void finishMeasurePdf(bool openReport);
     void finishRepeatPdf();
+    void finishSweepStep();
+    void showReport(const QString& path);
+    void chooseScreenshots();
+    void openReportFiles();
+    QString reportsRoot() const;
+    QString latestReportDir() const;
     void setMeasureUi();
     void setEditEnabled();
     void rememberStep();
@@ -189,9 +211,14 @@ private:
 
     bool m_running = false;
     bool m_stopAsked = false;
+    bool m_gridPending = false;
+    bool m_allChannels = false;
+    QString m_sweepNote;
+    int m_sweepSettleMs = 1500;
     RunKind m_runKind = RunKind::None;
     StepPhase m_stepPhase = StepPhase::Idle;
     int m_stepIndex = 0;
+    int m_pointBase = 0;
     int m_captureIndex = -1;
     int m_repeatTarget = 0;
     int m_repeatParameter = -1;
@@ -199,15 +226,22 @@ private:
     QTimer* m_stepTimer = nullptr;
     QString m_runDir;
     QString m_runTitle;
+    QString m_shownReport;
     std::array<int, 4> m_savedPhase{};
     std::array<int, 4> m_savedAtten{};
     QVector<ChannelStep> m_steps;
+    QVector<int> m_shotSteps;
     QVector<ChannelPoint> m_points;
     QVector<double> m_repeatDb;
     QPushButton* m_measureStart = nullptr;
+    QPushButton* m_measureAll = nullptr;
+    QComboBox* m_product = nullptr;
+    QPushButton* m_restoreProduct = nullptr;
+    QLabel* m_configPath = nullptr;
     QPushButton* m_repeatStart = nullptr;
     QComboBox* m_repeatCount = nullptr;
     QPushButton* m_measureStop = nullptr;
+    QPushButton* m_openReport = nullptr;
     QLabel* m_measureStatus = nullptr;
     QProgressBar* m_measureBar = nullptr;
 };

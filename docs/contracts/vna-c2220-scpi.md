@@ -64,6 +64,7 @@ v1 командами из раздела ниже. Они применяютс�
 | `SENS:FREQ:STAR?`, `STOP?`, `SENS:SWE:POIN?`, `SENS:BAND?`, `SOUR:POW?`, `CALC:PAR:DEF?` | Диагностически прочитать настройки и активный S-параметр S2VNA. Основной UI использует настройки измерения из Studio. | Ручная диагностика; query-формы команд этой таблицы |
 | `TRIG:SING` | Одиночный запуск сканирования. Полная: `TRIGger[:SEQuence]:SINGle`. | HW-VNA-02; РЭ ч. 2, стр. 2452 |
 | `*OPC?` | Ожидание завершения предыдущей операции (в т.ч. после `TRIG:SING`); ответ `1`. | HW-VNA-02; РЭ ч. 2, стр. 1162 |
+| `CALC1:PAR<Tr>:SEL` | Выбрать график канала 1, чтобы следующие `CALC:DATA:SDAT?` и `CALC:DATA:XAX?` читали его. Полная: `CALCulate<Ch>:PARameter<Tr>:SELect`. Формат и измеряемый параметр графика не меняются. | [CALC:PAR:SEL](https://planarchel.ru/instruction/s2vna/calcparsel.html) |
 | `CALC:DATA:SDAT` | Чтение комплексных отсчётов выбранного трасса (запрос `…:SDATa?`). Длина ответа **2N**: для точки `n` — действительная, затем мнимая часть. | HW-VNA-02; РЭ ч. 2, стр. 1229 |
 | `CALC:DATA:XAX?` | Ось X выбранного трасса, N чисел. | HW-VNA-02; РЭ ч. 2, стр. 1235 |
 | `SENS:FREQ:DATA?` | Альтернатива оси: массив частот стимула, N чисел. | HW-VNA-02; РЭ ч. 2, стр. 2088 |
@@ -95,6 +96,13 @@ v1 командами из раздела ниже. Они применяютс�
 | `CALC1:TRAC<Tr>:MARK:COUN N`, `…?` | Число обычных маркеров трассы (0…15); кнопки добавить/удалить/очистить. | [CALC:MARK:COUN](https://planarchel.ru/instruction/s2vna/calcmarkcoun.html) |
 | `CALC1:TRAC<Tr>:MARK16:STAT?` | Проверить опорный маркер перед изменением числа обычных: при активном R не менять его без ведома оператора. | [CALC:MARK](https://planarchel.ru/instruction/s2vna/calcmark.html) |
 | `CALC1:TRAC<Tr>:MARK<Mk>:X?`, `…:Y?` | Положение и отображаемое значение маркера для терминала Studio. | [CALC:MARK:X](https://planarchel.ru/instruction/s2vna/calcmarkx.html), [CALC:MARK:Y](https://planarchel.ru/instruction/s2vna/calcmarky_.html) |
+| `CALC1:TRAC<Tr>:MARK<Mk>:ACT` | Сделать маркер активным и включить его. Полная: `CALCulate<Ch>:TRACe<Tr>:MARKer<Mk>:ACTivate`. Включение маркера 2…15 включает и младшие номера. | [CALC:MARK:ACT](https://planarchel.ru/instruction/s2vna/calcmarkact.html) |
+| `CALC1:TRAC<Tr>:MARK<Mk>:FUNC:TYPE {MAX\|MIN\|PEAK}`, `…?` | Вид поиска этого маркера: максимум, минимум или пик. Ответ: `MAX`, `MIN`, `PEAK` и остальные виды из справки. | [CALC:MARK:FUNC:TYPE](https://planarchel.ru/instruction/s2vna/calcmarkfunctype.html) |
+| `CALC1:TRAC<Tr>:MARK<Mk>:FUNC:EXEC` | Выполнить поиск, заданный `FUNC:TYPE`, и сдвинуть маркер. Перед этим маркер должен быть активным. | [CALC:MARK:FUNC:EXEC](https://planarchel.ru/instruction/s2vna/calcmarkfuncexec.html) |
+
+Проход канала включает маркеры один раз до первой точки. На каждой трассе S11, S21, S12 и S22 маркер 1 — `MAX`. На S21 маркер 2 — `PEAK`. Команды этой подготовки: `MARK:ACT`, `MARK:FUNC:TYPE`, проверка `MARK:FUNC:TYPE?`. Минимум не включается. На каждой точке только `MARK:FUNC:EXEC` и `MARK:Y?`, без повторной установки типа.
+
+Перед точками проход сужает свип до середины текущей полосы. Сначала `SENS:SWE:POIN 2`, затем `SENS:FREQ:STAR` на эту середину и `SENS:FREQ:STOP` на 1 Гц выше. ПЧ, мощность и усреднение не меняются. После прохода старт, стоп и число точек возвращаются. Пауза после кода — два таких свипа: `2 × точки × усреднение / полоса ПЧ`, плюс 50 мс и не короче 100 мс.
 
 Ось частот после свипа: **либо** `CALC:DATA:XAX?`, **либо** `SENS:FREQ:DATA?`. Выбор фиксируется при сверке с установленной S2VNA; оба мнемоника уже в таблице, третьего источника оси нет.
 

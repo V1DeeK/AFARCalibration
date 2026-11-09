@@ -2,10 +2,11 @@
 
 #include <QWidget>
 
+class QLabel;
 class QTimer;
 
-/// Экспериментальный хост только для области графика запущенной S2VNA.
-/// Не владеет процессом или окном S2VNA и возвращает TView на место при отключении.
+/// Живая копия всего окна S2VNA. Окно анализатора не переносится:
+/// снимок PrintWindow кладётся на эту панель, S2VNA остаётся на месте.
 class S2VnaGraphHost final : public QWidget {
     Q_OBJECT
 
@@ -24,15 +25,11 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
+    void refreshMirror();
+
+    QLabel* m_image = nullptr;
     QTimer* m_watch = nullptr;
 #ifdef Q_OS_WIN
-    void* m_view = nullptr;
-    void* m_originalParent = nullptr;
-    void* m_host = nullptr;
-    int m_originalX = 0;
-    int m_originalY = 0;
-    int m_originalWidth = 0;
-    int m_originalHeight = 0;
-    long long m_originalStyle = 0;
+    void* m_source = nullptr;
 #endif
 };

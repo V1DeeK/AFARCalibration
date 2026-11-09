@@ -80,6 +80,18 @@ public:
     bool native_reference_marker_active(int trace);
     void set_native_marker_count(int trace, int count);
     std::vector<NativeMarker> native_markers(int trace);
+    /// Один раз на проход: включить маркер и задать поиск `MAX` или `PEAK`.
+    /// На каждой точке потом только `arm` не повторяется: `read_trace_marker`.
+    void arm_trace_marker(int trace, int marker, const std::string& type);
+    /// `MARK:FUNC:EXEC` и первое число `MARK:Y?`. Тип поиска не меняет.
+    bool read_trace_marker(int trace, int marker, double* value);
+    /// Только `SENS:SWE:POIN`. Частоту, ПЧ и мощность не меняет.
+    void set_sweep_points(std::uint32_t points);
+    /// `SENS:FREQ:STAR` и `STOP`. Точки, ПЧ и мощность не меняет.
+    void set_sweep_band(std::uint64_t start_hz, std::uint64_t stop_hz);
+    /// Комплекс выбранного графика с текущего свипа. `CALC1:PAR<Tr>:SEL`, затем XAX и SDAT.
+    /// Новый запуск и формат графика не меняет.
+    ComplexSweep read_native_complex(int trace, SParameter parameter);
     std::vector<std::string> native_trace_parameters();
     void set_native_trace_parameter(int trace, SParameter parameter);
     /// Текущий комплект мер S2VNA, например `CKIT 1 (85032F)`.

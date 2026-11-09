@@ -3,6 +3,7 @@
 #include "AttenuatorCodes.h"
 #include "C2220Vna.h"
 #include "ParquetExport.h"
+#include "ChannelRun.h"
 #include "PhaseMath.h"
 #include "RawS21Store.h"
 #include "RunConfig.h"
@@ -19,8 +20,10 @@
 #include <QTimer>
 #include <QUuid>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -1094,6 +1097,167 @@ void MeasureWorker::captureLiveTrace()
         emit liveTraceReady(true, {}, static_cast<int>(observed.s_parameter), freqGhz, magDb);
     } catch (const std::exception& ex) {
         emit liveTraceReady(false, QString::fromUtf8(ex.what()), -1, {}, {});
+    }
+}
+
+void MeasureWorker::restoreChannelGrid()
+{
+    if (!m_channelBandSaved || m_backend != BackendSocket || !m_c2220 || !m_c2220->connected()) {
+        m_channelBandSaved = false;
+        return;
+    }
+    const quint64 start = m_channelBandStart;
+    const quint64 stop = m_channelBandStop;
+    const quint32 points = m_channelBandPoints;
+    m_channelBandSaved = false;
+    try {
+        m_c2220->set_sweep_band(start, stop);
+        m_c2220->set_sweep_points(points);
+    } catch (const std::exception& ex) {
+        emit diagnostic(QStringLiteral("полоса анализатора не вернулась: ") + QString::fromUtf8(ex.what()));
+    }
+}
+
+void MeasureWorker::prepareChannelGrid()
+{
+    if (m_backend != BackendSocket || !m_c2220 || !m_c2220->connected()) {
+        emit channelGridReady(false, QStringLiteral("Анализатор не подключён"), 0, 0);
+        return;
+    }
+    try {
+        const SweepConfig before = m_c2220->read_config();
+        m_channelBandStart = before.f_start_hz;
+        m_channelBandStop = before.f_stop_hz;
+        m_channelBandPoints = before.points;
+        m_channelBandSaved = true;
+        const std::uint64_t center = (before.f_start_hz + before.f_stop_hz) / 2;
+        if (center < 100000 || center + 1 > 20000000000ULL) {
+            throw std::runtime_error("C2220Vna: center frequency is out of range");
+        }
+        m_c2220->set_sweep_points(2);
+        m_c2220->set_sweep_band(center, center + 1);
+        const QString markers = armChannelMarkers();
+        if (!markers.isEmpty()) {
+            restoreChannelGrid();
+            emit channelGridReady(false, markers, 0, 0);
+            return;
+        }
+        const SweepConfig after = m_c2220->read_config();
+        const int settleMs = channelSweepSettleMs(static_cast<int>(after.points),
+                                                   static_cast<int>(after.ifbw_hz), after.averages);
+        emit channelGridReady(true,
+                              QStringLiteral("Частота %1 ГГц, середина полосы. Пауза %2 с "
+                                             "(2 свипа, ПЧ %3 Гц, усреднение %4).")
+                                  .arg(static_cast<double>(center) / 1.0e9, 0, 'f', 6)
+                                  .arg(settleMs / 1000.0, 0, 'f', settleMs < 1000 ? 2 : 1)
+                                  .arg(after.ifbw_hz)
+                                  .arg(after.averages),
+                              0, settleMs);
+    } catch (const std::exception& ex) {
+        restoreChannelGrid();
+        emit channelGridReady(false, QString::fromUtf8(ex.what()), 0, 0);
+    }
+}
+
+QString MeasureWorker::armChannelMarkers()
+{
+    m_markS11 = 0;
+    m_markS22 = 0;
+    m_markS21 = 0;
+    m_markS12 = 0;
+    m_markS11Swr = false;
+    m_markS22Swr = false;
+    const auto state = m_c2220->native_graph_state();
+    const int count = static_cast<int>(state.parameters.size());
+    for (int i = 0; i < count; ++i) {
+        const QString parameter = QString::fromStdString(state.parameters[static_cast<std::size_t>(i)]);
+        const bool swr = i < static_cast<int>(state.formats.size())
+                         && state.formats[static_cast<std::size_t>(i)] == "SWR";
+        const int trace = i + 1;
+        if (parameter == QStringLiteral("S11") && m_markS11 == 0) {
+            m_c2220->arm_trace_marker(trace, 1, "MAX");
+            m_markS11 = trace;
+            m_markS11Swr = swr;
+        } else if (parameter == QStringLiteral("S22") && m_markS22 == 0) {
+            m_c2220->arm_trace_marker(trace, 1, "MAX");
+            m_markS22 = trace;
+            m_markS22Swr = swr;
+        } else if (parameter == QStringLiteral("S21") && m_markS21 == 0) {
+            m_c2220->arm_trace_marker(trace, 1, "MAX");
+            m_c2220->arm_trace_marker(trace, 2, "PEAK");
+            m_markS21 = trace;
+        } else if (parameter == QStringLiteral("S12") && m_markS12 == 0) {
+            m_c2220->arm_trace_marker(trace, 1, "MAX");
+            m_markS12 = trace;
+        }
+    }
+    if (m_markS11 == 0 && m_markS22 == 0 && m_markS21 == 0 && m_markS12 == 0) {
+        return QStringLiteral("На графике нет трасс S11, S21, S12, S22.");
+    }
+    return QString();
+}
+
+void MeasureWorker::captureChannelMarkers(int stepIndex)
+{
+    if (m_backend != BackendSocket || !m_c2220 || !m_c2220->connected()) {
+        emit channelMarkersReady(false, QStringLiteral("Анализатор не подключён"), stepIndex, 0, false, false,
+                                 0, false, false, 0, false, 0, false, 0, false, {}, {}, {});
+        return;
+    }
+    try {
+        double s11 = 0;
+        double s22 = 0;
+        double s21 = 0;
+        double s12 = 0;
+        double peak = 0;
+        bool s11Ok = false;
+        bool s22Ok = false;
+        bool s21Ok = false;
+        bool s12Ok = false;
+        const bool s11Swr = m_markS11Swr;
+        const bool s22Swr = m_markS22Swr;
+        bool peakOk = false;
+        const int s21Trace = m_markS21;
+        if (m_markS11 > 0) {
+            s11Ok = m_c2220->read_trace_marker(m_markS11, 1, &s11);
+        }
+        if (m_markS22 > 0) {
+            s22Ok = m_c2220->read_trace_marker(m_markS22, 1, &s22);
+        }
+        if (m_markS21 > 0) {
+            s21Ok = m_c2220->read_trace_marker(m_markS21, 1, &s21);
+            peakOk = m_c2220->read_trace_marker(m_markS21, 2, &peak);
+        }
+        if (m_markS12 > 0) {
+            s12Ok = m_c2220->read_trace_marker(m_markS12, 1, &s12);
+        }
+        QVector<double> freqHz;
+        QVector<double> gainDb;
+        QVector<double> phaseDeg;
+        if (s21Trace > 0) {
+            try {
+                const ComplexSweep sweep = m_c2220->read_native_complex(s21Trace, SParameter::S21);
+                const int count = static_cast<int>(std::min(sweep.frequency_hz.size(), sweep.s21.size()));
+                if (count > 0) {
+                    const int mid = count / 2;
+                    freqHz = {static_cast<double>(sweep.frequency_hz[static_cast<std::size_t>(mid)])};
+                    gainDb = {afar::cal::magnitude_db(sweep.s21[static_cast<std::size_t>(mid)])};
+                    phaseDeg = {afar::cal::arg_deg(sweep.s21[static_cast<std::size_t>(mid)])};
+                }
+            } catch (const std::exception&) {
+            }
+        }
+        if (!s11Ok && !s22Ok && !s21Ok && !s12Ok && !peakOk && freqHz.isEmpty()) {
+            emit channelMarkersReady(false, QStringLiteral("Маркеры S11/S21/S12/S22 не прочитались"),
+                                     stepIndex, 0, false, false, 0, false, false, 0, false, 0, false, 0, false,
+                                     {}, {}, {});
+            return;
+        }
+        emit channelMarkersReady(true, {}, stepIndex, s11, s11Ok, s11Swr, s22, s22Ok, s22Swr, s21, s21Ok, s12,
+                                 s12Ok, peak, peakOk, freqHz, gainDb, phaseDeg);
+    } catch (const std::exception& ex) {
+        emit channelMarkersReady(false, QString::fromUtf8(ex.what()), stepIndex, 0, false, false, 0, false,
+                                 false, 0, false, 0, false, 0, false, {}, {}, {});
     }
 }
 

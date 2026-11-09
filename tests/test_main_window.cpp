@@ -486,12 +486,14 @@ TEST_CASE("Проход канала пишет три этапа и PDF", "[ui]
     std::array<int, 4> phase{1, 0, 0, 0};
     std::array<int, 4> atten{2, 0, 0, 0};
     const QVector<ChannelStep> steps = buildChannelSteps({0}, 1, 1, phase, atten);
-    REQUIRE(steps.size() == 6);
-    CHECK(steps.at(0).stage == 0);
-    CHECK(steps.at(0).phase == 1);
+    REQUIRE(steps.size() == 4);
+    CHECK(steps.at(0).phase == 0);
     CHECK(steps.at(0).atten == 0);
-    CHECK(steps.at(2).stage == 1);
-    CHECK(steps.at(4).stage == 2);
+    CHECK(steps.at(1).phase == 0);
+    CHECK(steps.at(1).atten == 1);
+    CHECK(steps.at(2).phase == 1);
+    CHECK(steps.at(3).phase == 1);
+    CHECK(steps.at(3).atten == 1);
 
     ChannelPoint point;
     point.step = steps.at(0);
@@ -525,6 +527,98 @@ TEST_CASE("Измерение канала без платы не стартуе
     button->click();
     const QString status = child<QLabel>(*w.window, "fourChannelMeasureStatus")->text();
     CHECK(status.contains(QStringLiteral("ППКХ4")));
+}
+
+TEST_CASE("Пауза равна двум коротким свипам", "[sweepwait]")
+{
+    CHECK(channelSweepSettleMs(2, 1000, 1) == 100);
+    CHECK(channelSweepSettleMs(2, 1000, 8) == 100);
+    CHECK(channelSweepSettleMs(2, 100, 8) == 370);
+    CHECK(channelSweepSettleMs(2, 10, 1) == 450);
+}
+
+TEST_CASE("Десять случайных снимков канала", "[shotpick]")
+{
+    const QVector<int> first = pickScreenshotSteps(4096, 10, 7);
+    const QVector<int> again = pickScreenshotSteps(4096, 10, 7);
+    REQUIRE(first.size() == 10);
+    CHECK(first == again);
+    CHECK(std::is_sorted(first.cbegin(), first.cend()));
+    for (int i = 0; i < first.size(); ++i) {
+        CHECK(first.at(i) >= 0);
+        CHECK(first.at(i) < 4096);
+        if (i > 0) {
+            CHECK(first.at(i) != first.at(i - 1));
+        }
+    }
+    const QVector<int> few = pickScreenshotSteps(4, 10, 7);
+    CHECK(few.size() == 4);
+    CHECK(few.at(0) == 0);
+    CHECK(few.at(3) == 3);
+    CHECK(pickScreenshotSteps(0, 10, 7).isEmpty());
+}
+
+TEST_CASE("Пик S21 по маркеру", "[peakpower]")
+{
+    ChannelPoint quiet;
+    quiet.peakValid = true;
+    quiet.peakDb = -10.0;
+    quiet.step.channel = 0;
+    ChannelPoint louder;
+    louder.peakValid = true;
+    louder.peakDb = -4.0;
+    louder.step.channel = 1;
+    ChannelPoint unread;
+    const QVector<ChannelPoint> points{quiet, louder, unread};
+    CHECK(bestPowerIndex(points) == 1);
+    CHECK(bestPowerIndex({unread}) == -1);
+    CHECK(bestPowerIndex({}) == -1);
+    CHECK(bestPowerIndex(points, 0) == 0);
+    CHECK(bestPowerIndex(points, 1) == 1);
+}
+
+TEST_CASE("CSV усиления и фазы S21", "[gridcsv]")
+{
+    ChannelPoint zero;
+    zero.step.channel = 0;
+    zero.step.phase = 0;
+    zero.step.atten = 0;
+    zero.s21FreqHz = {10000000000.0};
+    zero.s21GainDb = {21.40};
+    zero.s21PhaseDeg = {12.00};
+    ChannelPoint next = zero;
+    next.step.atten = 1;
+    next.s21GainDb = {20.92};
+    next.s21PhaseDeg = {12.30};
+    QTemporaryDir dir;
+    REQUIRE(dir.isValid());
+    CHECK(writeChannelCsv(dir.path(), {zero, next}).isEmpty());
+    QFile file(dir.filePath(QStringLiteral("measurements.csv")));
+    REQUIRE(file.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(file.readAll());
+    CHECK(text.startsWith(QStringLiteral("channel_id,freq_hz,phase_code,att_code,gain_db,phase_deg\n")));
+    CHECK(text.contains(QStringLiteral("0,10000000000,0,0,21.40,12.00\n")));
+    CHECK(text.contains(QStringLiteral("0,10000000000,0,1,20.92,12.30\n")));
+}
+
+TEST_CASE("Сетка фазы и аттенюации", "[gridsteps]")
+{
+    const std::array<int, 4> phase{};
+    const std::array<int, 4> atten{};
+    const QVector<ChannelStep> small = buildChannelSteps({0}, 1, 1, phase, atten);
+    REQUIRE(small.size() == 4);
+    CHECK(small.at(0).phase == 0);
+    CHECK(small.at(0).atten == 0);
+    CHECK(small.at(3).phase == 1);
+    CHECK(small.at(3).atten == 1);
+    const QVector<ChannelStep> full = buildChannelSteps({1}, 63, 63, phase, atten);
+    CHECK(full.size() == 64 * 64);
+    CHECK(full.front().channel == 1);
+    CHECK(full.front().phase == 0);
+    CHECK(full.front().atten == 0);
+    CHECK(full.at(63).atten == 63);
+    CHECK(full.at(64).phase == 1);
+    CHECK(full.at(64).atten == 0);
 }
 
 TEST_CASE("Повторяемость считает среднее и СКО", "[repeat]")

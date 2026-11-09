@@ -603,6 +603,103 @@ std::vector<C2220Vna::NativeMarker> C2220Vna::native_markers(int trace)
     return markers;
 }
 
+void C2220Vna::arm_trace_marker(int trace, int marker, const std::string& type)
+{
+    require_connected("arm_trace_marker");
+    if (trace < 1 || trace > 16 || marker < 1 || marker > 15) {
+        throw std::invalid_argument("C2220Vna: invalid marker");
+    }
+    if (type != "MAX" && type != "PEAK") {
+        throw std::invalid_argument("C2220Vna: marker search type");
+    }
+    const std::string prefix = "CALC1:TRAC" + std::to_string(trace) + ":MARK" + std::to_string(marker);
+    write_cmd(prefix + ":ACT");
+    write_cmd(prefix + ":FUNC:TYPE " + type);
+    const auto kind = trim_scpi_text(query(prefix + ":FUNC:TYPE?"));
+    if (kind != type) {
+        throw std::runtime_error("C2220Vna: marker search type was not applied: " + kind);
+    }
+}
+
+bool C2220Vna::read_trace_marker(int trace, int marker, double* value)
+{
+    require_connected("read_trace_marker");
+    if (trace < 1 || trace > 16 || marker < 1 || marker > 15 || value == nullptr) {
+        throw std::invalid_argument("C2220Vna: invalid marker");
+    }
+    const std::string prefix = "CALC1:TRAC" + std::to_string(trace) + ":MARK" + std::to_string(marker);
+    try {
+        write_cmd(prefix + ":FUNC:EXEC");
+        const auto y = parse_ascii_doubles(query(prefix + ":Y?"));
+        if (y.empty() || !std::isfinite(y[0])) {
+            throw std::runtime_error("C2220Vna: invalid marker search Y");
+        }
+        *value = y[0];
+        return true;
+    } catch (const std::exception&) {
+        try {
+            (void)drain_errors();
+        } catch (const std::exception&) {
+        }
+        return false;
+    }
+}
+
+void C2220Vna::set_sweep_points(std::uint32_t points)
+{
+    require_connected("set_sweep_points");
+    if (points < 2 || points > 500001) {
+        throw std::invalid_argument("C2220Vna: sweep points out of range");
+    }
+    write_cmd("SENS:SWE:POIN " + std::to_string(points));
+    if (trim_scpi_text(query("*OPC?")) != "1") {
+        throw std::runtime_error("C2220Vna: sweep point update did not complete");
+    }
+    const auto errors = drain_errors();
+    if (!errors.empty()) {
+        throw std::runtime_error("C2220Vna: sweep point update failed: " + errors.front());
+    }
+    const auto readback = static_cast<std::uint32_t>(
+        std::llround(parse_single_double(query("SENS:SWE:POIN?"), "SENS:SWE:POIN?")));
+    if (readback != points) {
+        throw std::runtime_error("C2220Vna: sweep points were not applied");
+    }
+}
+
+void C2220Vna::set_sweep_band(std::uint64_t start_hz, std::uint64_t stop_hz)
+{
+    require_connected("set_sweep_band");
+    if (start_hz < 100000 || stop_hz > 20000000000ULL || start_hz >= stop_hz) {
+        throw std::invalid_argument("C2220Vna: sweep band out of range");
+    }
+    write_cmd("SENS:FREQ:STAR " + std::to_string(start_hz));
+    write_cmd("SENS:FREQ:STOP " + std::to_string(stop_hz));
+    if (trim_scpi_text(query("*OPC?")) != "1") {
+        throw std::runtime_error("C2220Vna: sweep band update did not complete");
+    }
+    const auto errors = drain_errors();
+    if (!errors.empty()) {
+        throw std::runtime_error("C2220Vna: sweep band update failed: " + errors.front());
+    }
+    const auto start = static_cast<std::uint64_t>(
+        std::llround(parse_single_double(query("SENS:FREQ:STAR?"), "SENS:FREQ:STAR?")));
+    const auto stop = static_cast<std::uint64_t>(
+        std::llround(parse_single_double(query("SENS:FREQ:STOP?"), "SENS:FREQ:STOP?")));
+    if (start != start_hz || stop != stop_hz) {
+        throw std::runtime_error("C2220Vna: sweep band was not applied");
+    }
+}
+
+ComplexSweep C2220Vna::read_native_complex(int trace, SParameter parameter)
+{
+    require_connected("read_native_complex");
+    if (trace < 1 || trace > 16) {
+        throw std::invalid_argument("C2220Vna: invalid trace");
+    }
+    write_cmd("CALC1:PAR" + std::to_string(trace) + ":SEL");
+    return read_trace_data(parameter, 0);
+}
+
 std::vector<std::string> C2220Vna::native_trace_parameters()
 {
     require_connected("native_trace_parameters");

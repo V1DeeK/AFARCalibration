@@ -1,91 +1,114 @@
 #include "S2VnaGraphHost.h"
 
+#include <QLabel>
+#include <QPixmap>
 #include <QResizeEvent>
 #include <QTimer>
+#include <QVBoxLayout>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
-
-#include <string>
-#include <vector>
+#endif
 
 namespace {
 
-bool hasClass(HWND window, const wchar_t* expected)
-{
-    wchar_t name[128]{};
-    return GetClassNameW(window, name, 128) > 0 && wcscmp(name, expected) == 0;
-}
+#ifdef Q_OS_WIN
+struct ShotSearch {
+    HWND best = nullptr;
+    long long area = 0;
+};
 
-bool isS2VnaProcess(DWORD pid)
+BOOL CALLBACK findS2VnaTop(HWND window, LPARAM data)
 {
+    if (!IsWindowVisible(window)) {
+        return TRUE;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
     const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!process) return false;
+    if (process == nullptr) {
+        return TRUE;
+    }
     wchar_t path[32768]{};
     DWORD length = 32768;
     const bool ok = QueryFullProcessImageNameW(process, 0, path, &length) != 0;
     CloseHandle(process);
-    if (!ok) return false;
+    if (!ok) {
+        return TRUE;
+    }
     const wchar_t* name = wcsrchr(path, L'\\');
-    return _wcsicmp(name ? name + 1 : path, L"S2VNA.exe") == 0;
-}
-
-struct Candidate {
-    HWND view = nullptr;
-    long long area = 0;
-};
-
-struct Search {
-    int instances = 0;
-    Candidate best;
-};
-
-BOOL CALLBACK findView(HWND window, LPARAM data)
-{
-    if (!hasClass(window, L"TView")) return TRUE;
-    // IsWindowVisible возвращает false, когда AFAR скрыла главное окно S2VNA.
-    if (!(GetWindowLongPtrW(window, GWL_STYLE) & WS_VISIBLE)) return TRUE;
+    if (_wcsicmp(name != nullptr ? name + 1 : path, L"S2VNA.exe") != 0) {
+        return TRUE;
+    }
     RECT rect{};
-    if (!GetWindowRect(window, &rect)) return TRUE;
-    const long long width = rect.right - rect.left;
-    const long long height = rect.bottom - rect.top;
-    const long long area = width * height;
-    if (width < 300 || height < 200) return TRUE;
-    auto* candidate = reinterpret_cast<Candidate*>(data);
-    if (area > candidate->area) *candidate = {window, area};
+    if (!GetWindowRect(window, &rect)) {
+        return TRUE;
+    }
+    const long long area = static_cast<long long>(rect.right - rect.left) * (rect.bottom - rect.top);
+    if (area < 200 * 150) {
+        return TRUE;
+    }
+    auto* search = reinterpret_cast<ShotSearch*>(data);
+    if (area > search->area) {
+        search->area = area;
+        search->best = window;
+    }
     return TRUE;
 }
 
-BOOL CALLBACK findMain(HWND window, LPARAM data)
+QImage grabWindow(HWND window)
 {
-    if (!hasClass(window, L"TMain")) return TRUE;
-    DWORD pid = 0;
-    GetWindowThreadProcessId(window, &pid);
-    if (!isS2VnaProcess(pid)) return TRUE;
-    auto* search = reinterpret_cast<Search*>(data);
-    ++search->instances;
-    Candidate candidate;
-    EnumChildWindows(window, findView, reinterpret_cast<LPARAM>(&candidate));
-    if (candidate.area > search->best.area) search->best = candidate;
-    return TRUE;
+    RECT rect{};
+    if (window == nullptr || !IsWindow(window) || !GetWindowRect(window, &rect)) {
+        return {};
+    }
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width < 50 || height < 50) {
+        return {};
+    }
+    HDC windowDc = GetWindowDC(window);
+    HDC memoryDc = CreateCompatibleDC(windowDc);
+    HBITMAP bitmap = CreateCompatibleBitmap(windowDc, width, height);
+    const HGDIOBJ previous = SelectObject(memoryDc, bitmap);
+    const BOOL printed = PrintWindow(window, memoryDc, 0x00000002);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    QImage image(width, height, QImage::Format_ARGB32);
+    GetDIBits(memoryDc, bitmap, 0, static_cast<UINT>(height), image.bits(), &info, DIB_RGB_COLORS);
+    SelectObject(memoryDc, previous);
+    DeleteObject(bitmap);
+    DeleteDC(memoryDc);
+    ReleaseDC(window, windowDc);
+    if (printed == FALSE || image.isNull()) {
+        return {};
+    }
+    return image;
 }
-
-} // namespace
 #endif
+
+}  // namespace
 
 S2VnaGraphHost::S2VnaGraphHost(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName(QStringLiteral("s2vnaGraphHost"));
-    setAttribute(Qt::WA_NativeWindow);
+    setMinimumSize(640, 360);
+    auto* lay = new QVBoxLayout(this);
+    lay->setContentsMargins(0, 0, 0, 0);
+    m_image = new QLabel(this);
+    m_image->setAlignment(Qt::AlignCenter);
+    m_image->setScaledContents(true);
+    m_image->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    lay->addWidget(m_image);
     m_watch = new QTimer(this);
-    m_watch->setInterval(1000);
-    connect(m_watch, &QTimer::timeout, this, [this] {
-        if (!isAttached()) {
-            detach();
-            emit windowLost();
-        }
-    });
+    m_watch->setInterval(400);
+    connect(m_watch, &QTimer::timeout, this, &S2VnaGraphHost::refreshMirror);
 }
 
 S2VnaGraphHost::~S2VnaGraphHost()
@@ -96,64 +119,32 @@ S2VnaGraphHost::~S2VnaGraphHost()
 bool S2VnaGraphHost::attach(QString* error)
 {
 #ifdef Q_OS_WIN
-    if (isAttached()) return true;
-    Search search;
-    EnumWindows(findMain, reinterpret_cast<LPARAM>(&search));
-    if (search.instances != 1 || !search.best.view) {
-        if (error) {
-            *error = search.instances > 1
-                ? QStringLiteral("Найдено несколько окон S2VNA. Оставьте одно запущенное окно.")
-                : QStringLiteral("Область графика S2VNA не найдена. Подключите C2220 через S2VNA.");
+    if (isAttached()) {
+        return true;
+    }
+    ShotSearch search;
+    EnumWindows(findS2VnaTop, reinterpret_cast<LPARAM>(&search));
+    if (search.best == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("Окно S2VNA не найдено. Запустите анализатор и откройте C2220.");
         }
         return false;
     }
-
-    const HWND view = search.best.view;
-    const HWND original = GetParent(view);
-    RECT rect{};
-    if (!original || !GetWindowRect(view, &rect)) {
-        if (error) *error = QStringLiteral("Не удалось прочитать положение графика S2VNA.");
-        return false;
-    }
-    MapWindowPoints(nullptr, original, reinterpret_cast<POINT*>(&rect), 2);
-    const HWND host = reinterpret_cast<HWND>(winId());
-    if (!IsWindow(view) || !IsWindow(original) || !IsWindow(host)) {
-        if (error) *error = QStringLiteral("Окно графика S2VNA изменилось во время подключения.");
-        return false;
-    }
-    SetLastError(0);
-    const HWND previous = SetParent(view, host);
-    const DWORD attachError = GetLastError();
-    if (previous != original || GetParent(view) != host) {
-        if (GetParent(view) == host) SetParent(view, original);
-        if (error) *error = QStringLiteral("Windows не разрешила встроить график S2VNA "
-                                          "(код %1, старое окно %2, текущее %3).")
-                                .arg(attachError)
-                                .arg(reinterpret_cast<quintptr>(previous), 0, 16)
-                                .arg(reinterpret_cast<quintptr>(GetParent(view)), 0, 16);
-        return false;
-    }
-
-    m_view = view;
-    m_originalParent = original;
-    m_host = host;
-    m_originalX = rect.left;
-    m_originalY = rect.top;
-    m_originalWidth = rect.right - rect.left;
-    m_originalHeight = rect.bottom - rect.top;
-    m_originalStyle = static_cast<long long>(GetWindowLongPtrW(view, GWL_STYLE));
-    if (!SetWindowPos(view, nullptr, 0, 0, width(), height(),
-                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW)) {
-        const DWORD moveError = GetLastError();
-        detach();
-        if (error) *error = QStringLiteral("Не удалось показать график S2VNA (код %1).")
-                                .arg(moveError);
+    m_source = search.best;
+    refreshMirror();
+    if (m_image->pixmap().isNull()) {
+        m_source = nullptr;
+        if (error != nullptr) {
+            *error = QStringLiteral("Окно S2VNA найдено, но снимок не прочитался.");
+        }
         return false;
     }
     m_watch->start();
     return true;
 #else
-    if (error) *error = QStringLiteral("Встраивание окна S2VNA доступно только в Windows.");
+    if (error != nullptr) {
+        *error = QStringLiteral("Трансляция окна S2VNA доступна только в Windows.");
+    }
     return false;
 #endif
 }
@@ -162,43 +153,18 @@ void S2VnaGraphHost::detach()
 {
     m_watch->stop();
 #ifdef Q_OS_WIN
-    const HWND view = static_cast<HWND>(m_view);
-    const HWND original = static_cast<HWND>(m_originalParent);
-    const HWND host = static_cast<HWND>(m_host);
-    if (view && IsWindow(view) && original && IsWindow(original) && GetParent(view) == host) {
-        SetParent(view, original);
-        if (m_originalStyle != 0) {
-            SetWindowLongPtrW(view, GWL_STYLE, static_cast<LONG_PTR>(m_originalStyle));
-        }
-        const int width = m_originalWidth > 100 ? m_originalWidth : 100;
-        const int height = m_originalHeight > 100 ? m_originalHeight : 100;
-        SetWindowPos(view, nullptr, m_originalX, m_originalY, width, height,
-                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
-        ShowWindow(view, SW_SHOW);
-        RECT client{};
-        if (GetClientRect(original, &client)) {
-            SendMessageW(original, WM_SIZE, SIZE_RESTORED,
-                         MAKELPARAM(client.right - client.left, client.bottom - client.top));
-        }
-        const HWND root = GetAncestor(original, GA_ROOT);
-        if (root && IsWindow(root)) {
-            ShowWindow(root, SW_SHOWNA);
-            RedrawWindow(root, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_UPDATENOW);
-        }
-    }
-    m_view = nullptr;
-    m_originalParent = nullptr;
-    m_host = nullptr;
-    m_originalStyle = 0;
+    m_source = nullptr;
 #endif
+    if (m_image != nullptr) {
+        m_image->clear();
+    }
 }
 
 bool S2VnaGraphHost::isAttached() const
 {
 #ifdef Q_OS_WIN
-    const HWND view = static_cast<HWND>(m_view);
-    return view && IsWindow(view) && GetParent(view) == static_cast<HWND>(m_host);
+    const auto window = static_cast<HWND>(m_source);
+    return m_watch->isActive() && window != nullptr && IsWindow(window);
 #else
     return false;
 #endif
@@ -207,10 +173,23 @@ bool S2VnaGraphHost::isAttached() const
 void S2VnaGraphHost::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+}
+
+void S2VnaGraphHost::refreshMirror()
+{
 #ifdef Q_OS_WIN
-    if (isAttached()) {
-        SetWindowPos(static_cast<HWND>(m_view), nullptr, 0, 0, width(), height(),
-                     SWP_NOZORDER | SWP_NOACTIVATE);
+    const auto window = static_cast<HWND>(m_source);
+    if (window == nullptr || !IsWindow(window)) {
+        detach();
+        emit windowLost();
+        return;
     }
+    const QImage image = grabWindow(window);
+    if (image.isNull()) {
+        return;
+    }
+    m_image->setPixmap(QPixmap::fromImage(image));
+#else
+    Q_UNUSED(this);
 #endif
 }

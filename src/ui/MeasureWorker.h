@@ -101,6 +101,12 @@ public slots:
                     int averages);
     /// |S| текущей трассы S2VNA. Запуск и частоту не меняет.
     void captureLiveTrace();
+    /// Середина текущей полосы, 2 точки. ПЧ и усреднение не меняет.
+    void prepareChannelGrid();
+    /// Вернуть старт, стоп и число точек, которые были до prepareChannelGrid.
+    void restoreChannelGrid();
+    /// Уже включённые маркеры: максимум на S11/S21/S12/S22 и пик на S21.
+    void captureChannelMarkers(int stepIndex);
     /// Сохраняет последний полный снимок без повторного измерения прибора.
     void exportTwoPort(const QString& basePath,
                        const QVector<double>& markerFrequenciesGhz,
@@ -150,6 +156,14 @@ signals:
     /// parameter: 0 S11, 1 S21, 2 S12, 3 S22. Пустой вектор — снимка нет.
     void liveTraceReady(bool ok, const QString& message, int parameter, const QVector<double>& freqGhz,
                         const QVector<double>& magDb);
+    /// stepMhz — фактический шаг после установки точек.
+    /// settleMs — пауза после кода, по двум свипам текущей ПЧ и усреднения.
+    void channelGridReady(bool ok, const QString& message, double stepMhz, int settleMs);
+    /// Значения маркеров. Отсутствующий параметр приходит с ok-флагом false.
+    void channelMarkersReady(bool ok, const QString& message, int stepIndex, double s11, bool s11Ok,
+                             bool s11Swr, double s22, bool s22Ok, bool s22Swr, double s21, bool s21Ok, double s12,
+                             bool s12Ok, double peak, bool peakOk, const QVector<double>& freqHz,
+                             const QVector<double>& gainDb, const QVector<double>& phaseDeg);
     void operationProgress(const QString& text, int completed, int total);
     void twoPortExportAvailable(bool available);
     void exportTwoPortFinished(bool ok,
@@ -250,6 +264,8 @@ private:
     void emitArtifactPreviews();
     void emitMatrix(int channel, int attCode);
     void maybeEmitSweepPreview();
+    /// Маркер 1 = MAX на найденных трассах, маркер 2 = PEAK на S21. Пустая строка — успех.
+    [[nodiscard]] QString armChannelMarkers();
     void emitSweepPreview(const ComplexSweep& sweep);
     void updateEta(qint64 completed, qint64 total);
     void resetEta();
@@ -299,4 +315,14 @@ private:
     bool m_etaActive = false;
     bool m_artifactPreviewSent = false;
     std::optional<afar::report::TwoPortMeasurement> m_lastTwoPortMeasurement;
+    bool m_channelBandSaved = false;
+    quint64 m_channelBandStart = 0;
+    quint64 m_channelBandStop = 0;
+    quint32 m_channelBandPoints = 0;
+    int m_markS11 = 0;
+    int m_markS22 = 0;
+    int m_markS21 = 0;
+    int m_markS12 = 0;
+    bool m_markS11Swr = false;
+    bool m_markS22Swr = false;
 };
