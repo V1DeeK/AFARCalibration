@@ -43,10 +43,39 @@ $runtimeDlls = @(
     'libbrotlidec.dll', 'libbrotlicommon.dll', 'libbz2-1.dll', 'libglib-2.0-0.dll',
     'libgraphite2.dll', 'libintl-8.dll'
 )
+$runtimeBin = Split-Path $deploy
 foreach ($dll in $runtimeDlls) {
-    $path = Join-Path (Split-Path $deploy) $dll
+    $path = Join-Path $runtimeBin $dll
     if (-not (Test-Path -LiteralPath $path)) { throw "Runtime DLL not found: $path" }
     Copy-Item -LiteralPath $path -Destination $stage -Force
+}
+# Подтянуть все остальные библиотеки UCRT64, которые тянут exe и плагины.
+# Иначе ярлык с рабочего стола сообщает о пропавшей DLL: рядом с exe Windows
+# не смотрит в C:\msys64.
+$objdump = Join-Path $runtimeBin 'objdump.exe'
+if (Test-Path -LiteralPath $objdump) {
+    $guard = 0
+    do {
+        $added = $false
+        $binaries = @(Get-ChildItem -LiteralPath $stage -Recurse -File -Include *.exe,*.dll)
+        foreach ($binary in $binaries) {
+            $imports = & $objdump -p $binary.FullName 2>$null | Select-String -Pattern 'DLL Name:\s+(\S+)'
+            foreach ($import in $imports) {
+                $name = $import.Matches[0].Groups[1].Value
+                if ($name -match '^(?i)(api-ms-win|ext-ms-|kernel32|user32|gdi32|advapi32|shell32|ole32|oleaut32|ws2_32|setupapi|comctl32|comdlg32|imm32|winmm|version|mpr|netapi32|userenv|dwmapi|uxtheme|ntdll|msvcrt|crypt32|bcrypt|ncrypt|shlwapi|rpcrt4|secur32|iphlpapi|dnsapi|winhttp|wininet|normaliz|psapi|powrprof|cfgmgr32|hid|winspool|opengl32|glu32|d3d|dxgi|d3dcompiler|msimg32|usp10|oleacc|wtsapi32|profapi|bcryptprimitives)') {
+                    continue
+                }
+                $dest = Join-Path $stage $name
+                if (Test-Path -LiteralPath $dest) { continue }
+                $source = Join-Path $runtimeBin $name
+                if (Test-Path -LiteralPath $source) {
+                    Copy-Item -LiteralPath $source -Destination $dest -Force
+                    $added = $true
+                }
+            }
+        }
+        $guard++
+    } while ($added -and $guard -lt 6)
 }
 
 $spectrumData = Join-Path $buildRoot 'src\data\spectrum'
