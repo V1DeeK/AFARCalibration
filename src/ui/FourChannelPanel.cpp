@@ -30,9 +30,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
-
 #include <vector>
-
 #include <algorithm>
 
 #ifdef Q_OS_WIN
@@ -54,6 +52,24 @@ constexpr int kSettleMs = 8000;
 constexpr int kCollectMs = 2000;
 constexpr int kMarkerWaitMs = 20000;
 constexpr int kChannels = 4;
+
+QString echoedHex(const QString& reply)
+{
+    const QString key = QStringLiteral("HEX=");
+    const int at = reply.indexOf(key, 0, Qt::CaseInsensitive);
+    if (at < 0) {
+        return {};
+    }
+    QString hex;
+    for (int i = at + key.size(); i < reply.size(); ++i) {
+        const QChar ch = reply.at(i);
+        if (!ch.isLetterOrNumber()) {
+            break;
+        }
+        hex += ch;
+    }
+    return hex.toUpper();
+}
 
 #ifdef Q_OS_WIN
 struct S2VnaShotSearch {
@@ -1315,6 +1331,7 @@ void FourChannelPanel::sendFrame(const std::function<void(bool)>& after)
     m_sentAtten = m_atten;
     m_sentLsb = m_lsb;
     if (!m_connected) {
+        m_lastSendVerified = false;
         if (after) {
             after(false);
         }
@@ -1327,21 +1344,43 @@ void FourChannelPanel::sendFrame(const std::function<void(bool)>& after)
         send_chain_command(m_format, wirePhase, wireAtten, m_lsb));
     const int hexAt = command.lastIndexOf(QLatin1Char(' '));
     m_lastSentHex = hexAt >= 0 ? command.mid(hexAt + 1) : QString();
-    const int channel = m_slot->currentIndex() + 1;
-    m_link->send(command, [this, command, channel, after](const QString& reply) {
-        const bool ok = reply.startsWith(QLatin1String("OK"));
-        if (ok) {
-            m_lastSent->setText(QStringLiteral("цепочка записана, правится канал %1: %2")
-                                    .arg(channel)
-                                    .arg(command));
-            ui::setTone(m_lastSent, ui::Tone::Ok);
-        } else if (reply.startsWith(QLatin1String("ERR"))) {
-            m_lastSent->setText(QStringLiteral("канал %1: %2").arg(channel).arg(reply));
+    m_link->send(command, [this, after](const QString& reply) {
+        const bool arrived = reply.startsWith(QLatin1String("OK"));
+        const QString echoed = echoedHex(reply);
+        m_lastSendVerified = arrived && !m_lastSentHex.isEmpty()
+                             && echoed.compare(m_lastSentHex, Qt::CaseInsensitive) == 0;
+        const bool accept = m_lastSendVerified
+                            || (m_running && m_runKind == RunKind::Repeat && arrived);
+        if (after) {
+            after(accept);
+        }
+        const int selected = selectedIndex();
+        const int phaseCode = m_sentPhase[static_cast<std::size_t>(selected)];
+        const int attenCode = m_sentAtten[static_cast<std::size_t>(selected)];
+        QString text = QStringLiteral("Канал %1: фаза %2° (код %3), аттенюация %4 дБ (код %5). Кадр %6. ")
+                           .arg(selected + 1)
+                           .arg(phase_deg(phaseCode, m_format.phase), 0, 'f', 3)
+                           .arg(phaseCode)
+                           .arg(atten_db(attenCode, m_format.atten), 0, 'f', 2)
+                           .arg(attenCode)
+                           .arg(m_lastSentHex);
+        if (m_lastSendVerified) {
+            text += QStringLiteral("Плата вернула тот же HEX: эти фаза и аттенюация установлены.");
+            if (codesDiffer()) {
+                text += QStringLiteral(" На экране код уже другой.");
+            }
+            ui::setTone(m_lastSent, codesDiffer() ? ui::Tone::Warn : ui::Tone::Ok);
+        } else if (!arrived) {
+            text += reply.isEmpty() ? QStringLiteral("Плата не ответила.") : reply;
+            ui::setTone(m_lastSent, ui::Tone::Error);
+        } else if (echoed.isEmpty()) {
+            text += QStringLiteral("Плата ответила OK без HEX, сверка кадра невозможна.");
+            ui::setTone(m_lastSent, ui::Tone::Warn);
+        } else {
+            text += QStringLiteral("Плата вернула %1. Эти параметры не подтверждены.").arg(echoed);
             ui::setTone(m_lastSent, ui::Tone::Error);
         }
-        if (after) {
-            after(ok);
-        }
+        m_lastSent->setText(text);
     });
 }
 
@@ -1360,8 +1399,8 @@ QWidget* FourChannelPanel::makeMeasureBox()
     m_repeatCount = new QComboBox(box);
     m_repeatCount->setObjectName(QStringLiteral("fourChannelRepeatCount"));
     m_repeatCount->addItem(QStringLiteral("10 раз"), 10);
-    m_repeatCount->addItem(QStringLiteral("20 раз"), 20);
     m_repeatCount->addItem(QStringLiteral("100 раз"), 100);
+    m_repeatCount->addItem(QStringLiteral("1000 раз"), 1000);
     m_repeatStart = new QPushButton(QStringLiteral("Повторяемость"), box);
     m_repeatStart->setObjectName(QStringLiteral("fourChannelRepeat"));
     ui::setButtonRole(m_repeatStart, ui::ButtonRole::Success);
@@ -1502,6 +1541,7 @@ void FourChannelPanel::startRepeat()
         m_repeatTarget = 10;
     }
     m_repeatDb.clear();
+    m_repeatRejected = 0;
     m_repeatParameter = -1;
     m_repeatGot = false;
     m_stepIndex = 0;
@@ -1547,7 +1587,16 @@ void FourChannelPanel::stopMeasure(const QString& outcome)
         }
     } else if (kind == RunKind::Repeat) {
         finishRepeatPdf();
-        m_measureStatus->setText(outcome + QStringLiteral(" PDF: ") + m_runDir + QStringLiteral("/repeat.pdf"));
+        const RepeatStats stats = repeatStats(m_repeatDb);
+        const QString summary = stats.count == 0
+            ? QStringLiteral(" Подтверждённых отсчётов нет, кадр не совпал %1 раз.").arg(m_repeatRejected)
+            : QStringLiteral(" Подтверждено %1, кадр не совпал %2. Мат. ожидание %3 дБ, СКО %4 дБ.")
+                  .arg(stats.count)
+                  .arg(m_repeatRejected)
+                  .arg(stats.mean, 0, 'f', 3)
+                  .arg(stats.stdev, 0, 'f', 3);
+        m_measureStatus->setText(outcome + summary + QStringLiteral(" PDF: ") + m_runDir
+                                 + QStringLiteral("/repeat.pdf"));
     } else {
         m_measureStatus->setText(outcome);
     }
@@ -1618,6 +1667,13 @@ void FourChannelPanel::applyMeasureStep()
             stopMeasure(QStringLiteral("Плата не подтвердила кадр, проход остановлен."));
             return;
         }
+        if (m_runKind == RunKind::Repeat && !m_lastSendVerified) {
+            ++m_repeatRejected;
+            appendLog(QStringLiteral("повтор %1: ответный HEX не совпал с отправленным кадром, отсчёт не берётся")
+                          .arg(m_stepIndex + 1));
+            advanceRepeat();
+            return;
+        }
         commitConfirmed();
         m_captureIndex = m_stepIndex;
         m_repeatGot = false;
@@ -1657,6 +1713,11 @@ void FourChannelPanel::onStepTimer()
         finishSweepStep();
         return;
     }
+    advanceRepeat();
+}
+
+void FourChannelPanel::advanceRepeat()
+{
     m_stepPhase = StepPhase::Idle;
     ++m_stepIndex;
     m_measureBar->setValue(m_stepIndex);
@@ -1751,6 +1812,8 @@ void FourChannelPanel::onLiveTrace(bool ok, const QString& message, int paramete
     m_repeatGot = true;
     m_repeatParameter = parameter;
     m_repeatDb.append(channelMidDb(magDb));
+    m_stepTimer->stop();
+    advanceRepeat();
 }
 
 void FourChannelPanel::finishMeasurePdf(bool openReport)
@@ -1786,7 +1849,8 @@ void FourChannelPanel::finishRepeatPdf()
     const int selected = selectedIndex();
     const QString error = writeRepeatReport(
         m_runDir, m_runTitle, selected, phase_deg(m_confirmedPhase[static_cast<std::size_t>(selected)], m_format.phase),
-        atten_db(m_confirmedAtten[static_cast<std::size_t>(selected)], m_format.atten), parameter, m_repeatDb);
+        atten_db(m_confirmedAtten[static_cast<std::size_t>(selected)], m_format.atten), parameter, m_repeatDb,
+        m_repeatRejected);
     if (!error.isEmpty()) {
         m_measureStatus->setText(error);
         ui::setTone(m_measureStatus, ui::Tone::Error);

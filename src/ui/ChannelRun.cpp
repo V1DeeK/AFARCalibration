@@ -644,7 +644,8 @@ RepeatStats repeatStats(const QVector<double>& values)
 }
 
 QString writeRepeatReport(const QString& folder, const QString& title, int channel, double phaseDeg,
-                          double attenDb, const QString& parameter, const QVector<double>& valuesDb)
+                          double attenDb, const QString& parameter, const QVector<double>& valuesDb,
+                          int rejected)
 {
     const QString path = folder + QStringLiteral("/repeat.pdf");
     QPdfWriter pdf(path);
@@ -673,8 +674,10 @@ QString writeRepeatReport(const QString& folder, const QString& title, int chann
                       .arg(attenDb, 0, 'f', 2)
                       .arg(parameter),
           12);
-    label(28, 104, QStringLiteral("Отсчётов %1 из повторных установок того же кода. Среднее %2 дБ, СКО %3 дБ.")
+    label(28, 104, QStringLiteral("Подтверждённых установок %1, кадр не совпал %2. "
+                                 "Мат. ожидание %3 дБ, СКО %4 дБ.")
                        .arg(stats.count)
+                       .arg(rejected)
                        .arg(stats.mean, 0, 'f', 3)
                        .arg(stats.stdev, 0, 'f', 3),
           12);

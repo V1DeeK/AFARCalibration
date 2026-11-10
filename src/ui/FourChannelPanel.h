@@ -23,7 +23,8 @@ class QToolButton;
 /// «Настройка 4 каналов»: четыре канала одной SPI-цепочки.
 /// В каждом SEND уходят все четыре слова. Слово выбранного канала берётся
 /// с ползунка, остальные три — нули (−31.5 дБ), иначе открытый сосед держит
-/// трассу анализатора около +30 дБ. Код считается записанным после OK платы.
+/// трассу анализатора около +30 дБ. Код считается установленным, когда ответ
+/// OK SEND содержит тот же HEX, что ушёл в команде.
 class FourChannelPanel final : public QWidget {
     Q_OBJECT
 
@@ -129,6 +130,7 @@ private:
     void finishMeasurePdf(bool openReport);
     void finishRepeatPdf();
     void finishSweepStep();
+    void advanceRepeat();
     void showReport(const QString& path);
     void chooseScreenshots();
     void openReportFiles();
@@ -221,8 +223,10 @@ private:
     int m_pointBase = 0;
     int m_captureIndex = -1;
     int m_repeatTarget = 0;
+    int m_repeatRejected = 0;
     int m_repeatParameter = -1;
     bool m_repeatGot = false;
+    bool m_lastSendVerified = false;
     QTimer* m_stepTimer = nullptr;
     QString m_runDir;
     QString m_runTitle;

@@ -108,6 +108,7 @@ struct RepeatStats {
 [[nodiscard]] RepeatStats repeatStats(const QVector<double>& values);
 
 /// PDF повторяемости: каждое значение получено после повторной установки того же кода.
+/// rejected — установки, чей ответный HEX не совпал с отправленным кадром.
 [[nodiscard]] QString writeRepeatReport(const QString& folder, const QString& title, int channel,
                                        double phaseDeg, double attenDb, const QString& parameter,
-                                       const QVector<double>& valuesDb);
+                                       const QVector<double>& valuesDb, int rejected = 0);
