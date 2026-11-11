@@ -17,16 +17,18 @@ class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
 class QSlider;
+class PsSession;
 class QThread;
+class QTimer;
 class StatTile;
 
-/// Вкладка «Настройка гетеродина»: управление платой ADF4355-3 и серия измерений с R&S FSW.
-/// Поведение совпадает с веб-интерфейсом V1DeeK/Heterodyne (emu/ui).
+/// Вкладка «Настройка гетеродина»: плата ADF4355-3 по своему COM или через RS-485 платы PS.
+/// Серия измерений с R&S FSW идёт по Ethernet, как в веб-интерфейсе V1DeeK/Heterodyne.
 class HeterodyneTab final : public QWidget {
     Q_OBJECT
 
 public:
-    explicit HeterodyneTab(QWidget* parent = nullptr);
+    explicit HeterodyneTab(PsSession* ps, QWidget* parent = nullptr);
     ~HeterodyneTab() override;
 
     [[nodiscard]] QSize sizeHint() const override;
@@ -43,6 +45,9 @@ private:
     QWidget* buildJournal();
     void refreshPorts();
     void connectLink();
+    void connectViaPs();
+    void openHeterodyneOnPs();
+    void cancelServiceWait(const QString& error);
     void applyFrequency(double mhz);
     void startFlash();
     void setControlsEnabled(bool enabled);
@@ -61,6 +66,10 @@ private:
     bool m_userClosed = false;
     QString m_linkError;
 
+    PsSession* m_ps = nullptr;
+    QTimer* m_serviceTimer = nullptr;
+    bool m_serviceWait = false;
+    QComboBox* m_linkKind = nullptr;
     QComboBox* m_port = nullptr;
     QComboBox* m_addr = nullptr;
     QPushButton* m_connect = nullptr;
@@ -76,6 +85,7 @@ private:
     bool m_flashing = false;
     QString m_identifyKind;
     QLabel* m_freqHint = nullptr;
+    quint64 m_analyzerHz = 0;
 
     QDoubleSpinBox* m_freq = nullptr;
     QComboBox* m_ref = nullptr;

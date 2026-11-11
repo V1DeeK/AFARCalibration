@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMetaObject>
+#include <QPointer>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QThread>
@@ -159,6 +160,9 @@ HeterReply HeterSession::transactOnThread(quint8 func, const QByteArray& data, b
         return reply;
     }
     const QByteArray tx = heter::frame(m_addr, func, data);
+    if (m_viaBoard) {
+        return transactViaBoard(func, tx, logFrames, timeoutMs);
+    }
 
 #ifdef AFAR_HAVE_SERIALPORT
     for (int attempt = 0; attempt < 3; ++attempt) {
@@ -239,6 +243,128 @@ HeterReply HeterSession::transactOnThread(quint8 func, const QByteArray& data, b
 #endif
 }
 
+HeterWireReply HeterSession::askBoard(const QByteArray& frame, int timeoutMs)
+{
+    HeterWireReply got;
+    if (m_wireHost == nullptr || !m_wire) {
+        got.error = QStringLiteral("PS: канал к плате не задан");
+        return got;
+    }
+    QPointer<QObject> host(m_wireHost);
+    const auto wire = m_wire;
+    if (!QMetaObject::invokeMethod(
+            m_wireHost, [&] { got = wire(frame, timeoutMs); }, Qt::BlockingQueuedConnection)
+        || host == nullptr) {
+        got.error = QStringLiteral("PS: нет связи с платой");
+    }
+    return got;
+}
+
+HeterReply HeterSession::transactViaBoard(quint8 func, const QByteArray& tx, bool logFrames, int timeoutMs)
+{
+    HeterReply reply;
+    reply.tx = heter::hex(tx);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (logFrames) {
+            note(QStringLiteral("RS-485 команда: ") + reply.tx);
+        }
+        const int waitMs = qMax(timeoutMs, 2000) + 1000;
+        const HeterWireReply got = askBoard(tx, waitMs);
+        if (got.error.isEmpty() && got.bytes == tx) {
+            reply.text = QStringLiteral("гетеродин не ответил по RS-485: плата вернула отправленный кадр");
+            if (logFrames) {
+                note(QStringLiteral("ОШИБКА: ") + reply.text);
+            }
+            break;
+        }
+        if (!got.error.isEmpty()) {
+            reply.text = got.error;
+            if (logFrames) {
+                note(QStringLiteral("ОШИБКА: ") + got.error);
+            }
+            if (got.error.startsWith(QStringLiteral("PS:"))) {
+                break;
+            }
+            continue;
+        }
+        QByteArray buffer = got.bytes;
+        const heter::ParsedReply parsed = heter::takeReply(buffer, m_addr, func);
+        if (parsed.kind != QLatin1String("ok")) {
+            const QString kind = parsed.kind == QLatin1String("badlen") ? QStringLiteral("неверная длина ответа")
+                                 : parsed.kind == QLatin1String("foreign") ? QStringLiteral("чужой кадр")
+                                                                          : QStringLiteral("ответа нет");
+            reply.text = kind;
+            if (logFrames) {
+                note(QStringLiteral("ОШИБКА: ") + kind);
+            }
+            continue;
+        }
+        if (logFrames) {
+            note(QStringLiteral("RS-485 ответ: ") + heter::hex(parsed.frame));
+        }
+        reply.ok = parsed.payload.size() != 1 || static_cast<quint8>(parsed.payload.at(0)) == 0;
+        reply.rx = heter::hex(parsed.frame);
+        reply.text = heter::describeReply(m_addr, parsed.frame);
+        if (func == 0x05 && parsed.payload.size() == 14) {
+            HeterState next = stateFromParams(state(), parsed.payload);
+            next.port = m_portName;
+            next.addr = m_addr;
+            publish(next);
+        }
+        reply.state = state();
+        if (func == 0x05 && !m_bootRecovery && bootloaderReply(parsed.payload)) {
+            m_bootRecovery = true;
+            note(QStringLiteral("плата в загрузчике после включения, отправляю сброс"));
+            transactOnThread(0x0C, {}, true);
+            QThread::msleep(500);
+            reply = transactOnThread(0x05, {}, true);
+            m_bootRecovery = false;
+            return reply;
+        }
+        if (logFrames) {
+            emit commandDone(QString::number(func), reply);
+        }
+        return reply;
+    }
+    if (reply.text.isEmpty()) {
+        reply.text = QStringLiteral("ответа нет");
+    }
+    if (logFrames) {
+        emit commandDone(QString::number(func), reply);
+    }
+    return reply;
+}
+
+void HeterSession::setBoardWire(QObject* host, std::function<HeterWireReply(const QByteArray&, int)> wire)
+{
+    m_wireHost = host;
+    m_wire = std::move(wire);
+}
+
+void HeterSession::openViaBoard(int addr)
+{
+    releasePort(false);
+    if (m_wireHost == nullptr || !m_wire) {
+        emit linkFailed(QStringLiteral("канал к плате PS не задан"));
+        return;
+    }
+    m_addr = addr;
+    m_portName = QStringLiteral("плата PS");
+    m_viaBoard = true;
+    m_open = true;
+    m_clock.restart();
+    note(QStringLiteral("гетеродин через плату PS, адрес %1, чтение get_lo_params")
+             .arg(addr, 2, 10, QLatin1Char('0')));
+    const HeterReply params = transactOnThread(0x05, {}, true);
+    if (!params.ok) {
+        const QString reason = params.text.isEmpty() ? QStringLiteral("плата не ответила по RS-485") : params.text;
+        releasePort(true);
+        emit linkFailed(reason);
+        return;
+    }
+    m_poll->start();
+}
+
 void HeterSession::openSerial(const QString& portName, int addr)
 {
     releasePort(false);
@@ -307,6 +433,7 @@ void HeterSession::releasePort(bool notify)
 {
     m_poll->stop();
     m_open = false;
+    m_viaBoard = false;
 #ifdef AFAR_HAVE_SERIALPORT
     if (m_port != nullptr) {
         m_port->close();

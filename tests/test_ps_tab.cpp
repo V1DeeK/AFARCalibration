@@ -1046,50 +1046,20 @@ TEST_CASE("Модули — гетеродины, смеситель, видео
     connectUi(ui, server);
     QWidget& tab = *ui.parameters;
 
-    auto* lo1Write = child<QPushButton>(tab, "psLo1Write");
-    CHECK_FALSE(lo1Write->isEnabled());  // только в SERVICE
+    auto* mixerWrite = child<QPushButton>(tab, "psMixerWrite");
+    CHECK_FALSE(mixerWrite->isEnabled());  // только в SERVICE
     child<QPushButton>(tab, "psToService")->click();
-    REQUIRE(waitFor([&] { return lo1Write->isEnabled(); }));
+    REQUIRE(waitFor([&] { return mixerWrite->isEnabled(); }));
     auto* page = ui.parameters->modulesPage();
-    // Гетеродины — два разных устройства на линии RS-485.
-    CHECK(page->tabs()->tabToolTip(0).contains(QStringLiteral("0x01")));
-    CHECK(page->tabs()->tabToolTip(1).contains(QStringLiteral("0x02")));
-    CHECK(page->tabs()->tabText(4) == QStringLiteral("Коды решётки"));
+    // Гетеродины задаются на своей вкладке, здесь смеситель и видеоприёмник.
+    CHECK(page->tabs()->tabText(0) == QStringLiteral("Смеситель"));
+    CHECK(page->tabs()->tabToolTip(0).contains(QStringLiteral("0x03")));
+    CHECK(page->tabs()->tabToolTip(1).contains(QStringLiteral("0x04")));
+    CHECK(page->tabs()->tabText(2) == QStringLiteral("Коды решётки"));
+    CHECK(page->tabs()->findChild<QWidget*>(QStringLiteral("psLo1Write")) == nullptr);
 
     // Ничего не отмечено — не отправляем.
-    CHECK_FALSE(page->write(PsModulesPage::Lo1));
-
-    // Правка значения сама отмечает «Передать»; уходят только отмеченные поля.
-    child<QDoubleSpinBox>(tab, "psLo1_freq")->setValue(5500.0);
-    child<QDoubleSpinBox>(tab, "psLo1_att1")->setValue(0.5);
-    CHECK(child<QCheckBox>(tab, "psLo1_freq_send")->isChecked());
-    CHECK_FALSE(child<QCheckBox>(tab, "psLo1_att2_send")->isChecked());
-    lo1Write->click();
-    auto* lo1State = child<QLabel>(tab, "psLo1State");
-    REQUIRE(waitFor([&] { return lo1State->text().startsWith(QStringLiteral("Ответ: OK")); }));
-    CHECK(server.moduleState(1)["freq"] == 5'500'000'000LL);
-    CHECK(server.moduleState(1)["att1"] == 0.5);
-    CHECK(server.moduleState(1)["att2"] == 31.5);   // не передавали — не изменилось
-    CHECK(server.moduleState(2)["freq"] == 0);      // второй гетеродин не тронут
-
-    auto* ex = ui.parameters->exchangeTable();
-    waitFor([&] { return false; }, 250);
-    bool sentPartial = false;
-    for (int row = 0; row < ex->rowCount(); ++row) {
-        if (ex->item(row, 3)->text() == QStringLiteral("set_lo_params") &&
-            ex->item(row, 2)->text().contains(QStringLiteral("ушло"))) {
-            const QString j = ex->item(row, 6)->text();
-            sentPartial = j.contains(QStringLiteral("\"freq\":5500000000")) &&
-                          !j.contains(QStringLiteral("att2"));
-        }
-    }
-    CHECK(sentPartial);
-
-    child<QPushButton>(tab, "psLo2Read")->click();
-    auto* lo2State = child<QLabel>(tab, "psLo2State");
-    REQUIRE(waitFor([&] { return lo2State->text().contains(QStringLiteral("°C")); }));
-    CHECK(lo2State->text().contains(QStringLiteral("захвата частоты нет")));
-    CHECK_FALSE(child<QCheckBox>(tab, "psLo2_freq_send")->isChecked());  // чтение не отмечает
+    CHECK_FALSE(page->write(PsModulesPage::Video));
 
     child<QCheckBox>(tab, "psMixer3_send")->setChecked(true);
     child<QDoubleSpinBox>(tab, "psMixer3_if_att")->setValue(4.5);

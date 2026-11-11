@@ -202,7 +202,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     viewport->setWidget(root);
 
     // --- Настройка гетеродина: плата ADF4355-3 по RS-485 и серия с анализатором FSW ---
-    m_heterodyne = new HeterodyneTab(m_tabs);
+    m_heterodyne = new HeterodyneTab(m_psSession, m_tabs);
 
     // --- Спектр ---
     // Без OpenGL (платформа offscreen в автотестах) вкладка показывает пояснение вместо спектра.

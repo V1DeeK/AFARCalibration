@@ -1,6 +1,7 @@
 #include "HeterFsw.h"
 
 #include <QHostAddress>
+#include <QNetworkProxy>
 #include <QTcpSocket>
 #include <QUuid>
 
@@ -38,6 +39,7 @@ QString HeterFsw::identify(const QString& ip, const QString& device)
     QStringList errors;
     for (quint16 port : ports) {
         QTcpSocket sock;
+        sock.setProxy(QNetworkProxy::NoProxy);
         sock.connectToHost(address, port);
         if (!sock.waitForConnected(3000)) {
             errors << QStringLiteral("%1: %2").arg(port).arg(sock.errorString());
@@ -72,6 +74,7 @@ void HeterFsw::retune(const QString& ip, double centerHz)
         fail(QStringLiteral("частота для анализатора вне диапазона"));
     }
     QTcpSocket sock;
+    sock.setProxy(QNetworkProxy::NoProxy);
     sock.connectToHost(address, 5025);
     if (!sock.waitForConnected(800)) {
         fail(QStringLiteral("анализатор не ответил: ") + sock.errorString());
@@ -121,6 +124,7 @@ HeterFsw::HeterFsw(const QString& ip)
     m_channel = QStringLiteral("Heter_") + QUuid::createUuid().toString(QUuid::Id128).left(10);
     m_png = QStringLiteral("C:\\R_S\\INSTR\\USER\\") + m_channel + QStringLiteral(".png");
     m_sock = std::make_unique<QTcpSocket>();
+    m_sock->setProxy(QNetworkProxy::NoProxy);
     m_sock->connectToHost(address, 5025);
     if (!m_sock->waitForConnected(6000)) {
         fail(QStringLiteral("нет связи с FSW: ") + m_sock->errorString());

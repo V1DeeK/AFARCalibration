@@ -45,6 +45,10 @@ public:
     [[nodiscard]] quint16 port() const;
     [[nodiscard]] quint16 telemetryPort() const;
     [[nodiscard]] QString mac() const;
+    /// MAC второй платы. Пусто, если оператор её не запоминал.
+    [[nodiscard]] QString mac2() const;
+    /// Запомнить вторую плату. Пустая строка стирает её. false — MAC неверный.
+    bool rememberMac2(const QString& mac);
     /// Через сколько мс простоя канала уходит keep_alive (по умолчанию 5000).
     [[nodiscard]] int keepAliveMs() const;
     static constexpr int kKeepAliveMinMs = 200;
@@ -138,6 +142,10 @@ private:
     void saveSettings(const QString& host, quint16 port, quint16 telemetryPort, const QString& mac);
     void startLink(const QString& host, quint16 port, quint16 telemetryPort);
     void searchByMac();
+    /// Обе запомненные платы: сначала текущая, затем вторая.
+    [[nodiscard]] QStringList knownMacs() const;
+    /// Найденная плата становится текущей, прежняя остаётся второй.
+    void noteConnectedMac(const QString& mac);
     void onLinkState(PsLink::State state);
     void onResponse(const afar::ps::Envelope& response, afar::ps::Status status);
     void onEvent(const afar::ps::Envelope& event);

@@ -1,5 +1,7 @@
 #include "HeterodyneTab.h"
 
+#include "PsProtocol.h"
+#include "PsSession.h"
 #include "UiStyle.h"
 #include "heter/HeterFrame.h"
 #include "heter/HeterMeasure.h"
@@ -10,6 +12,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDesktopServices>
+#include <QEventLoop>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QFile>
@@ -18,6 +21,7 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -31,6 +35,7 @@
 #include <QStandardPaths>
 #include <QTabWidget>
 #include <QThread>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -61,6 +66,286 @@ QString bits32(quint32 value)
     return grouped;
 }
 
+class HeterPsBridge final : public QObject {
+public:
+    HeterPsBridge(PsSession* session, QObject* parent)
+        : QObject(parent)
+        , m_session(session)
+    {
+    }
+
+    HeterWireReply exchange(const QByteArray& frame, int timeoutMs)
+    {
+        HeterWireReply got;
+        if (m_session == nullptr || !m_session->link()->isReady()) {
+            got.error = QStringLiteral("PS: нет связи с платой");
+            return got;
+        }
+        if (!m_session->manualAllowed()) {
+            got.error = QStringLiteral("PS: ")
+                        + (m_session->lastError().isEmpty() ? QStringLiteral("команды сейчас недоступны")
+                                                           : m_session->lastError());
+            return got;
+        }
+        if (!m_session->modeKnown() || m_session->mode() != afar::ps::Mode::Service) {
+            got.error = QStringLiteral("PS: нужен сервисный режим");
+            return got;
+        }
+        if (frame.size() >= 3) {
+            const int addr = static_cast<quint8>(frame.at(0));
+            const auto func = static_cast<quint8>(frame.at(1));
+            const int len = static_cast<quint8>(frame.at(2));
+            const QByteArray data = frame.mid(3, len);
+            if (func == 0x0D) {
+                got.error = QStringLiteral("PS: ток накачки эта плата не принимает — в set_lo_params такого поля нет");
+                return got;
+            }
+            if (func == 0x05 || func == 0x06) {
+                return loRead(addr, func, timeoutMs);
+            }
+            if (func == 0x01 || func == 0x02 || func == 0x04) {
+                return loWrite(addr, func, data, timeoutMs);
+            }
+        }
+        const QString hex = QString::fromLatin1(frame.toHex()).toUpper();
+        QEventLoop loop;
+        QTimer timer;
+        timer.setSingleShot(true);
+        bool answered = false;
+        int pending = -1;
+        const QMetaObject::Connection response = connect(
+            m_session->link(), &PsLink::responseReceived, &loop,
+            [&](const afar::ps::Envelope& env, afar::ps::Status status) {
+                if (env.msg_count != pending || env.msg_type != afar::ps::msg::Rs485Send) {
+                    return;
+                }
+                answered = true;
+                if (status != afar::ps::Status::Ok) {
+                    got.error = QStringLiteral("PS: %1")
+                                    .arg(QString::fromStdString(afar::ps::statusRu(status)));
+                    loop.quit();
+                    return;
+                }
+                const auto data = env.payload.find("data");
+                if (data == env.payload.end() || !data->is_string()) {
+                    got.error = QStringLiteral("PS: в ответе нет байтов slave");
+                    loop.quit();
+                    return;
+                }
+                got.bytes = QByteArray::fromHex(QByteArray::fromStdString(data->get<std::string>()));
+                if (got.bytes.isEmpty()) {
+                    got.error = QStringLiteral("ответа нет");
+                }
+                loop.quit();
+            });
+        const QMetaObject::Connection timedOut = connect(
+            m_session->link(), &PsLink::commandTimedOut, &loop, [&](const QString& type, int count) {
+                if (count != pending || type != QLatin1String("rs485_send")) {
+                    return;
+                }
+                answered = true;
+                got.error = QStringLiteral("PS: нет ответа на rs485_send");
+                loop.quit();
+            });
+        pending = m_session->send(afar::ps::msg::Rs485Send, nlohmann::json{{"data", hex.toStdString()}});
+        if (pending < 0) {
+            disconnect(response);
+            disconnect(timedOut);
+            got.error = QStringLiteral("PS: ")
+                        + (m_session->lastError().isEmpty() ? QStringLiteral("rs485_send не отправлена")
+                                                           : m_session->lastError());
+            return got;
+        }
+        connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+        timer.start(timeoutMs);
+        loop.exec();
+        disconnect(response);
+        disconnect(timedOut);
+        if (!answered && got.error.isEmpty()) {
+            got.error = QStringLiteral("PS: нет ответа на rs485_send");
+        }
+        return got;
+    }
+
+private:
+    HeterWireReply call(std::string_view type, const nlohmann::json& payload, int timeoutMs)
+    {
+        HeterWireReply got;
+        QEventLoop loop;
+        QTimer timer;
+        timer.setSingleShot(true);
+        bool answered = false;
+        int pending = -1;
+        const QMetaObject::Connection response = connect(
+            m_session->link(), &PsLink::responseReceived, &loop,
+            [&](const afar::ps::Envelope& env, afar::ps::Status status) {
+                if (env.msg_count != pending || env.msg_type != type) {
+                    return;
+                }
+                answered = true;
+                if (status != afar::ps::Status::Ok) {
+                    got.error = QStringLiteral("PS: %1").arg(QString::fromStdString(afar::ps::statusRu(status)));
+                } else {
+                    got.bytes = QByteArray::fromStdString(env.payload.dump());
+                }
+                loop.quit();
+            });
+        const QMetaObject::Connection timedOut = connect(
+            m_session->link(), &PsLink::commandTimedOut, &loop, [&](const QString& gotType, int count) {
+                if (count != pending || gotType != QLatin1String(type.data(), static_cast<qsizetype>(type.size()))) {
+                    return;
+                }
+                answered = true;
+                got.error = QStringLiteral("PS: нет ответа на %1").arg(QString::fromUtf8(type.data(), static_cast<qsizetype>(type.size())));
+                loop.quit();
+            });
+        pending = m_session->send(type, payload);
+        if (pending < 0) {
+            disconnect(response);
+            disconnect(timedOut);
+            got.error = QStringLiteral("PS: ")
+                        + (m_session->lastError().isEmpty() ? QString::fromUtf8(type.data(), static_cast<qsizetype>(type.size()))
+                                                           : m_session->lastError());
+            return got;
+        }
+        connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+        timer.start(timeoutMs);
+        loop.exec();
+        disconnect(response);
+        disconnect(timedOut);
+        if (!answered && got.error.isEmpty()) {
+            got.error = QStringLiteral("PS: нет ответа на %1").arg(QString::fromUtf8(type.data(), static_cast<qsizetype>(type.size())));
+        }
+        return got;
+    }
+
+    HeterWireReply loRead(int addr, quint8 func, int timeoutMs)
+    {
+        const HeterWireReply raw = call(afar::ps::msg::GetLo, afar::ps::loGetPayload(addr), timeoutMs);
+        if (!raw.error.isEmpty()) {
+            return raw;
+        }
+        const nlohmann::json payload = nlohmann::json::parse(raw.bytes.constData(), nullptr, false);
+        HeterWireReply got;
+        if (!payload.is_object()) {
+            got.error = QStringLiteral("PS: ответ get_lo_params не разобран");
+            return got;
+        }
+        m_known.insert(addr, payload);
+        got.bytes = heter::frame(addr, static_cast<quint8>(func + 0x10), func == 0x06 ? healthWord(payload) : paramsWord(payload));
+        return got;
+    }
+
+    HeterWireReply loWrite(int addr, quint8 func, const QByteArray& data, int timeoutMs)
+    {
+        if (!m_known.contains(addr) || !m_known.value(addr).contains("freq")) {
+            const HeterWireReply raw = call(afar::ps::msg::GetLo, afar::ps::loGetPayload(addr), timeoutMs);
+            if (!raw.error.isEmpty()) {
+                return raw;
+            }
+            const nlohmann::json read = nlohmann::json::parse(raw.bytes.constData(), nullptr, false);
+            if (!read.is_object()) {
+                HeterWireReply got;
+                got.error = QStringLiteral("PS: ответ get_lo_params не разобран");
+                return got;
+            }
+            m_known.insert(addr, read);
+        }
+        // Плата отвечает INVALID_ARGUMENT, если в set_lo_params пришло одно поле.
+        afar::ps::ModuleValues values;
+        const nlohmann::json known = m_known.value(addr);
+        for (const char* key : {"pwr_b", "pwr_a", "en_b", "en_a", "en_rf", "en_syn", "ref", "freq", "att1", "att2"}) {
+            const auto it = known.find(key);
+            if (it != known.end() && it->is_number()) {
+                values[key] = it->get<double>();
+            }
+        }
+        if (func == 0x02 && data.size() >= 8) {
+            values["freq"] = static_cast<double>(heter::readU64(data, 0));
+        } else if (func == 0x01 && data.size() >= 2) {
+            const quint16 word = heter::readU16(data, 0);
+            values["ref"] = word & 1;
+            values["en_syn"] = (word >> 1) & 1;
+            values["en_rf"] = (word >> 2) & 1;
+            values["en_a"] = (word >> 3) & 1;
+            values["en_b"] = (word >> 4) & 1;
+            values["pwr_a"] = heter::powerDbm((word >> 8) & 3);
+            values["pwr_b"] = heter::powerDbm((word >> 10) & 3);
+        } else if (func == 0x04 && data.size() >= 2) {
+            values["att1"] = (static_cast<quint8>(data.at(0)) & 0x3F) / 2.0;
+            values["att2"] = (static_cast<quint8>(data.at(1)) & 0x3F) / 2.0;
+        }
+        nlohmann::json payload;
+        std::string error;
+        HeterWireReply got;
+        if (values.empty() || !afar::ps::loSetPayload(addr, values, payload, &error)) {
+            got.error = QStringLiteral("PS: %1").arg(QString::fromStdString(error.empty() ? "команда не разобрана" : error));
+            return got;
+        }
+        const HeterWireReply raw = call(afar::ps::msg::SetLo, payload, timeoutMs);
+        if (!raw.error.isEmpty()) {
+            return raw;
+        }
+        nlohmann::json updated = known;
+        for (const auto& [key, value] : values) {
+            updated[key] = value;
+        }
+        m_known.insert(addr, updated);
+        got.bytes = heter::frame(addr, static_cast<quint8>(func + 0x10), QByteArray(1, 0));
+        return got;
+    }
+
+    static double field(const nlohmann::json& payload, const char* key, double fallback)
+    {
+        const auto it = payload.find(key);
+        if (it == payload.end() || !it->is_number()) {
+            return fallback;
+        }
+        return it->get<double>();
+    }
+
+    static QByteArray paramsWord(const nlohmann::json& payload)
+    {
+        const int codeA = heter::powerCode(static_cast<int>(field(payload, "pwr_a", 5)));
+        const int codeB = heter::powerCode(static_cast<int>(field(payload, "pwr_b", 5)));
+        const quint16 word = static_cast<quint16>(
+            (static_cast<int>(field(payload, "ref", 0)) & 1) | ((static_cast<int>(field(payload, "en_syn", 0)) & 1) << 1)
+            | ((static_cast<int>(field(payload, "en_rf", 0)) & 1) << 2) | ((static_cast<int>(field(payload, "en_a", 0)) & 1) << 3)
+            | ((static_cast<int>(field(payload, "en_b", 0)) & 1) << 4) | ((static_cast<int>(field(payload, "lock", 0)) & 1) << 5)
+            | ((codeA < 0 ? 3 : codeA) << 8) | ((codeB < 0 ? 3 : codeB) << 10));
+        const quint16 att = static_cast<quint16>((qRound(field(payload, "att1", 31.5) * 2.0) & 0x3F)
+                                                 | ((qRound(field(payload, "att2", 31.5) * 2.0) & 0x3F) << 8));
+        const bool hasTemp = payload.contains("temp") && payload["temp"].is_number();
+        const qint16 temp = hasTemp ? static_cast<qint16>(qBound(-32767, qRound(field(payload, "temp", 0) * 100.0), 32767))
+                                    : static_cast<qint16>(kHeterTempNa);
+        QByteArray data(14, 0);
+        data[0] = static_cast<char>(word & 0xFF);
+        data[1] = static_cast<char>((word >> 8) & 0xFF);
+        data[2] = static_cast<char>(att & 0xFF);
+        data[3] = static_cast<char>((att >> 8) & 0xFF);
+        data[4] = static_cast<char>(temp & 0xFF);
+        data[5] = static_cast<char>((temp >> 8) & 0xFF);
+        const auto freq = static_cast<quint64>(field(payload, "freq", 0));
+        for (int i = 0; i < 8; ++i) {
+            data[6 + i] = static_cast<char>((freq >> (8 * i)) & 0xFF);
+        }
+        return data;
+    }
+
+    static QByteArray healthWord(const nlohmann::json& payload)
+    {
+        const bool hasTemp = payload.contains("temp") && payload["temp"].is_number();
+        const double temp = field(payload, "temp", 0);
+        const quint16 word = static_cast<quint16>((static_cast<int>(field(payload, "lock", 0)) & 1)
+                                                 | ((hasTemp && temp < 60.0) ? 2 : 0)
+                                                 | ((hasTemp && temp < 80.0) ? 4 : 0));
+        return heter::packU16(word);
+    }
+
+    PsSession* m_session = nullptr;
+    QHash<int, nlohmann::json> m_known;
+};
+
 QDoubleSpinBox* mhzBox(double value, QWidget* parent)
 {
     auto* box = new QDoubleSpinBox(parent);
@@ -73,8 +358,9 @@ QDoubleSpinBox* mhzBox(double value, QWidget* parent)
 
 }  // namespace
 
-HeterodyneTab::HeterodyneTab(QWidget* parent)
+HeterodyneTab::HeterodyneTab(PsSession* ps, QWidget* parent)
     : QWidget(parent)
+    , m_ps(ps)
 {
     setObjectName(QStringLiteral("heterodynePage"));
     qRegisterMetaType<HeterState>();
@@ -120,6 +406,12 @@ HeterodyneTab::HeterodyneTab(QWidget* parent)
     m_thread = new QThread(this);
     m_session = new HeterSession();
     m_measure = new HeterMeasure(m_session);
+    auto* bridge = new HeterPsBridge(m_ps, this);
+    m_session->setBoardWire(bridge, [bridge](const QByteArray& frame, int timeoutMs) {
+        return bridge->exchange(frame, timeoutMs);
+    });
+    m_serviceTimer = new QTimer(this);
+    m_serviceTimer->setSingleShot(true);
     m_session->moveToThread(m_thread);
     m_measure->moveToThread(m_thread);
     connect(m_session, &HeterSession::stateUpdated, this, [this](const HeterState& state) { applyState(state); });
@@ -127,6 +419,9 @@ HeterodyneTab::HeterodyneTab(QWidget* parent)
         m_result->setPlainText((reply.tx.isEmpty() ? QString() : QStringLiteral("отправлено: ") + reply.tx + QLatin1Char('\n'))
                                + (reply.rx.isEmpty() ? QString() : QStringLiteral("ответ: ") + reply.rx + QLatin1Char('\n'))
                                + reply.text);
+        if (!reply.ok && !reply.text.isEmpty()) {
+            m_freqHint->setText(reply.text);
+        }
     });
     connect(m_session, &HeterSession::logLine, this, [this](const QString& line) {
         if (!m_showRs->isChecked() && (line.contains(QStringLiteral("RS-485 команда")) || line.contains(QStringLiteral("RS-485 ответ")))) {
@@ -201,9 +496,26 @@ HeterodyneTab::HeterodyneTab(QWidget* parent)
     if (portIndex >= 0) {
         m_port->setCurrentIndex(portIndex);
     }
-    if (!m_port->currentData().toString().isEmpty()) {
+    const QString savedLink = settings.value(QStringLiteral("heterodyne/link"), QStringLiteral("com")).toString();
+    const int linkIndex = m_linkKind->findData(savedLink);
+    if (linkIndex >= 0) {
+        m_linkKind->setCurrentIndex(linkIndex);
+    }
+    m_port->setEnabled(m_linkKind->currentData().toString() != QLatin1String("ps"));
+    if (m_linkKind->currentData().toString() != QLatin1String("ps") && !m_port->currentData().toString().isEmpty()) {
         connectLink();
     }
+    connect(m_ps, &PsSession::modeChanged, this, [this] {
+        if (m_serviceWait && m_ps->modeKnown() && m_ps->mode() == afar::ps::Mode::Service) {
+            m_serviceWait = false;
+            m_serviceTimer->stop();
+            openHeterodyneOnPs();
+        }
+    });
+    connect(m_ps, &PsSession::modeRequestRefused, this, [this](const QString& reason) { cancelServiceWait(reason); });
+    connect(m_serviceTimer, &QTimer::timeout, this, [this] {
+        cancelServiceWait(QStringLiteral("плата PS не перешла в сервисный режим"));
+    });
 }
 
 HeterodyneTab::~HeterodyneTab()
@@ -211,6 +523,7 @@ HeterodyneTab::~HeterodyneTab()
     QSettings settings;
     settings.setValue(QStringLiteral("heterodyne/addr"), m_addr->currentData().toInt());
     settings.setValue(QStringLiteral("heterodyne/port"), m_port->currentData().toString());
+    settings.setValue(QStringLiteral("heterodyne/link"), m_linkKind->currentData().toString());
     settings.setValue(QStringLiteral("heterodyne/fsw_ip"), m_fswIp->text());
     settings.setValue(QStringLiteral("heterodyne/psu_ip"), m_psuIp->text());
     settings.setValue(QStringLiteral("heterodyne/enables"), m_enables->currentData().toString());
@@ -249,6 +562,10 @@ QWidget* HeterodyneTab::buildConnection()
     auto* box = new QGroupBox(QStringLiteral("Подключение"));
     auto* layout = new QVBoxLayout(box);
     ui::applyGroupLayout(layout);
+    m_linkKind = new QComboBox(box);
+    m_linkKind->setObjectName(QStringLiteral("heterLinkKind"));
+    m_linkKind->addItem(QStringLiteral("COM-порт"), QStringLiteral("com"));
+    m_linkKind->addItem(QStringLiteral("Плата PS, RS-485"), QStringLiteral("ps"));
     auto* portRow = new QHBoxLayout();
     m_port = new QComboBox(box);
     m_port->setObjectName(QStringLiteral("heterPort"));
@@ -271,6 +588,8 @@ QWidget* HeterodyneTab::buildConnection()
     auto* stateRow = new QHBoxLayout();
     stateRow->addWidget(m_status, 1);
     stateRow->addWidget(m_clock);
+    layout->addWidget(ui::captionLabel(QStringLiteral("Канал до гетеродина"), box));
+    layout->addWidget(m_linkKind);
     layout->addLayout(portRow);
     layout->addWidget(m_connect);
     layout->addLayout(stateRow);
@@ -300,9 +619,23 @@ QWidget* HeterodyneTab::buildConnection()
     layout->addWidget(m_psuStatus);
     if (!HeterSession::serialSupported()) {
         m_port->setEnabled(false);
-        m_connect->setEnabled(false);
-        m_status->setText(QStringLiteral("сборка без Qt Serial Port"));
     }
+    connect(m_linkKind, &QComboBox::currentIndexChanged, this, [this] {
+        const bool viaPs = m_linkKind->currentData().toString() == QLatin1String("ps");
+        m_port->setEnabled(!viaPs && HeterSession::serialSupported());
+        if (!viaPs || m_connect->text() == QStringLiteral("Отключить")) {
+            return;
+        }
+        if (m_ps == nullptr || !m_ps->link()->isReady()) {
+            const QString host = m_ps == nullptr ? QString() : m_ps->host();
+            m_status->setText(host.isEmpty()
+                                  ? QStringLiteral("нет связи с платой PS. Подключите её на вкладке «Настройки».")
+                                  : QStringLiteral("нет связи с платой PS (%1). Подключите её на вкладке «Настройки».")
+                                        .arg(host));
+            return;
+        }
+        m_status->setText(QStringLiteral("плата PS на связи (%1). Нажмите «Подключить».").arg(m_ps->host()));
+    });
     connect(refresh, &QPushButton::clicked, this, &HeterodyneTab::refreshPorts);
     connect(m_connect, &QPushButton::clicked, this, &HeterodyneTab::connectLink);
     connect(idFsw, &QPushButton::clicked, this, [this] {
@@ -449,8 +782,17 @@ QWidget* HeterodyneTab::buildAttenuators()
     auto* box = new QGroupBox(QStringLiteral("Аттенюаторы"));
     auto* layout = new QVBoxLayout(box);
     ui::applyGroupLayout(layout);
-    m_att1Value = new QLabel(QStringLiteral("31,5 дБ"), box);
-    m_att2Value = new QLabel(QStringLiteral("31,5 дБ"), box);
+    // Подпись 0 отправляет код 0, подпись −31,5 — код 63.
+    const auto attText = [](int slider) {
+        const double db = slider / 2.0 - 31.5;
+        QString text = QString::number(qAbs(db), 'f', 1).replace(QLatin1Char('.'), QLatin1Char(','));
+        if (db < -0.05) {
+            text.prepend(QStringLiteral("−"));
+        }
+        return text + QStringLiteral(" дБ");
+    };
+    m_att1Value = new QLabel(attText(63), box);
+    m_att2Value = new QLabel(attText(63), box);
     m_att1 = new QSlider(Qt::Horizontal, box);
     m_att2 = new QSlider(Qt::Horizontal, box);
     m_att1->setObjectName(QStringLiteral("heterAtt1"));
@@ -463,8 +805,9 @@ QWidget* HeterodyneTab::buildAttenuators()
         if (m_filling) {
             return;
         }
-        const double a = m_att1->value() / 2.0;
-        const double b = m_att2->value() / 2.0;
+        // Подпись 0 — код 0, подпись −31,5 — код 63.
+        const double a = 31.5 - m_att1->value() / 2.0;
+        const double b = 31.5 - m_att2->value() / 2.0;
         QMetaObject::invokeMethod(m_session, [this, a, b] { m_session->setAttenuators(a, b); }, Qt::QueuedConnection);
     };
     const auto channel = [this, sendAtt](const QString& caption, QLabel* value, QSlider* slider) {
@@ -492,10 +835,11 @@ QWidget* HeterodyneTab::buildAttenuators()
     };
     layout->addLayout(channel(QStringLiteral("Канал 1"), m_att1Value, m_att1));
     layout->addLayout(channel(QStringLiteral("Канал 2"), m_att2Value, m_att2));
-    const auto showAtt = [this] {
-        m_att1Value->setText(QString::number(m_att1->value() / 2.0, 'f', 1) + QStringLiteral(" дБ"));
-        m_att2Value->setText(QString::number(m_att2->value() / 2.0, 'f', 1) + QStringLiteral(" дБ"));
+    const auto showAtt = [this, attText] {
+        m_att1Value->setText(attText(m_att1->value()));
+        m_att2Value->setText(attText(m_att2->value()));
     };
+    layout->addWidget(ui::hintLabel(QStringLiteral("0 дБ — максимум, −31,5 дБ — минимум."), box));
     connect(m_att1, &QSlider::valueChanged, this, showAtt);
     connect(m_att2, &QSlider::valueChanged, this, showAtt);
     connect(m_att1, &QSlider::sliderReleased, this, sendAtt);
@@ -865,10 +1209,8 @@ QWidget* HeterodyneTab::buildMeasurePage()
 void HeterodyneTab::applyFrequency(double mhz)
 {
     m_freq->setValue(mhz);
+    m_freqHint->setText(QStringLiteral("ставлю частоту на гетеродине…"));
     QMetaObject::invokeMethod(m_session, [this, mhz] { m_session->setFrequencyMhz(mhz); }, Qt::QueuedConnection);
-    const QString ip = m_fswIp->text().trimmed();
-    m_freqHint->setText(QStringLiteral("перестройка анализатора…"));
-    QMetaObject::invokeMethod(m_measure, [this, ip, mhz] { m_measure->tune(ip, mhz); }, Qt::QueuedConnection);
 }
 
 void HeterodyneTab::startFlash()
@@ -928,9 +1270,61 @@ void HeterodyneTab::refreshPorts()
     }
 }
 
+void HeterodyneTab::cancelServiceWait(const QString& error)
+{
+    if (!m_serviceWait) {
+        return;
+    }
+    m_serviceWait = false;
+    m_serviceTimer->stop();
+    m_connect->setText(QStringLiteral("Подключить"));
+    m_linkError = error;
+    m_status->setText(QStringLiteral("нет связи: ") + error);
+}
+
+void HeterodyneTab::openHeterodyneOnPs()
+{
+    m_status->setText(QStringLiteral("запрос гетеродина по RS-485…"));
+    m_connect->setText(QStringLiteral("Отключить"));
+    const int addr = m_addr->currentData().toInt();
+    QMetaObject::invokeMethod(m_session, [this, addr] { m_session->openViaBoard(addr); }, Qt::QueuedConnection);
+}
+
+void HeterodyneTab::connectViaPs()
+{
+    if (m_ps == nullptr || !m_ps->link()->isReady()) {
+        m_linkError = QStringLiteral("сначала подключите плату PS на вкладке «Настройки»");
+        m_status->setText(QStringLiteral("нет связи: ") + m_linkError);
+        return;
+    }
+    if (!m_ps->manualAllowed()) {
+        m_linkError = m_ps->lastError().isEmpty() ? QStringLiteral("плата PS занята") : m_ps->lastError();
+        m_status->setText(QStringLiteral("нет связи: ") + m_linkError);
+        return;
+    }
+    m_userClosed = false;
+    m_linkError.clear();
+    m_filled = false;
+    if (m_ps->modeKnown() && m_ps->mode() == afar::ps::Mode::Service) {
+        openHeterodyneOnPs();
+        return;
+    }
+    m_status->setText(QStringLiteral("перевожу плату PS в сервисный режим…"));
+    m_connect->setText(QStringLiteral("Отключить"));
+    m_serviceWait = true;
+    if (m_ps->requestMode(afar::ps::Mode::Service) < 0) {
+        cancelServiceWait(m_ps->lastError().isEmpty() ? QStringLiteral("сервисный режим недоступен")
+                                                      : m_ps->lastError());
+        return;
+    }
+    m_serviceTimer->start(8000);
+}
+
 void HeterodyneTab::connectLink()
 {
     if (m_connect->text() == QStringLiteral("Отключить")) {
+        m_serviceWait = false;
+        m_serviceTimer->stop();
         m_userClosed = true;
         m_linkError.clear();
         QMetaObject::invokeMethod(m_session, &HeterSession::closeLink, Qt::QueuedConnection);
@@ -938,6 +1332,10 @@ void HeterodyneTab::connectLink()
         m_status->setText(QStringLiteral("отключено"));
         m_filled = false;
         setControlsEnabled(false);
+        return;
+    }
+    if (m_linkKind->currentData().toString() == QLatin1String("ps")) {
+        connectViaPs();
         return;
     }
     const int addr = m_addr->currentData().toInt();
@@ -995,8 +1393,8 @@ void HeterodyneTab::applyState(const HeterState& state)
         m_enB->setChecked(state.bEn);
         m_enRf->setChecked(state.enRf);
         m_enSyn->setChecked(state.ce);
-        m_att1->setValue(qRound(state.attDb[0] * 2.0));
-        m_att2->setValue(qRound(state.attDb[1] * 2.0));
+        m_att1->setValue(qRound((31.5 - state.attDb[0]) * 2.0));
+        m_att2->setValue(qRound((31.5 - state.attDb[1]) * 2.0));
         m_cp->setCurrentIndex(qBound(0, state.cp, 15));
         m_filling = false;
         m_filled = true;
@@ -1006,6 +1404,16 @@ void HeterodyneTab::applyState(const HeterState& state)
         m_tempValue->setText(QString::number(state.tempC, 'f', 2) + QStringLiteral(" °C"));
     } else {
         m_tempValue->setText(QStringLiteral("нет данных"));
+    }
+    // Центр анализатора следует за частотой, которую плата реально приняла.
+    if (state.fOutHz != 0 && state.fOutHz != m_analyzerHz) {
+        m_analyzerHz = state.fOutHz;
+        const QString ip = m_fswIp->text().trimmed();
+        if (!ip.isEmpty()) {
+            const double mhz = state.fOutHz / 1e6;
+            m_freqHint->setText(QStringLiteral("перестройка анализатора…"));
+            QMetaObject::invokeMethod(m_measure, [this, ip, mhz] { m_measure->tune(ip, mhz); }, Qt::QueuedConnection);
+        }
     }
     renderSchema(state);
 }
@@ -1040,10 +1448,15 @@ void HeterodyneTab::renderSchema(const HeterState& state)
 
     const auto channel = [&](QLabel* label, const QString& name, bool enabled, int power, double att) {
         const bool on = enabled && state.enRf && state.ce;
-        label->setText(QStringLiteral("%1 · %2 · %3 дБм · ослабление %4 дБ")
+        const double shown = -att;
+        QString attText = QString::number(qAbs(shown), 'f', 1).replace(QLatin1Char('.'), QLatin1Char(','));
+        if (shown < -0.05) {
+            attText.prepend(QStringLiteral("−"));
+        }
+        label->setText(QStringLiteral("%1 · %2 · %3 дБм · %4 дБ")
                            .arg(name, on ? QStringLiteral("включён") : QStringLiteral("выключен"))
                            .arg(power)
-                           .arg(att, 0, 'f', 1));
+                           .arg(attText));
         ui::setTone(label, on ? ui::Tone::Ok : ui::Tone::Neutral);
     };
     channel(m_outA, QStringLiteral("Канал 1"), state.aEn, state.aDbm, state.attDb[0]);

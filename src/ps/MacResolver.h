@@ -33,9 +33,22 @@ public:
     [[nodiscard]] bool busy() const { return m_busy; }
     /// probePort — TCP-порт, на который стучимся при опросе подсети.
     /// Новый поиск отменяет идущий: результат старого уже не придёт.
+    /// Несколько MAC — известные платы: подключаемся к той, которая сейчас
+    /// принимает порт. Если отвечают обе, берётся первая в списке.
     void resolve(const QString& mac, quint16 probePort);
+    /// ignoreIp — адрес, который только что не ответил: одну запись ARP с ним
+    /// не считаем находкой и опрашиваем сеть.
+    void resolve(const QStringList& macs, quint16 probePort, const QString& ignoreIp = {});
     /// Прерывает поиск сразу и без сигналов resolved/failed.
     void cancel();
+
+    /// Платы из списка, которые уже есть в таблице ARP: пары «IP, MAC».
+    /// Порядок совпадает со списком MAC.
+    [[nodiscard]] QVector<QPair<QString, QString>> boardsInArp(const QStringList& macs) const;
+    /// Кто из узлов принял TCP. Порядок сохраняется. Адрес чужой подсети,
+    /// у которой нет своего интерфейса, не опрашивается.
+    [[nodiscard]] QVector<QPair<QString, QString>> liveBoards(const QVector<QPair<QString, QString>>& hits,
+                                                              quint16 port) const;
 
     /// MAC узла с этим IP по таблице ARP или пусто (в формате AA:BB:CC:DD:EE:FF).
     [[nodiscard]] QString macForIp(const QString& ip) const;
@@ -67,7 +80,7 @@ private:
     void finishSweep();
 
     bool m_busy = false;
-    QString m_mac;
+    QStringList m_wanted;  ///< нормализованные MAC, первый — предпочтительный
     quint16 m_port = 0;
     QStringList m_candidates;
     int m_nextCandidate = 0;

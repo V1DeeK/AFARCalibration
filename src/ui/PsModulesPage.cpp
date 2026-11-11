@@ -92,16 +92,10 @@ PsModulesPage::PsModulesPage(PsLink* link, QWidget* parent)
     // Семь вкладок не растягивают «Модули» вширь: в узком окне появляются стрелки прокрутки.
     m_tabs->setUsesScrollButtons(true);
     m_tabs->setObjectName(QStringLiteral("psModulesTabs"));
-    m_tabs->addTab(buildModule(Lo1, ps::loFields()), qs(ps::loNameRu(ps::kLoMixer)));
-    m_tabs->addTab(buildModule(Lo2, ps::loFields()), qs(ps::loNameRu(ps::kLoCalibration)));
     m_tabs->addTab(buildMixer(), QStringLiteral("Смеситель"));
     m_tabs->addTab(buildModule(Video, ps::videoFields()), QStringLiteral("Видеоприёмник"));
-    // Два гетеродина — одинаковые по командам, но разные устройства на линии RS-485.
-    m_tabs->setTabToolTip(0, QStringLiteral("Адрес RS-485 0x01, set_lo_params/get_lo_params с addr = 1"));
-    m_tabs->setTabToolTip(1, QStringLiteral("Адрес RS-485 0x02, set_lo_params/get_lo_params с addr = 2; "
-                                            "команды те же, что у гетеродина смесителя"));
-    m_tabs->setTabToolTip(2, QStringLiteral("Адрес RS-485 0x03, set_mixer_params/get_mixer_params"));
-    m_tabs->setTabToolTip(3, QStringLiteral("Адрес RS-485 0x04, set_video_params/get_video_params"));
+    m_tabs->setTabToolTip(0, QStringLiteral("Адрес RS-485 0x03, set_mixer_params/get_mixer_params"));
+    m_tabs->setTabToolTip(1, QStringLiteral("Адрес RS-485 0x04, set_video_params/get_video_params"));
     layout->addWidget(m_tabs, 1);
     m_result = new QLabel(QStringLiteral("В «Записать» уходят только поля с отметкой «Передать», "
                                          "остальные PS не меняет. Кадры RS-485 собирает PS."),
@@ -392,6 +386,9 @@ QWidget* PsModulesPage::buildMixer()
 void PsModulesPage::setAllowed(bool allowed)
 {
     for (auto& mod : m_ui) {
+        if (mod.write == nullptr) {
+            continue;
+        }
         mod.write->setEnabled(allowed);
         mod.read->setEnabled(allowed);
     }
@@ -410,6 +407,9 @@ void PsModulesPage::sendCommand(Module m, std::string_view type, const json& pay
 
 bool PsModulesPage::write(Module m)
 {
+    if (m_ui[m].state == nullptr) {
+        return false;
+    }
     json payload;
     std::string error;
     bool ok = false;
@@ -464,6 +464,9 @@ bool PsModulesPage::write(Module m)
 
 bool PsModulesPage::read(Module m)
 {
+    if (m_ui[m].state == nullptr) {
+        return false;
+    }
     if (!m_link->isReady()) {
         m_ui[m].state->setText(QStringLiteral("Не отправлено: нет связи с PS"));
         return false;
@@ -506,7 +509,7 @@ void PsModulesPage::onResponse(const ps::Envelope& r, ps::Status status)
         }
         m = *addr == ps::kLoMixer ? Lo1 : *addr == ps::kLoCalibration ? Lo2 : ModuleCount;
     }
-    if (m != ModuleCount) {
+    if (m != ModuleCount && m_ui[m].state != nullptr) {
         showModule(m, status, r.payload);
     }
 }

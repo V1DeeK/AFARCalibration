@@ -2,13 +2,22 @@
 
 #include "HeterTypes.h"
 
+#include <QByteArray>
 #include <QElapsedTimer>
 #include <QMutex>
 #include <QObject>
 #include <QStringList>
 
+#include <functional>
+
 class QSerialPort;
 class QTimer;
+
+/// Ответ платы PS на один кадр RS-485. Пустой error — байты slave получены.
+struct HeterWireReply {
+    QByteArray bytes;
+    QString error;
+};
 
 /// Проверка файла .bin перед записью. address — куда класть образ через ST-Link.
 struct HeterFirmwareInfo {
@@ -19,8 +28,9 @@ struct HeterFirmwareInfo {
     QString error;
 };
 
-/// Связь с платой гетеродина по USB-RS485, 115200 8N1.
-/// Живёт в своём потоке. Слоты вызываются очередью, transact() — из потока измерения.
+/// Связь с платой гетеродина: напрямую по USB-RS485, 115200 8N1, либо через плату PS
+/// командами get_lo_params и set_lo_params. Живёт в своём потоке. Слоты вызываются
+/// очередью, transact() — из потока измерения.
 class HeterSession final : public QObject {
     Q_OBJECT
 
@@ -37,9 +47,12 @@ public:
 
     /// Блокирует вызывающий поток, пока кадр не уйдёт из потока сессии.
     HeterReply transact(quint8 func, const QByteArray& data);
+    /// Кадр уходит функцией wire на потоке host (плата PS). host не переносить в поток сессии.
+    void setBoardWire(QObject* host, std::function<HeterWireReply(const QByteArray&, int)> wire);
 
 public slots:
     void openSerial(const QString& portName, int addr);
+    void openViaBoard(int addr);
     void closeLink();
     void setFrequencyMhz(double mhz);
     void setConfig(int refExternal, int pwrA, int pwrB, bool enA, bool enB, bool enRf, bool enSyn);
@@ -65,6 +78,8 @@ private slots:
 
 private:
     HeterReply transactOnThread(quint8 func, const QByteArray& data, bool logFrames, int timeoutMs = 500);
+    HeterReply transactViaBoard(quint8 func, const QByteArray& tx, bool logFrames, int timeoutMs);
+    HeterWireReply askBoard(const QByteArray& frame, int timeoutMs);
     void releasePort(bool notify);
     void publish(const HeterState& state);
     void note(const QString& line);
@@ -73,6 +88,9 @@ private:
     mutable QMutex m_mutex;
     HeterState m_state;
     QSerialPort* m_port = nullptr;
+    QObject* m_wireHost = nullptr;
+    std::function<HeterWireReply(const QByteArray&, int)> m_wire;
+    bool m_viaBoard = false;
     QTimer* m_poll = nullptr;
     QElapsedTimer m_clock;
     int m_addr = 1;

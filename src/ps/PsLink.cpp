@@ -2,6 +2,7 @@
 
 #include <QHostAddress>
 #include <QNetworkDatagram>
+#include <QNetworkProxy>
 
 #include <algorithm>
 
@@ -26,6 +27,9 @@ PsLink::PsLink(QObject* parent)
     qRegisterMetaType<ps::Envelope>();
     qRegisterMetaType<ps::Status>();
     qRegisterMetaType<ps::Telemetry>();
+    // Системный HTTP-прокси не умеет сырой TCP до платы в лаборатории.
+    m_socket.setProxy(QNetworkProxy::NoProxy);
+    m_udp.setProxy(QNetworkProxy::NoProxy);
     m_clock.start();
     m_tick.setInterval(100);
     m_reconnect.setSingleShot(true);

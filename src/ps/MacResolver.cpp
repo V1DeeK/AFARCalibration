@@ -17,6 +17,57 @@ constexpr int kProbeTimeoutMs = 600;
 constexpr int kSweepTimeoutMs = 12000;
 constexpr int kArpTimeoutMs = 4000;
 
+bool usableInterface(const QNetworkInterface& iface)
+{
+    const auto flags = iface.flags();
+    if (!flags.testFlag(QNetworkInterface::IsUp) || !flags.testFlag(QNetworkInterface::IsRunning) ||
+        flags.testFlag(QNetworkInterface::IsLoopBack)) {
+        return false;
+    }
+    if (iface.type() == QNetworkInterface::Virtual || iface.type() == QNetworkInterface::Loopback) {
+        return false;
+    }
+    // VPN и туннели (happ-xray и похожие) отвечают на любой адрес лаборатории.
+    const QString name = (iface.humanReadableName() + QLatin1Char(' ') + iface.name()).toLower();
+    const QStringList banned{QStringLiteral("happ"),     QStringLiteral("xray"),    QStringLiteral("wintun"),
+                             QStringLiteral("wireguard"), QStringLiteral("vpn"),    QStringLiteral("virtual"),
+                             QStringLiteral("vmware"),    QStringLiteral("vbox"),   QStringLiteral("hyper-v"),
+                             QStringLiteral("tap"),       QStringLiteral("tun")};
+    for (const QString& word : banned) {
+        if (name.contains(word)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+QHostAddress bindAddressFor(const QString& ip)
+{
+    const QHostAddress target(ip);
+    if (target.protocol() != QAbstractSocket::IPv4Protocol || target.isLoopback()) {
+        return {};
+    }
+    const quint32 want = target.toIPv4Address();
+    for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+        if (!usableInterface(iface)) {
+            continue;
+        }
+        for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
+            if (entry.ip().protocol() != QAbstractSocket::IPv4Protocol || entry.prefixLength() < 24) {
+                continue;
+            }
+            const quint32 mask = entry.netmask().toIPv4Address();
+            if (mask == 0) {
+                continue;
+            }
+            if ((want & mask) == (entry.ip().toIPv4Address() & mask)) {
+                return entry.ip();
+            }
+        }
+    }
+    return {};
+}
+
 }  // namespace
 
 MacResolver::MacResolver(QObject* parent)
@@ -134,22 +185,107 @@ QString MacResolver::macForIp(const QString& ip) const
 
 void MacResolver::resolve(const QString& mac, quint16 probePort)
 {
+    resolve(QStringList{mac}, probePort);
+}
+
+QVector<QPair<QString, QString>> MacResolver::boardsInArp(const QStringList& macs) const
+{
+    const QHash<QString, QString> table = readArpTable();
+    QVector<QPair<QString, QString>> hits;
+    for (const QString& mac : macs) {
+        const QString key = normalizeMac(mac);
+        if (key.isEmpty()) {
+            continue;
+        }
+        const QString ip = table.value(key);
+        if (!ip.isEmpty()) {
+            hits.append({ip, formatMac(key)});
+        }
+    }
+    return hits;
+}
+
+QVector<QPair<QString, QString>> MacResolver::liveBoards(const QVector<QPair<QString, QString>>& hits,
+                                                         quint16 port) const
+{
+    QVector<QPair<QString, QString>> live;
+    for (const auto& hit : hits) {
+        QTcpSocket socket;
+        socket.setProxy(QNetworkProxy::NoProxy);
+        const QHostAddress local = bindAddressFor(hit.first);
+        const bool loopback = QHostAddress(hit.first).isLoopback();
+        if (!loopback && (local.isNull() || !socket.bind(local))) {
+            continue;
+        }
+        socket.connectToHost(hit.first, port);
+        if (socket.waitForConnected(kProbeTimeoutMs)) {
+            live.append(hit);
+        }
+        socket.abort();
+    }
+    return live;
+}
+
+void MacResolver::resolve(const QStringList& macs, quint16 probePort, const QString& ignoreIp)
+{
     cancel();
-    m_mac = normalizeMac(mac);
-    if (m_mac.isEmpty()) {
+    m_wanted.clear();
+    for (const QString& mac : macs) {
+        const QString key = normalizeMac(mac);
+        if (!key.isEmpty() && !m_wanted.contains(key)) {
+            m_wanted.append(key);
+        }
+    }
+    if (m_wanted.isEmpty()) {
         emit failed(QStringLiteral("Некорректный MAC-адрес. Формат: AA:BB:CC:DD:EE:FF"));
         return;
     }
     m_port = probePort;
     m_busy = true;
 
-    emit progress(QStringLiteral("Поиск %1 в таблице ARP…").arg(formatMac(m_mac)));
-    const QString cached = readArpTable().value(m_mac);
-    if (!cached.isEmpty()) {
+    QStringList shown;
+    for (const QString& key : m_wanted) {
+        shown << formatMac(key);
+    }
+    emit progress(QStringLiteral("Поиск %1 в таблице ARP…").arg(shown.join(QStringLiteral(", "))));
+    const QVector<QPair<QString, QString>> hits = boardsInArp(shown);
+    if (hits.size() == 1 && hits.first().first != ignoreIp) {
+        // Одна плата в ARP — подключаемся сразу. Пробное соединение не открываем:
+        // PS держит одного клиента.
         m_busy = false;
-        emit progress(QStringLiteral("Плата найдена в таблице ARP: %1").arg(cached));
-        emit resolved(cached, formatMac(m_mac));
+        emit progress(QStringLiteral("Плата найдена в таблице ARP: %1").arg(hits.first().first));
+        emit resolved(hits.first().first, hits.first().second);
         return;
+    }
+    if (hits.size() > 1) {
+        const QVector<QPair<QString, QString>> live = liveBoards(hits, m_port);
+        QPair<QString, QString> best;
+        if (!live.isEmpty()) {
+            best = live.first();
+            const QString preferred = formatMac(m_wanted.first());
+            for (const auto& item : live) {
+                if (item.second == preferred) {
+                    best = item;
+                    break;
+                }
+            }
+        }
+        if (!best.first.isEmpty()) {
+            m_busy = false;
+            QString text = QStringLiteral("Плата найдена в таблице ARP: %1").arg(best.first);
+            if (live.size() > 1) {
+                QStringList others;
+                for (const auto& item : live) {
+                    if (item.second != best.second) {
+                        others << QStringLiteral("%1 (%2)").arg(item.second, item.first);
+                    }
+                }
+                text += QStringLiteral(". Также в сети: %1").arg(others.join(QStringLiteral(", ")));
+            }
+            emit progress(text);
+            emit resolved(best.first, best.second);
+            return;
+        }
     }
     startSweep();
 }
@@ -179,9 +315,7 @@ QStringList MacResolver::systemCandidates()
     QStringList out;
     const auto interfaces = QNetworkInterface::allInterfaces();
     for (const QNetworkInterface& iface : interfaces) {
-        if (!iface.flags().testFlag(QNetworkInterface::IsUp) ||
-            !iface.flags().testFlag(QNetworkInterface::IsRunning) ||
-            iface.flags().testFlag(QNetworkInterface::IsLoopBack)) {
+        if (!usableInterface(iface)) {
             continue;
         }
         for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
@@ -229,8 +363,17 @@ void MacResolver::launchNextProbes()
 {
     while (m_probes.size() < kMaxParallelProbes && m_nextCandidate < m_candidates.size()) {
         const QString ip = m_candidates.at(m_nextCandidate++);
+        const QHostAddress local = bindAddressFor(ip);
+        // Свой список адресов задают автотесты: их подсеть на машине не обязана быть.
+        // В бою адрес без своего интерфейса не опрашиваем — его увёл бы VPN.
+        if (!m_candidateProvider && !QHostAddress(ip).isLoopback() && local.isNull()) {
+            continue;
+        }
         auto* socket = new QTcpSocket(this);
         socket->setProxy(QNetworkProxy::NoProxy);
+        if (!local.isNull()) {
+            socket->bind(local);
+        }
         auto* timeout = new QTimer(socket);
         timeout->setSingleShot(true);
         timeout->setInterval(kProbeTimeoutMs);
@@ -275,14 +418,27 @@ void MacResolver::finishSweep()
     if (!m_busy) {
         return;
     }
-    const QString mac = m_mac;
+    const QStringList wanted = m_wanted;
     cancel();  // останавливает таймер и оставшиеся сокеты, m_busy = false
-    const QString ip = readArpTable().value(mac);
+    const QHash<QString, QString> table = readArpTable();
+    QString mac;
+    QString ip;
+    for (const QString& key : wanted) {
+        const QString found = table.value(key);
+        if (!found.isEmpty()) {
+            mac = key;
+            ip = found;
+            break;
+        }
+    }
     if (ip.isEmpty()) {
         // Что реально есть в сети: узлы с открытым портом платы и их настоящие MAC.
         QVector<QPair<QString, QString>> open;
         QStringList described;
-        const QHash<QString, QString> table = readArpTable();
+        QStringList shown;
+        for (const QString& key : wanted) {
+            shown << formatMac(key);
+        }
         for (const QString& host : std::as_const(m_openHosts)) {
             QString hostMac;
             for (auto it = table.cbegin(); it != table.cend(); ++it) {
@@ -294,7 +450,7 @@ void MacResolver::finishSweep()
             open.append({host, hostMac});
             described << (hostMac.isEmpty() ? host : QStringLiteral("%1 (MAC %2)").arg(host, hostMac));
         }
-        QString reason = QStringLiteral("Плата с MAC %1 в локальной сети не найдена. ").arg(formatMac(mac));
+        QString reason = QStringLiteral("Плата с MAC %1 в локальной сети не найдена. ").arg(shown.join(QStringLiteral(", ")));
         if (!open.isEmpty()) {
             reason += QStringLiteral("Но порт %1 принимает подключения у: %2. Скорее всего, MAC платы указан неверно.")
                           .arg(m_port)

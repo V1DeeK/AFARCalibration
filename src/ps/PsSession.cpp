@@ -64,12 +64,17 @@ PsSession::PsSession(QObject* parent)
         emit statusChanged();
     });
     connect(m_resolver, &MacResolver::resolved, this, [this](const QString& ip, const QString& mac) {
+        const QString note = m_searchText.contains(QStringLiteral("Также в сети"))
+                                 ? m_searchText.mid(m_searchText.indexOf(QStringLiteral("Также в сети")))
+                                 : QString();
         m_searchText.clear();
         // Оператор успел нажать «Отключиться» — найденный адрес только запоминаем.
         QSettings s;
         s.setValue(kGroup + QStringLiteral("host"), ip);
+        noteConnectedMac(mac);
         emit hostResolved(ip);
-        emit message(QStringLiteral("Плата %1 найдена по MAC: %2").arg(mac, ip));
+        emit message(note.isEmpty() ? QStringLiteral("Плата %1 найдена по MAC: %2").arg(mac, ip)
+                                     : QStringLiteral("Плата %1 найдена по MAC: %2. %3").arg(mac, ip, note));
         if (!s.value(kGroup + QStringLiteral("auto_connect"), false).toBool() || m_seriesActive) {
             emit statusChanged();
             return;
@@ -116,6 +121,62 @@ QString PsSession::mac() const
         return MacResolver::formatMac(legacy);
     }
     return QString::fromLatin1(kDefaultMac);
+}
+
+QString PsSession::mac2() const
+{
+    const QString saved = QSettings().value(kGroup + QStringLiteral("mac2")).toString();
+    return MacResolver::isValidMac(saved) ? MacResolver::formatMac(saved) : QString();
+}
+
+bool PsSession::rememberMac2(const QString& mac)
+{
+    const QString m = mac.trimmed();
+    if (!m.isEmpty() && !MacResolver::isValidMac(m)) {
+        refuse(QStringLiteral("MAC второй платы указан неверно: %1. Формат AA:BB:CC:DD:EE:FF").arg(m));
+        return false;
+    }
+    QSettings().setValue(kGroup + QStringLiteral("mac2"),
+                         m.isEmpty() ? QString() : MacResolver::formatMac(m));
+    return true;
+}
+
+QStringList PsSession::knownMacs() const
+{
+    QStringList out;
+    const auto add = [&out](const QString& mac) {
+        if (!MacResolver::isValidMac(mac)) {
+            return;
+        }
+        const QString formatted = MacResolver::formatMac(mac);
+        if (!out.contains(formatted)) {
+            out.append(formatted);
+        }
+    };
+    add(mac());
+    add(mac2());
+    return out;
+}
+
+void PsSession::noteConnectedMac(const QString& mac)
+{
+    if (!MacResolver::isValidMac(mac)) {
+        return;
+    }
+    const QString found = MacResolver::formatMac(mac);
+    const QString current = this->mac();
+    if (found == current) {
+        return;
+    }
+    QSettings s;
+    s.setValue(kGroup + QStringLiteral("mac"), found);
+    s.setValue(QStringLiteral("board/mac"), found);
+    if (MacResolver::isValidMac(current)) {
+        s.setValue(kGroup + QStringLiteral("mac2"), current);
+    } else if (mac2() == found) {
+        s.setValue(kGroup + QStringLiteral("mac2"), QString());
+    }
+    emit boardMacDetected(found);
 }
 
 int PsSession::keepAliveMs() const
@@ -203,7 +264,7 @@ bool PsSession::findByMac(const QString& mac, quint16 port, quint16 telemetryPor
     m_link->disconnectFromPs();
     m_macSearchDone = true;
     m_resolver->cancel();
-    m_resolver->resolve(mac, port);
+    m_resolver->resolve(knownMacs(), port);
     emit statusChanged();
     return true;
 }
@@ -231,11 +292,47 @@ void PsSession::connectFromSettings()
     if (!autoConnect() || m_seriesActive) {
         return;
     }
+    const QStringList macs = knownMacs();
+    if (!macs.isEmpty()) {
+        // IP платы меняется. Сначала обе известные платы в ARP, без обхода подсети.
+        const QVector<QPair<QString, QString>> hits = m_resolver->boardsInArp(macs);
+        QVector<QPair<QString, QString>> live = hits;
+        if (hits.size() > 1) {
+            // Обе платы видны: берём ту, что принимает порт. Одну в ARP не трогаем
+            // пробным соединением — у PS один клиент.
+            live = m_resolver->liveBoards(hits, port());
+        }
+        if (!live.isEmpty()) {
+            QPair<QString, QString> best = live.first();
+            for (const auto& item : live) {
+                if (item.second == mac()) {
+                    best = item;
+                    break;
+                }
+            }
+            QSettings().setValue(kGroup + QStringLiteral("host"), best.first);
+            noteConnectedMac(best.second);
+            emit hostResolved(best.first);
+            QString text = QStringLiteral("Плата %1 в сети: %2").arg(best.second, best.first);
+            if (live.size() > 1) {
+                QStringList others;
+                for (const auto& item : live) {
+                    if (item.second != best.second) {
+                        others << QStringLiteral("%1 (%2)").arg(item.second, item.first);
+                    }
+                }
+                text += QStringLiteral(". Также в сети: %1").arg(others.join(QStringLiteral(", ")));
+            }
+            emit message(text);
+            startLink(best.first, port(), telemetryPort());
+            return;
+        }
+    }
     const QString h = host();
     if (!h.isEmpty()) {
         startLink(h, port(), telemetryPort());
-    } else if (MacResolver::isValidMac(mac())) {
-        findByMac(mac(), port(), telemetryPort());
+    } else if (!macs.isEmpty()) {
+        findByMac(macs.first(), port(), telemetryPort());
     }
 }
 
@@ -253,13 +350,13 @@ bool PsSession::busy() const
 // попытку подключения, дальше PsLink переподключается сам.
 void PsSession::searchByMac()
 {
-    const QString m = mac();
-    if (m_macSearchDone || m_resolver->busy() || !MacResolver::isValidMac(m) || !autoConnect()) {
+    const QStringList macs = knownMacs();
+    if (m_macSearchDone || m_resolver->busy() || macs.isEmpty() || !autoConnect()) {
         return;
     }
     m_macSearchDone = true;
-    emit message(QStringLiteral("%1 не отвечает, ищу плату по MAC %2").arg(m_link->host(), m));
-    m_resolver->resolve(m, m_link->port());
+    emit message(QStringLiteral("%1 не отвечает, ищу плату по MAC %2").arg(m_link->host(), macs.join(QStringLiteral(", "))));
+    m_resolver->resolve(macs, m_link->port(), m_link->host());
 }
 
 QString PsSession::statusText() const
@@ -320,10 +417,7 @@ void PsSession::onLinkState(PsLink::State state)
             if (real.isEmpty() || MacResolver::normalizeMac(real) == MacResolver::normalizeMac(mac())) {
                 return;
             }
-            QSettings s;
-            s.setValue(kGroup + QStringLiteral("mac"), real);
-            s.setValue(QStringLiteral("board/mac"), real);
-            emit boardMacDetected(real);
+            noteConnectedMac(real);
         });
         break;
     case PsLink::State::Connecting:

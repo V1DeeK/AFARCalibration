@@ -124,6 +124,9 @@ SettingsTab::SettingsTab(PsSession* session, QWidget* parent)
         if (!m_mac->hasFocus()) {
             m_mac->setText(mac);
         }
+        if (m_mac2 != nullptr && !m_mac2->hasFocus()) {
+            m_mac2->setText(m_session->mac2());
+        }
         m_message->setText(QStringLiteral("MAC платы определён по таблице ARP и подставлен: %1").arg(mac));
     });
     connect(m_session, &PsSession::boardCandidate, this, [this](const QString& ip, const QString& mac) {
@@ -809,12 +812,17 @@ QWidget* SettingsTab::buildConnectionBox()
     m_host->setObjectName(QStringLiteral("psHost"));
     m_host->setPlaceholderText(QStringLiteral("например 172.16.226.99"));
     m_host->setClearButtonEnabled(true);
-    m_host->setToolTip(QStringLiteral("IP-адрес платы. Если он пустой или плата по нему не отвечает, "
-                                      "плата ищется по MAC-адресу в локальной сети."));
+    m_host->setToolTip(QStringLiteral("IP платы меняется. Если адрес пустой или не отвечает, "
+                                      "программа ищет обе запомненные платы по MAC."));
     m_mac = new QLineEdit(m_session->mac(), box);
     m_mac->setObjectName(QStringLiteral("psMac"));
     m_mac->setPlaceholderText(QStringLiteral("AA:BB:CC:DD:EE:FF"));
-    m_mac->setToolTip(QStringLiteral("IP платы меняется, MAC постоянный: по нему плату находят в сети."));
+    m_mac->setToolTip(QStringLiteral("MAC текущей платы. IP меняется, MAC постоянный."));
+    m_mac2 = new QLineEdit(m_session->mac2(), box);
+    m_mac2->setObjectName(QStringLiteral("psMac2"));
+    m_mac2->setPlaceholderText(QStringLiteral("MAC второй платы"));
+    m_mac2->setToolTip(QStringLiteral("Вторая плата. Программа помнит оба MAC и подключается к той, "
+                                      "которая сейчас отвечает. Если отвечают обе — к последней рабочей."));
 
     m_port = new QSpinBox(box);
     m_port->setObjectName(QStringLiteral("psPort"));
@@ -859,8 +867,10 @@ QWidget* SettingsTab::buildConnectionBox()
 
     layout->addWidget(ui::captionLabel(QStringLiteral("IP-адрес"), box));
     layout->addWidget(m_host);
-    layout->addWidget(ui::captionLabel(QStringLiteral("MAC-адрес"), box));
+    layout->addWidget(ui::captionLabel(QStringLiteral("MAC платы"), box));
     layout->addWidget(m_mac);
+    layout->addWidget(ui::captionLabel(QStringLiteral("MAC второй платы"), box));
+    layout->addWidget(m_mac2);
     layout->addLayout(ports);
     layout->addWidget(m_linkState);
     layout->addLayout(buttons);
@@ -869,7 +879,7 @@ QWidget* SettingsTab::buildConnectionBox()
 
     connect(m_connect, &QPushButton::clicked, this, &SettingsTab::onMainButton);
     // Enter в любом поле — подключиться с тем, что введено (и повторить попытку, если она уже идёт).
-    for (QLineEdit* edit : {m_host, m_mac}) {
+    for (QLineEdit* edit : {m_host, m_mac, m_mac2}) {
         connect(edit, &QLineEdit::returnPressed, this, &SettingsTab::connectNow);
     }
     for (QSpinBox* spin : {m_port, m_tlmPort}) {
@@ -880,7 +890,13 @@ QWidget* SettingsTab::buildConnectionBox()
         });
     }
     connect(m_findByMac, &QPushButton::clicked, this, [this] {
-        m_session->findByMac(m_mac->text().trimmed(), static_cast<quint16>(m_port->value()),
+        if (!m_session->rememberMac2(m_mac2->text())) {
+            return;
+        }
+        const QString primary = m_mac->text().trimmed();
+        const QString secondary = m_mac2->text().trimmed();
+        const QString use = MacResolver::isValidMac(primary) ? primary : secondary;
+        m_session->findByMac(use, static_cast<quint16>(m_port->value()),
                              static_cast<quint16>(m_tlmPort->value()));
     });
     return box;
@@ -935,6 +951,9 @@ void SettingsTab::connectNow()
     if (m_session->link()->isReady() || m_session->seriesActive()) {
         return;
     }
+    if (!m_session->rememberMac2(m_mac2->text())) {
+        return;
+    }
     m_session->connectTo(m_host->text(), static_cast<quint16>(m_port->value()),
                          static_cast<quint16>(m_tlmPort->value()), m_mac->text());
 }
@@ -967,7 +986,8 @@ void SettingsTab::refreshConnection()
     // Пока связи нет, поля можно править всегда — и во время попыток подключения, и во время поиска по MAC.
     m_findByMac->setEnabled(!ready && !series);
     for (QWidget* w : {static_cast<QWidget*>(m_host), static_cast<QWidget*>(m_mac),
-                       static_cast<QWidget*>(m_port), static_cast<QWidget*>(m_tlmPort)}) {
+                       static_cast<QWidget*>(m_mac2), static_cast<QWidget*>(m_port),
+                       static_cast<QWidget*>(m_tlmPort)}) {
         w->setEnabled(!ready);
     }
 }

@@ -2,6 +2,7 @@
 
 #include <QDeadlineTimer>
 #include <QHostAddress>
+#include <QNetworkProxy>
 #include <QTcpSocket>
 #include <QUdpSocket>
 
@@ -63,6 +64,8 @@ void PsDutController::connect()
         fail("порт телеметрии UDP " + std::to_string(options_.telemetry_port) + " занят");
     }
     socket_ = std::make_unique<QTcpSocket>();
+    socket_->setProxy(QNetworkProxy::NoProxy);
+    udp_->setProxy(QNetworkProxy::NoProxy);
     socket_->connectToHost(QString::fromStdString(options_.host), options_.port);
     if (!socket_->waitForConnected(options_.timeout_ms)) {
         const std::string why = socket_->errorString().toStdString();

@@ -825,41 +825,20 @@ void setLoField(QWidget& p, const QString& prefix, const char* key, double value
 
 }  // namespace
 
-TEST_CASE("v8 3.6.1.5 set_lo_params: addr 1 и 2, поля таблицы 28, ответ с temp и lock", "[v8][lo]")
+TEST_CASE("v8 3.6.1.5 set_lo_params: addr 1 и 2, поля таблицы 28", "[v8][lo]")
 {
-    Bench b;
-    b.connect();
-    b.toService();
-    QWidget& p = *b.parameters;
-    setLoField(p, QStringLiteral("psLo1"), "pwr_b", -4);
-    setLoField(p, QStringLiteral("psLo1"), "en_syn", 1);
-    setLoField(p, QStringLiteral("psLo1"), "ref", 1);
-    setLoField(p, QStringLiteral("psLo1"), "freq", 5800.0);  // МГц на форме
-    setLoField(p, QStringLiteral("psLo1"), "att2", 31.5);
-    b.click("psLo1Write");
-    CHECK(b.received(ps::msg::SetLo) ==
-          json{{"addr", 1}, {"pwr_b", -4}, {"en_syn", 1}, {"ref", 1}, {"freq", 5'800'000'000LL}, {"att2", 31.5}});
-    REQUIRE(waitFor([&] { return child<QLabel>(p, "psLo1State")->text().contains(QStringLiteral("t =")); }));
-    CHECK(child<QLabel>(p, "psLo1State")->text().contains(QStringLiteral("захват")));
-
-    setLoField(p, QStringLiteral("psLo2"), "en_rf", 0);
-    b.click("psLo2Write");
-    REQUIRE(waitFor([&] { return b.server.last(ps::msg::SetLo)->payload.at("addr") == 2; }));
-    // Шаг 0,5 дБ и мощности −4/−1/2/5: остальное не отправляется.
+    // Гетеродины убраны из «Модулей»; набор полей проверяется сборщиком payload.
     json payload;
+    CHECK(ps::loSetPayload(1, {{"pwr_b", -4}, {"en_syn", 1}, {"ref", 1}, {"freq", 5'800'000'000.0}, {"att2", 31.5}},
+                           payload));
+    CHECK(payload == json{{"addr", 1}, {"pwr_b", -4}, {"en_syn", 1}, {"ref", 1}, {"freq", 5'800'000'000LL}, {"att2", 31.5}});
+    CHECK(ps::loSetPayload(2, {{"en_rf", 0}}, payload));
+    CHECK(payload == json{{"addr", 2}, {"en_rf", 0}});
+    CHECK(ps::loGetPayload(2) == json{{"addr", 2}});
+    // Шаг 0,5 дБ и мощности −4/−1/2/5: остальное не отправляется.
     CHECK_FALSE(ps::loSetPayload(1, {{"att1", 0.3}}, payload));
     CHECK_FALSE(ps::loSetPayload(1, {{"pwr_a", 3}}, payload));
     CHECK_FALSE(ps::loSetPayload(3, {{"en_rf", 1}}, payload));
-}
-
-TEST_CASE("v8 3.6.1.6 get_lo_params: только addr, ответ — все поля таблиц 28 и 29", "[v8][lo]")
-{
-    Bench b;
-    b.connect();
-    b.toService();
-    b.click("psLo2Read");
-    CHECK(b.received(ps::msg::GetLo) == json{{"addr", 2}});
-    REQUIRE(waitFor([&] { return child<QLabel>(*b.parameters, "psLo2State")->text().contains(QStringLiteral("OK")); }));
 }
 
 TEST_CASE("v8 3.6.1.7 set_mixer_params: 1–4 канала с n, en/rp/if_att/att, ответ с temp", "[v8][mixer]")
