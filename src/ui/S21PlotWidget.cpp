@@ -1,4 +1,5 @@
 #include "S21PlotWidget.h"
+#include "Theme.h"
 
 #include <QFontMetrics>
 #include <QMouseEvent>
@@ -481,7 +482,7 @@ void S21PlotWidget::paintPanel(QPainter& p,
         p.setBrush(Qt::NoBrush);
     }
     if (drawOverlay) {
-        p.setPen(QPen(QColor(0xC0, 0x55, 0x20), 1.5));
+        p.setPen(QPen(seriesColor(1), 1.5));
         p.drawPolyline(mapPolyline(m_overlayFreqGhz, m_overlayY));
     }
 
@@ -492,7 +493,7 @@ void S21PlotWidget::paintPanel(QPainter& p,
         }
         const int markerX = plot.left()
             + static_cast<int>(((markerFreq - x0) / dx) * plot.width());
-        p.setPen(QPen(QColor(0xB0, 0x20, 0x20), 1, Qt::DashLine));
+        p.setPen(QPen(themeColor(ThemeColor::Error), 1, Qt::DashLine));
         p.drawLine(markerX, plot.top(), markerX, plot.bottom());
         p.drawText(markerX + 3, plot.top() + 12, QStringLiteral("M%1").arg(marker + 1));
 

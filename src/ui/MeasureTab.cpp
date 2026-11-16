@@ -1,4 +1,5 @@
 #include "MeasureTab.h"
+#include "Theme.h"
 
 #include "S21PlotWidget.h"
 #include "S2VnaGraphHost.h"
@@ -43,10 +44,6 @@ const std::array<QString, 6> kGraphNames = {
     QStringLiteral("S11"), QStringLiteral("S21"),
     QStringLiteral("S12"), QStringLiteral("S22"),
     QStringLiteral("КСВН-1"), QStringLiteral("КСВН-2")};
-const std::array<QColor, 6> kGraphColors = {
-    QColor(0x2F, 0x80, 0xED), QColor(0x27, 0xAE, 0x60),
-    QColor(0xF2, 0x99, 0x4A), QColor(0xBB, 0x6B, 0xD9),
-    QColor(0xD6, 0x27, 0x28), QColor(0x17, 0xBE, 0xCF)};
 
 QVector<double> vswrFromReturnLossDb(const QVector<double>& reflectionDb)
 {
@@ -586,7 +583,7 @@ QWidget* MeasureTab::makeGraphsPage()
         button->setChecked(i < 4); // После измерения сразу видны все четыре S-параметра.
         button->setStyleSheet(QStringLiteral(
             "QPushButton { border-left: 5px solid %1; } QPushButton:checked { font-weight: 700; }")
-                                  .arg(kGraphColors[i].name()));
+                                  .arg(seriesColor(i).name()));
         connect(button, &QPushButton::toggled, this, [this, i](bool checked) {
             if (checked) {
                 const int first = i < 4 ? 4 : 0;

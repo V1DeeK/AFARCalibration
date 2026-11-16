@@ -995,8 +995,10 @@ QWidget* HeterodyneTab::buildParameters()
 
     m_schema = m_boardLive;
     m_boardLive->hide();
-    layout->addWidget(m_boardEmpty);
+    // Плашка «нет связи» — строка сверху, а не тонированная заливка всей страницы.
+    layout->addWidget(m_boardEmpty, 0, Qt::AlignTop);
     layout->addWidget(m_boardLive);
+    layout->addStretch(1);
     return page;
 }
 

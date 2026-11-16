@@ -1,5 +1,7 @@
 #include "UiStyle.h"
 
+#include "Theme.h"
+
 #include <QLabel>
 #include <QLayout>
 #include <QPushButton>
@@ -66,17 +68,17 @@ void setTone(QWidget* widget, Tone tone)
 
 QColor okColor()
 {
-    return QColor(0x2e, 0xa0, 0x43);
+    return themeColor(ThemeColor::OkText);
 }
 
 QColor warnColor()
 {
-    return QColor(0xd2, 0x99, 0x22);
+    return themeColor(ThemeColor::WarnText);
 }
 
 QColor errorColor()
 {
-    return QColor(0xf8, 0x51, 0x49);
+    return themeColor(ThemeColor::ErrorText);
 }
 
 QLabel* captionLabel(const QString& text, QWidget* parent)
