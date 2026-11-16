@@ -50,6 +50,18 @@ target_link_libraries(test_lut_math PRIVATE Catch2::Catch2WithMain afar_cal)
 afar_enable_warnings(test_lut_math)
 add_test(NAME lut_math COMMAND test_lut_math)
 
+# Проверка даташитов HMC624A/MAPS-010165 и совместная LUT усиления и фазы.
+add_executable(test_chip_check test_chip_check.cpp)
+target_link_libraries(test_chip_check PRIVATE Catch2::Catch2WithMain afar_cal)
+afar_enable_warnings(test_chip_check)
+add_test(NAME chip_check COMMAND test_chip_check)
+
+# Кадры Modbus RTU узла VIDEO (вкладка «Видеоприёмник»).
+add_executable(test_video_proto test_video_proto.cpp)
+target_link_libraries(test_video_proto PRIVATE Catch2::Catch2WithMain afar_video_proto)
+afar_enable_warnings(test_video_proto)
+add_test(NAME video_proto COMMAND test_video_proto)
+
 add_executable(test_quality_gates test_quality_gates.cpp)
 target_link_libraries(test_quality_gates PRIVATE Catch2::Catch2WithMain afar_cal afar_qc)
 afar_enable_warnings(test_quality_gates)

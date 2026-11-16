@@ -1,10 +1,15 @@
 #include "FourChannelPanel.h"
+#include "Theme.h"
 
 #include "Ppkh4Frame.h"
 #include "Ppkh4Link.h"
 #include "UiStyle.h"
 
+#include "ChannelAnalysis.h"
+#include <QApplication>
 #include <QComboBox>
+#include <QPointer>
+#include <QThread>
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -182,9 +187,19 @@ QString codeText(int code, const FieldFormat& field, bool phase)
     return QString::number(value, 'f', digits) + unit;
 }
 
-constexpr const char* kChannelColor[4] = {"#1d4ed8", "#15803d", "#c2410c", "#be123c"};
-constexpr const char* kPhaseColor = "#6d28d9";
-constexpr const char* kAttenColor = "#b45309";
+// Цвета битов — из палитры рядов темы: каналы 1…4, затем фаза и аттенюация.
+QString channelColor(int ch)
+{
+    return seriesColor(ch).name();
+}
+QString phaseColor()
+{
+    return seriesColor(3).name();
+}
+QString attenColor()
+{
+    return seriesColor(1).name();
+}
 constexpr int kWordBits = 12;
 
 QString bitCell(bool one, const QString& color)
@@ -200,7 +215,7 @@ QString packetHtml(const std::vector<bool>& bits)
     QString values;
     QString numbers;
     for (int ch = count - 1; ch >= 0; --ch) {
-        const QString color = QLatin1String(kChannelColor[ch]);
+        const QString color = channelColor(ch);
         header += QStringLiteral(
                       "<td colspan=\"%1\" align=\"center\" style=\"color:%2\"><b>Канал %3</b></td>")
                       .arg(kWordBits)
@@ -230,11 +245,11 @@ QString channelBitsHtml(const std::vector<bool>& bits, int channel, bool flip, c
     QString bottom;
     for (int i = kWordBits - 1; i >= 0; --i) {
         const int src = flip ? (kWordBits - 1 - i) : i;
-        QString color = QStringLiteral("#64748b");
+        QString color = themeColor(ThemeColor::Muted).name();
         if (src >= format.phase.offset && src < format.phase.offset + format.phase.width) {
-            color = QLatin1String(kPhaseColor);
+            color = phaseColor();
         } else if (src >= format.atten.offset && src < format.atten.offset + format.atten.width) {
-            color = QLatin1String(kAttenColor);
+            color = attenColor();
         }
         const bool one = base + i < static_cast<int>(bits.size())
                          && bits[static_cast<std::size_t>(base + i)];
@@ -1434,6 +1449,62 @@ QWidget* FourChannelPanel::makeMeasureBox()
     buttons->addWidget(m_measureStop);
     buttons->addWidget(m_openReport);
     lay->addLayout(buttons);
+
+    // Полоса прохода: все точки свипа пишутся в measurements.csv (замечание: одна частота 5,5 ГГц — мало).
+    auto* band = new QHBoxLayout();
+    const auto makeMhz = [box](const char* name, double lo, double hi, double value, double step) {
+        auto* spin = new QDoubleSpinBox(box);
+        spin->setObjectName(QString::fromLatin1(name));
+        spin->setRange(lo, hi);
+        spin->setDecimals(1);
+        spin->setSingleStep(step);
+        spin->setSuffix(QStringLiteral(" МГц"));
+        spin->setValue(value);
+        return spin;
+    };
+    QSettings bandSettings;
+    m_bandStart = makeMhz("fourChannelBandStart", 100.0, 20000.0,
+                          bandSettings.value(key("bandStartMhz"), 4900.0).toDouble(), 10.0);
+    m_bandStop = makeMhz("fourChannelBandStop", 100.0, 20000.0,
+                         bandSettings.value(key("bandStopMhz"), 6000.0).toDouble(), 10.0);
+    m_bandStep = makeMhz("fourChannelBandStep", 0.1, 1000.0,
+                         bandSettings.value(key("bandStepMhz"), 10.0).toDouble(), 1.0);
+    m_bandHint = ui::hintLabel(QString(), box);
+    m_bandHint->setObjectName(QStringLiteral("fourChannelBandHint"));
+    band->addWidget(new QLabel(QStringLiteral("Полоса прохода"), box));
+    band->addWidget(m_bandStart);
+    band->addWidget(new QLabel(QStringLiteral("—"), box));
+    band->addWidget(m_bandStop);
+    band->addWidget(new QLabel(QStringLiteral("шаг"), box));
+    band->addWidget(m_bandStep);
+    band->addWidget(m_bandHint, 1);
+    lay->addLayout(band);
+    const auto updateBand = [this] {
+        const int points = bandPoints();
+        m_bandHint->setText(points > 0 ? QStringLiteral("%1 точек на каждое состояние кодов").arg(points)
+                                       : QStringLiteral("стоп должен быть больше старта"));
+        ui::setTone(m_bandHint, points > 0 ? ui::Tone::Info : ui::Tone::Error);
+        if (m_loading) {
+            return;
+        }
+        QSettings s;
+        s.setValue(key("bandStartMhz"), m_bandStart->value());
+        s.setValue(key("bandStopMhz"), m_bandStop->value());
+        s.setValue(key("bandStepMhz"), m_bandStep->value());
+    };
+    for (QDoubleSpinBox* spin : {m_bandStart, m_bandStop, m_bandStep}) {
+        connect(spin, &QDoubleSpinBox::valueChanged, this, updateBand);
+    }
+    updateBand();
+
+    m_analyze = new QPushButton(QStringLiteral("Даташиты и таблицы коррекции…"), box);
+    m_analyze->setObjectName(QStringLiteral("fourChannelAnalyze"));
+    m_analyze->setToolTip(QStringLiteral("Проверить HMC624A и MAPS-010165 по measurements.csv и построить "
+                                         "таблицы коррекции усиления и фазы по каждой частоте."));
+    ui::setButtonRole(m_analyze, ui::ButtonRole::Secondary);
+    connect(m_analyze, &QPushButton::clicked, this, &FourChannelPanel::analyzeMeasurements);
+    band->addWidget(m_analyze);
+
     connect(m_measureStart, &QPushButton::clicked, this, &FourChannelPanel::startSweep);
     connect(m_measureAll, &QPushButton::clicked, this, &FourChannelPanel::startAllChannels);
     connect(m_repeatStart, &QPushButton::clicked, this, &FourChannelPanel::startRepeat);
@@ -1458,6 +1529,72 @@ QWidget* FourChannelPanel::makeMeasureBox()
     lay->addWidget(m_measureBar);
     setMeasureUi();
     return box;
+}
+
+int FourChannelPanel::bandPoints() const
+{
+    if (!m_bandStart || !m_bandStop || !m_bandStep) {
+        return 0;
+    }
+    const double span = m_bandStop->value() - m_bandStart->value();
+    const double step = m_bandStep->value();
+    if (!(span > 0.0) || !(step > 0.0)) {
+        return 0;
+    }
+    const double points = std::floor(span / step + 1e-9) + 1.0;
+    return static_cast<int>(std::clamp(points, 2.0, 100001.0));
+}
+
+void FourChannelPanel::analyzeMeasurements()
+{
+    const QString dir = latestReportDir();
+    const QString csv = QFileDialog::getOpenFileName(this, QStringLiteral("Измерения прохода 64×64"),
+                                                     dir + QStringLiteral("/measurements.csv"),
+                                                     QStringLiteral("measurements.csv (*.csv)"));
+    if (csv.isEmpty()) {
+        return;
+    }
+    const QString folder = QFileInfo(csv).absolutePath() + QStringLiteral("/analysis");
+    m_analyze->setEnabled(false);
+    m_measureStatus->setText(QStringLiteral("Разбор измерений: проверка даташитов и таблицы коррекции…"));
+    ui::setTone(m_measureStatus, ui::Tone::Info);
+    // Разбор — секунды на частоту (4096 состояний × цели × каналы): в отдельном потоке, GUI не ждёт.
+    const QPointer<FourChannelPanel> self(this);
+    QThread* worker = QThread::create([self, csv, folder] {
+        const ChannelAnalysisResult result = analyzeChannelMeasurements(
+            csv, folder, ChannelAnalysisOptions{}, [self](int done, int total) {
+                QMetaObject::invokeMethod(qApp, [self, done, total] {
+                    if (self) {
+                        self->m_measureStatus->setText(
+                            QStringLiteral("Разбор измерений: частота %1 из %2").arg(done).arg(total));
+                    }
+                });
+            });
+        QMetaObject::invokeMethod(qApp, [self, result] {
+            if (!self) {
+                return;
+            }
+            self->m_analyze->setEnabled(true);
+            if (!result.error.isEmpty()) {
+                self->m_measureStatus->setText(QStringLiteral("Разбор не выполнен: ") + result.error);
+                ui::setTone(self->m_measureStatus, ui::Tone::Error);
+                self->appendLog(QStringLiteral("разбор измерений: ") + result.error);
+                return;
+            }
+            QString text = QStringLiteral("Разбор готов: каналов %1, частот %2, LUT для %3 частот. Папка: %4")
+                               .arg(result.channels).arg(result.frequencies).arg(result.lutFrequencies)
+                               .arg(result.folder);
+            if (!result.warnings.isEmpty()) {
+                text += QStringLiteral("\n") + result.warnings.join(QLatin1Char('\n'));
+            }
+            self->m_measureStatus->setText(text);
+            ui::setTone(self->m_measureStatus, result.warnings.isEmpty() ? ui::Tone::Ok : ui::Tone::Warn);
+            self->appendLog(QStringLiteral("разбор измерений записан в ") + result.folder);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(result.summaryPath));
+        });
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
 }
 
 void FourChannelPanel::startSweep()
@@ -1493,6 +1630,12 @@ void FourChannelPanel::beginSweep(bool allChannels)
     }
     m_savedPhase = m_confirmedPhase;
     m_savedAtten = m_confirmedAtten;
+    if (bandPoints() <= 0) {
+        m_allChannels = false;
+        m_measureStatus->setText(QStringLiteral("Задайте полосу прохода: стоп больше старта."));
+        ui::setTone(m_measureStatus, ui::Tone::Error);
+        return;
+    }
     m_steps = buildChannelSteps({selectedIndex()}, max_code(m_format.phase.width),
                                 max_code(m_format.atten.width), m_savedPhase, m_savedAtten);
     if (m_steps.isEmpty()) {
@@ -1519,9 +1662,13 @@ void FourChannelPanel::beginSweep(bool allChannels)
     m_gridPending = true;
     m_sweepNote.clear();
     setMeasureUi();
-    m_measureStatus->setText(QStringLiteral("Ставлю одну частоту — середину полосы."));
+    const int points = bandPoints();
+    m_measureStatus->setText(QStringLiteral("Ставлю полосу %1–%2 МГц, %3 точек.")
+                                 .arg(m_bandStart->value(), 0, 'f', 1)
+                                 .arg(m_bandStop->value(), 0, 'f', 1)
+                                 .arg(points));
     appendLog(QStringLiteral("старт измерения: жду анализатор, кадры на плату пойдут после его ответа"));
-    emit channelGridRequested();
+    emit channelGridRequested(m_bandStart->value() * 1.0e6, m_bandStop->value() * 1.0e6, points);
 }
 
 void FourChannelPanel::startRepeat()

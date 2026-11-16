@@ -15,7 +15,8 @@ Ninja, Catch2. Целевая платформа — Windows 10/11 x64, MinGW/UC
 - `include/afar/` — публичные интерфейсы `IVna`, `IDutController`, типы свипа
 - `src/vna` (SCPI → S2VNA), `src/dut` (заглушка контроллера изделия),
   `src/measure` (автомат и оркестратор), `src/data`, `src/cal`, `src/qc`,
-  `src/report`, `src/sim`, `src/core`, `src/ui`, `src/app`
+  `src/report`, `src/sim`, `src/core`, `src/ui`, `src/app`, `src/video` (узел VIDEO
+  модуля видеоприёма из `V1DeeK/Video_receiver`, вкладка «Видеоприёмник»)
 - `tests/` — Catch2 + CTest
 - `docs/contracts/` — контракты: SCPI, C++-интерфейсы, форматы данных, коды
 - `docs/plans/`, `docs/reports/` — планы и отчёты; рабочий план —
@@ -35,7 +36,7 @@ ctest --test-dir build -R c2220_driver --output-on-failure   # один тест
 `hdf5_store`, `probe_run`, `pause_resume`, `crash_recovery`, `faults`,
 `export_manifest`, `two_port_export`, `c2220_driver`, `full_sim_run`,
 `lut_perf`, `at12_soak`, `verify_series_tool` (только при PowerShell),
-`ui_interactions`, `ppkh4_frame`. Подробности и типовые ошибки — скилл `build-and-test`.
+`ui_interactions`, `ppkh4_frame`, `chip_check`, `video_proto`. Подробности и типовые ошибки — скилл `build-and-test`.
 
 ## Жёсткие ограничения
 

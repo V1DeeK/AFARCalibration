@@ -1118,10 +1118,24 @@ void MeasureWorker::restoreChannelGrid()
     }
 }
 
-void MeasureWorker::prepareChannelGrid()
+void MeasureWorker::prepareChannelGrid(double startHz, double stopHz, int points)
 {
     if (m_backend != BackendSocket || !m_c2220 || !m_c2220->connected()) {
         emit channelGridReady(false, QStringLiteral("Анализатор не подключён"), 0, 0);
+        return;
+    }
+    // Проход 64×64 снимает всю рабочую полосу: таблицы коррекции строятся по каждой частоте.
+    // Раньше полоса сужалась до середины (center…center+1, 2 точки) и в CSV попадала одна частота.
+    if (!std::isfinite(startHz) || !std::isfinite(stopHz) || startHz < 0.0 || stopHz <= startHz) {
+        emit channelGridReady(false, QStringLiteral("Полоса прохода задана неверно"), 0, 0);
+        return;
+    }
+    const auto start = static_cast<std::uint64_t>(std::llround(startHz));
+    const auto stop = static_cast<std::uint64_t>(std::llround(stopHz));
+    if (start < afar::c2220::kFrequencyMinHz || stop > afar::c2220::kFrequencyMaxHz
+        || points < static_cast<int>(afar::c2220::kPointsMin)
+        || points > static_cast<int>(afar::c2220::kPointsMax)) {
+        emit channelGridReady(false, QStringLiteral("Полоса или число точек вне пределов C2220"), 0, 0);
         return;
     }
     try {
@@ -1130,12 +1144,8 @@ void MeasureWorker::prepareChannelGrid()
         m_channelBandStop = before.f_stop_hz;
         m_channelBandPoints = before.points;
         m_channelBandSaved = true;
-        const std::uint64_t center = (before.f_start_hz + before.f_stop_hz) / 2;
-        if (center < 100000 || center + 1 > 20000000000ULL) {
-            throw std::runtime_error("C2220Vna: center frequency is out of range");
-        }
-        m_c2220->set_sweep_points(2);
-        m_c2220->set_sweep_band(center, center + 1);
+        m_c2220->set_sweep_band(start, stop);
+        m_c2220->set_sweep_points(static_cast<std::uint32_t>(points));
         const QString markers = armChannelMarkers();
         if (!markers.isEmpty()) {
             restoreChannelGrid();
@@ -1143,16 +1153,24 @@ void MeasureWorker::prepareChannelGrid()
             return;
         }
         const SweepConfig after = m_c2220->read_config();
+        if (after.points < 2 || after.f_stop_hz <= after.f_start_hz) {
+            throw std::runtime_error("C2220Vna: sweep band was not accepted");
+        }
+        const double stepMhz = static_cast<double>(after.f_stop_hz - after.f_start_hz)
+                               / static_cast<double>(after.points - 1) / 1.0e6;
         const int settleMs = channelSweepSettleMs(static_cast<int>(after.points),
                                                    static_cast<int>(after.ifbw_hz), after.averages);
         emit channelGridReady(true,
-                              QStringLiteral("Частота %1 ГГц, середина полосы. Пауза %2 с "
-                                             "(2 свипа, ПЧ %3 Гц, усреднение %4).")
-                                  .arg(static_cast<double>(center) / 1.0e9, 0, 'f', 6)
+                              QStringLiteral("Полоса %1–%2 МГц, %3 точек, шаг %4 МГц — сохраняются все точки. "
+                                             "Пауза %5 с (2 свипа, ПЧ %6 Гц, усреднение %7).")
+                                  .arg(static_cast<double>(after.f_start_hz) / 1.0e6, 0, 'f', 1)
+                                  .arg(static_cast<double>(after.f_stop_hz) / 1.0e6, 0, 'f', 1)
+                                  .arg(after.points)
+                                  .arg(stepMhz, 0, 'f', 3)
                                   .arg(settleMs / 1000.0, 0, 'f', settleMs < 1000 ? 2 : 1)
                                   .arg(after.ifbw_hz)
                                   .arg(after.averages),
-                              0, settleMs);
+                              stepMhz, settleMs);
     } catch (const std::exception& ex) {
         restoreChannelGrid();
         emit channelGridReady(false, QString::fromUtf8(ex.what()), 0, 0);
@@ -1238,11 +1256,15 @@ void MeasureWorker::captureChannelMarkers(int stepIndex)
             try {
                 const ComplexSweep sweep = m_c2220->read_native_complex(s21Trace, SParameter::S21);
                 const int count = static_cast<int>(std::min(sweep.frequency_hz.size(), sweep.s21.size()));
-                if (count > 0) {
-                    const int mid = count / 2;
-                    freqHz = {static_cast<double>(sweep.frequency_hz[static_cast<std::size_t>(mid)])};
-                    gainDb = {afar::cal::magnitude_db(sweep.s21[static_cast<std::size_t>(mid)])};
-                    phaseDeg = {afar::cal::arg_deg(sweep.s21[static_cast<std::size_t>(mid)])};
+                // Все точки свипа: по ним строятся таблицы коррекции для каждой частоты полосы.
+                freqHz.reserve(count);
+                gainDb.reserve(count);
+                phaseDeg.reserve(count);
+                for (int i = 0; i < count; ++i) {
+                    const auto k = static_cast<std::size_t>(i);
+                    freqHz.append(static_cast<double>(sweep.frequency_hz[k]));
+                    gainDb.append(afar::cal::magnitude_db(sweep.s21[k]));
+                    phaseDeg.append(afar::cal::arg_deg(sweep.s21[k]));
                 }
             } catch (const std::exception&) {
             }

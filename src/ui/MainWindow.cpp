@@ -5,6 +5,7 @@
 #include "ConnectionBar.h"
 #include "FourChannelPanel.h"
 #include "HeterodyneTab.h"
+#include "VideoReceiverTab.h"
 #include "MeasureTab.h"
 #include "MeasureWorker.h"
 #include "BoardParametersPage.h"
@@ -182,9 +183,11 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
         // а отказ анализатора раньше обрывал перебор и возвращал старые коды.
         QMetaObject::invokeMethod(m_worker, "captureLiveTrace", Qt::QueuedConnection);
     });
-    connect(m_fourChannel, &FourChannelPanel::channelGridRequested, this, [this] {
-        QMetaObject::invokeMethod(m_worker, "prepareChannelGrid", Qt::QueuedConnection);
-    });
+    connect(m_fourChannel, &FourChannelPanel::channelGridRequested, this,
+            [this](double startHz, double stopHz, int points) {
+                QMetaObject::invokeMethod(m_worker, "prepareChannelGrid", Qt::QueuedConnection,
+                                          Q_ARG(double, startHz), Q_ARG(double, stopHz), Q_ARG(int, points));
+            });
     connect(m_fourChannel, &FourChannelPanel::channelBandRestoreRequested, this, [this] {
         QMetaObject::invokeMethod(m_worker, "restoreChannelGrid", Qt::QueuedConnection);
     });
@@ -238,6 +241,8 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_tabs->addTab(ui::scrollPage(m_settingsTab), QStringLiteral("Настройки"));
     m_tabs->addTab(viewport, QStringLiteral("Измерение S-параметров"));
     m_tabs->addTab(ui::scrollPage(m_heterodyne), QStringLiteral("Настройка гетеродина"));
+    // Модуль видеоприёма Э.468116.00133: свой порт USB-RS485, с остальными вкладками не связан.
+    m_tabs->addTab(ui::scrollPage(new VideoReceiverTab(m_tabs)), QStringLiteral("Видеоприёмник"));
     m_spectrumPage = spectrumPage;
     m_tabs->addTab(spectrumPage, QStringLiteral("Спектр"));
     m_tabs->addTab(ui::scrollPage(m_testRun), QStringLiteral("Тестовый прогон"));

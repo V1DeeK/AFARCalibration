@@ -75,6 +75,8 @@ add_library(afar_cal STATIC
     cal/PhaseMath.cpp
     cal/DirectLut.cpp
     cal/InverseLut.cpp
+    cal/ChipCheck.cpp
+    cal/ChipCheck.h
 )
 target_include_directories(afar_cal PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/cal
@@ -253,6 +255,30 @@ if(TARGET Qt6::SerialPort)
 endif()
 afar_enable_warnings(afar_heter)
 
+# Модуль видеоприёма Video_receiver_49_60: узел VIDEO по Modbus RTU (V1DeeK/Video_receiver).
+add_library(afar_video_proto STATIC
+    video/VideoProto.cpp
+    video/VideoProto.h
+)
+target_include_directories(afar_video_proto PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(afar_video_proto PUBLIC Qt6::Core)
+afar_enable_warnings(afar_video_proto)
+
+add_library(afar_video STATIC
+    video/VideoSession.cpp
+    video/VideoSession.h
+)
+set_target_properties(afar_video PROPERTIES AUTOMOC ON)
+target_link_libraries(afar_video PUBLIC afar_video_proto)
+if(TARGET Qt6::SerialPort)
+    target_link_libraries(afar_video PRIVATE Qt6::SerialPort)
+    target_compile_definitions(afar_video PRIVATE AFAR_HAVE_SERIALPORT)
+endif()
+afar_enable_warnings(afar_video)
+
+# Видео с USB-карты захвата на вкладке видеоприёмника. Без модуля вкладка показывает пояснение.
+find_package(Qt6 QUIET COMPONENTS Multimedia MultimediaWidgets)
+
 # IDutController через PS изделия: блокирующий драйвер для рабочего потока.
 add_library(afar_dut_ps STATIC
     dut/PsDutController.cpp
@@ -346,6 +372,10 @@ add_library(afar_app_ui STATIC
     ui/ChannelRun.h
     ui/HeterodyneTab.cpp
     ui/HeterodyneTab.h
+    ui/VideoReceiverTab.cpp
+    ui/VideoReceiverTab.h
+    ui/ChannelAnalysis.cpp
+    ui/ChannelAnalysis.h
 )
 target_include_directories(afar_app_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -377,7 +407,12 @@ target_link_libraries(afar_app_ui PUBLIC
     afar_dut_ps
     afar_ppkh4
     afar_heter
+    afar_video
 )
+if(TARGET Qt6::MultimediaWidgets)
+    target_link_libraries(afar_app_ui PUBLIC Qt6::Multimedia Qt6::MultimediaWidgets)
+    target_compile_definitions(afar_app_ui PRIVATE AFAR_HAVE_MULTIMEDIA)
+endif()
 if(WIN32)
     target_link_libraries(afar_app_ui PUBLIC Psapi)
 endif()

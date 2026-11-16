@@ -457,8 +457,8 @@ QString writeChannelCsv(const QString& folder, const QVector<ChannelPoint>& poin
                                      .arg(static_cast<qint64>(std::llround(frequency)))
                                      .arg(point.step.phase)
                                      .arg(point.step.atten)
-                                     .arg(gain, 0, 'f', 2)
-                                     .arg(phase, 0, 'f', 2);
+                                     .arg(gain, 0, 'f', 3)
+                                     .arg(phase, 0, 'f', 3);
             file.write(line.toUtf8());
         }
     }

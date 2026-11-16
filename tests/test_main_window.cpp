@@ -332,7 +332,8 @@ TEST_CASE("Главное окно: вкладки в порядке эскиз�
         names << w.tabs->tabText(i);
     }
     CHECK(names == QStringList{QStringLiteral("Настройки"), QStringLiteral("Измерение S-параметров"),
-                               QStringLiteral("Настройка гетеродина"), QStringLiteral("Спектр"),
+                               QStringLiteral("Настройка гетеродина"), QStringLiteral("Видеоприёмник"),
+                               QStringLiteral("Спектр"),
                                QStringLiteral("Тестовый прогон"), QStringLiteral("Приёмка")});
     // Окно умещается на небольшом экране: содержимое вкладок прокручивается, а не растягивает окно.
     CHECK(w.window->minimumSizeHint().width() <= 920);
@@ -583,13 +584,14 @@ TEST_CASE("CSV усиления и фазы S21", "[gridcsv]")
     zero.step.channel = 0;
     zero.step.phase = 0;
     zero.step.atten = 0;
-    zero.s21FreqHz = {10000000000.0};
-    zero.s21GainDb = {21.40};
-    zero.s21PhaseDeg = {12.00};
+    // Проход пишет все точки свипа: на одну пару кодов — по строке на частоту.
+    zero.s21FreqHz = {4900000000.0, 5500000000.0, 6000000000.0};
+    zero.s21GainDb = {21.40, 21.125, 20.8};
+    zero.s21PhaseDeg = {12.00, -170.5, 33.333};
     ChannelPoint next = zero;
     next.step.atten = 1;
-    next.s21GainDb = {20.92};
-    next.s21PhaseDeg = {12.30};
+    next.s21GainDb = {20.92, 20.6, 20.3};
+    next.s21PhaseDeg = {12.30, -170.1, 33.7};
     QTemporaryDir dir;
     REQUIRE(dir.isValid());
     CHECK(writeChannelCsv(dir.path(), {zero, next}).isEmpty());
@@ -597,8 +599,10 @@ TEST_CASE("CSV усиления и фазы S21", "[gridcsv]")
     REQUIRE(file.open(QIODevice::ReadOnly));
     const QString text = QString::fromUtf8(file.readAll());
     CHECK(text.startsWith(QStringLiteral("channel_id,freq_hz,phase_code,att_code,gain_db,phase_deg\n")));
-    CHECK(text.contains(QStringLiteral("0,10000000000,0,0,21.40,12.00\n")));
-    CHECK(text.contains(QStringLiteral("0,10000000000,0,1,20.92,12.30\n")));
+    CHECK(text.count(QLatin1Char('\n')) == 7);
+    CHECK(text.contains(QStringLiteral("0,4900000000,0,0,21.400,12.000\n")));
+    CHECK(text.contains(QStringLiteral("0,5500000000,0,0,21.125,-170.500\n")));
+    CHECK(text.contains(QStringLiteral("0,6000000000,0,1,20.300,33.700\n")));
 }
 
 TEST_CASE("Сетка фазы и аттенюации", "[gridsteps]")

@@ -58,8 +58,8 @@ public:
 signals:
     /// Нужен один полный снимок S11/S21/S12/S22 текущими настройками свипа.
     void channelSweepRequested();
-    /// Сузить свип до середины текущей полосы.
-    void channelGridRequested();
+    /// Поставить полосу прохода: старт, стоп, число точек. Сохраняются все точки свипа.
+    void channelGridRequested(double startHz, double stopHz, int points);
     /// Вернуть полосу и число точек анализатора после прохода.
     void channelBandRestoreRequested();
     /// Прочитать маркеры max/min/peak со всех четырёх графиков.
@@ -119,6 +119,10 @@ private:
     void startSweep();
     void startAllChannels();
     void beginSweep(bool allChannels);
+    /// Число точек свипа по полосе и шагу из полей. Нет полосы — 0.
+    [[nodiscard]] int bandPoints() const;
+    /// Выбрать measurements.csv, проверить даташиты и записать таблицы коррекции.
+    void analyzeMeasurements();
     void startRepeat();
     void stopMeasure(const QString& outcome);
     void askNextChannel();
@@ -246,6 +250,11 @@ private:
     QComboBox* m_repeatCount = nullptr;
     QPushButton* m_measureStop = nullptr;
     QPushButton* m_openReport = nullptr;
+    QPushButton* m_analyze = nullptr;
+    QDoubleSpinBox* m_bandStart = nullptr;
+    QDoubleSpinBox* m_bandStop = nullptr;
+    QDoubleSpinBox* m_bandStep = nullptr;
+    QLabel* m_bandHint = nullptr;
     QLabel* m_measureStatus = nullptr;
     QProgressBar* m_measureBar = nullptr;
 };

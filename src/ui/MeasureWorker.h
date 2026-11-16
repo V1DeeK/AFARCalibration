@@ -101,8 +101,8 @@ public slots:
                     int averages);
     /// |S| текущей трассы S2VNA. Запуск и частоту не меняет.
     void captureLiveTrace();
-    /// Середина текущей полосы, 2 точки. ПЧ и усреднение не меняет.
-    void prepareChannelGrid();
+    /// Полоса прохода startHz…stopHz, points точек. ПЧ и усреднение не меняет.
+    void prepareChannelGrid(double startHz, double stopHz, int points);
     /// Вернуть старт, стоп и число точек, которые были до prepareChannelGrid.
     void restoreChannelGrid();
     /// Уже включённые маркеры: максимум на S11/S21/S12/S22 и пик на S21.
