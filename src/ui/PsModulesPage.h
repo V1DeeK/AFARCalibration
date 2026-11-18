@@ -59,7 +59,8 @@ private:
 
     QWidget* buildModule(Module m, const std::vector<afar::ps::ModuleField>& fields);
     QWidget* buildMixer();
-    QWidget* makeEditor(const afar::ps::ModuleField& f, const QString& name, QCheckBox* send);
+    QWidget* makeEditor(const afar::ps::ModuleField& f, const QString& name, QCheckBox* send,
+                        bool videoGain = false);
     double editorValue(const afar::ps::ModuleField& f, QWidget* editor) const;
     void setEditorValue(const afar::ps::ModuleField& f, QWidget* editor, double v);
     void onResponse(const afar::ps::Envelope& r, afar::ps::Status status);

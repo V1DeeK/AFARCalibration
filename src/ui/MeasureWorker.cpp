@@ -431,6 +431,9 @@ void MeasureWorker::probeVna()
     }
     if (ok) {
         m_lastIdn = QString::fromStdString(idn);
+        // Подключение только проверяет *IDN?. Загрузка .sta и смена полосы
+        // стирают живой график S2VNA (трассы падают на −200 дБ). Стимул
+        // прохода ставится позже, в prepareChannelGrid, когда измерение начато.
         if (m_c2220) {
             try {
                 emit vnaCalibrationDetected(
@@ -1144,8 +1147,12 @@ void MeasureWorker::prepareChannelGrid(double startHz, double stopHz, int points
         m_channelBandStop = before.f_stop_hz;
         m_channelBandPoints = before.points;
         m_channelBandSaved = true;
+        // Файл .sta не грузим: он заменяет весь экран. Полоса и шаг — с панели,
+        // иначе проход идёт по 5001 точке и один код занимает несколько секунд.
         m_c2220->set_sweep_band(start, stop);
         m_c2220->set_sweep_points(static_cast<std::uint32_t>(points));
+        m_c2220->set_source_power(-40.0);
+        m_c2220->resume_live_display();
         const QString markers = armChannelMarkers();
         if (!markers.isEmpty()) {
             restoreChannelGrid();
@@ -1253,10 +1260,12 @@ void MeasureWorker::captureChannelMarkers(int stepIndex)
         QVector<double> gainDb;
         QVector<double> phaseDeg;
         if (s21Trace > 0) {
-            try {
+            auto readS21 = [&] {
                 const ComplexSweep sweep = m_c2220->read_native_complex(s21Trace, SParameter::S21);
                 const int count = static_cast<int>(std::min(sweep.frequency_hz.size(), sweep.s21.size()));
-                // Все точки свипа: по ним строятся таблицы коррекции для каждой частоты полосы.
+                freqHz.clear();
+                gainDb.clear();
+                phaseDeg.clear();
                 freqHz.reserve(count);
                 gainDb.reserve(count);
                 phaseDeg.reserve(count);
@@ -1266,7 +1275,17 @@ void MeasureWorker::captureChannelMarkers(int stepIndex)
                     gainDb.append(afar::cal::magnitude_db(sweep.s21[k]));
                     phaseDeg.append(afar::cal::arg_deg(sweep.s21[k]));
                 }
-            } catch (const std::exception&) {
+            };
+            try {
+                readS21();
+            } catch (const std::exception& first) {
+                try {
+                    m_c2220->complete_one_sweep();
+                    readS21();
+                } catch (const std::exception&) {
+                    emit diagnostic(QStringLiteral("S21 по частотам не прочитан: %1")
+                                        .arg(QString::fromUtf8(first.what())));
+                }
             }
         }
         if (!s11Ok && !s22Ok && !s21Ok && !s12Ok && !peakOk && freqHz.isEmpty()) {

@@ -435,33 +435,59 @@ QImage renderChannelGraph(const ChannelPoint& point, const QSize& size)
     return image;
 }
 
+static void writeChannelCsvPoint(QFile& file, const ChannelPoint& point)
+{
+    const int count = std::min(point.s21FreqHz.size(),
+                                std::min(point.s21GainDb.size(), point.s21PhaseDeg.size()));
+    for (int i = 0; i < count; ++i) {
+        const double frequency = point.s21FreqHz.at(i);
+        const double gain = point.s21GainDb.at(i);
+        const double phase = point.s21PhaseDeg.at(i);
+        if (!std::isfinite(frequency) || frequency <= 0.0) {
+            continue;
+        }
+        // Нулевой комплекс S2VNA рисует как −200 дБ. Строка частоты остаётся, фаза пустая.
+        const QString gainText = std::isfinite(gain) ? QString::number(gain, 'f', 3)
+                                                     : QStringLiteral("-200.000");
+        const QString phaseText = std::isfinite(gain) && std::isfinite(phase) ? QString::number(phase, 'f', 3)
+                                                                              : QString();
+        const QString line = QStringLiteral("%1,%2,%3,%4,%5,%6,%7\n")
+                                 .arg(point.step.channel)
+                                 .arg(static_cast<qint64>(std::llround(frequency)))
+                                 .arg(frequency / 1e6, 0, 'f', 3)
+                                 .arg(point.step.phase)
+                                 .arg(point.step.atten)
+                                 .arg(gainText)
+                                 .arg(phaseText);
+        file.write(line.toUtf8());
+    }
+}
+
 QString writeChannelCsv(const QString& folder, const QVector<ChannelPoint>& points)
 {
     QFile file(folder + QStringLiteral("/measurements.csv"));
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         return QStringLiteral("не удалось записать CSV");
     }
-    file.write("channel_id,freq_hz,phase_code,att_code,gain_db,phase_deg\n");
+    file.write("channel_id,freq_hz,freq_mhz,phase_code,att_code,gain_db,phase_deg\n");
     for (const ChannelPoint& point : points) {
-        const int count = std::min(point.s21FreqHz.size(),
-                                    std::min(point.s21GainDb.size(), point.s21PhaseDeg.size()));
-        for (int i = 0; i < count; ++i) {
-            const double frequency = point.s21FreqHz.at(i);
-            const double gain = point.s21GainDb.at(i);
-            const double phase = point.s21PhaseDeg.at(i);
-            if (!std::isfinite(frequency) || frequency <= 0.0 || !std::isfinite(gain) || !std::isfinite(phase)) {
-                continue;
-            }
-            const QString line = QStringLiteral("%1,%2,%3,%4,%5,%6\n")
-                                     .arg(point.step.channel)
-                                     .arg(static_cast<qint64>(std::llround(frequency)))
-                                     .arg(point.step.phase)
-                                     .arg(point.step.atten)
-                                     .arg(gain, 0, 'f', 3)
-                                     .arg(phase, 0, 'f', 3);
-            file.write(line.toUtf8());
-        }
+        writeChannelCsvPoint(file, point);
     }
+    return QString();
+}
+
+QString appendChannelCsv(const QString& folder, const ChannelPoint& point)
+{
+    QFile file(folder + QStringLiteral("/measurements.csv"));
+    const bool fresh = !file.exists() || file.size() == 0;
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) {
+        return QStringLiteral("не удалось дописать CSV");
+    }
+    if (fresh) {
+        file.write("channel_id,freq_hz,freq_mhz,phase_code,att_code,gain_db,phase_deg\n");
+    }
+    writeChannelCsvPoint(file, point);
+    file.flush();
     return QString();
 }
 
@@ -513,15 +539,17 @@ QString writeChannelReport(const QString& folder, const QString& title, const QV
                              .arg(peak.peakDb, 0, 'f', 1));
     }
     label(28, note.isEmpty() ? 98 : 116,
-          QStringLiteral("Точек: %1. S11, S22, S21 и S12 — максимум маркера своего графика. "
-                         "S11 и S22 в формате КСВ записаны как на анализаторе. Пик — маркер пика на S21, дБ. "
-                         "Жёлтая строка — наибольший пик. «график» открывает снимок этой точки.")
+          QStringLiteral("Состояний кодов: %1. «Частота» и «Изм. фаза» — середина свипа. "
+                         "Каждая частота шага и оба кода — отдельной строкой в measurements.csv. "
+                         "S11 и S22 в формате КСВ записаны как на анализаторе.")
               .arg(points.size()),
           10);
 
-    const QStringList headers{QStringLiteral("Канал"), QStringLiteral("Фаза"), QStringLiteral("Аттен."),
-                              QStringLiteral("S11"), QStringLiteral("S22"), QStringLiteral("S21"),
-                              QStringLiteral("S12"), QStringLiteral("Пик"), QStringLiteral("Снимок")};
+    const QStringList headers{QStringLiteral("Канал"), QStringLiteral("Частота"), QStringLiteral("Задана"),
+                              QStringLiteral("Изм. фаза"),
+                              QStringLiteral("Аттен."), QStringLiteral("S11"), QStringLiteral("S22"),
+                              QStringLiteral("S21"), QStringLiteral("S12"), QStringLiteral("Пик"),
+                              QStringLiteral("Снимок")};
     const qreal tableLeft = 24;
     const qreal tableW = w - 48;
     const qreal colW = tableW / headers.size();
@@ -578,8 +606,18 @@ QString writeChannelReport(const QString& folder, const QString& title, const QV
         };
         const bool hasShot = !point.imageFile.isEmpty() && QFile::exists(point.imageFile);
         const QString shotAnchor = hasShot ? QStringLiteral("g%1").arg(index) : QString();
+        const int phaseCount = std::min(point.s21FreqHz.size(), point.s21PhaseDeg.size());
+        const int mid = phaseCount / 2;
+        const QString measuredPhase = phaseCount > 0
+            ? QStringLiteral("%1°").arg(point.s21PhaseDeg.at(mid), 0, 'f', 1)
+            : QStringLiteral("—");
+        const QString frequency = phaseCount > 0 && std::isfinite(point.s21FreqHz.at(mid))
+            ? QStringLiteral("%1 МГц").arg(point.s21FreqHz.at(mid) / 1e6, 0, 'f', 1)
+            : QStringLiteral("—");
         const QStringList cells{QString::number(point.step.channel + 1),
+                                frequency,
                                 QStringLiteral("%1°").arg(point.phaseDeg, 0, 'f', 1),
+                                measuredPhase,
                                 QStringLiteral("%1 дБ").arg(point.attenDb, 0, 'f', 1),
                                 markerText(point.s11Ok, point.s11Db, point.s11Swr),
                                 markerText(point.s22Ok, point.s22Db, point.s22Swr),

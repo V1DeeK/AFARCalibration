@@ -98,6 +98,9 @@ struct ProductChannelSetting {
 /// measurements.csv рядом с PDF. Пустая строка — успех.
 [[nodiscard]] QString writeChannelCsv(const QString& folder, const QVector<ChannelPoint>& points);
 
+/// Дописывает одну точку в конец CSV. Если файла ещё нет — создаёт его с заголовком.
+[[nodiscard]] QString appendChannelCsv(const QString& folder, const ChannelPoint& point);
+
 struct RepeatStats {
     int count = 0;
     double mean = 0;

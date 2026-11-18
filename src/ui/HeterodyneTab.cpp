@@ -17,11 +17,15 @@
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFont>
 #include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHash>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -469,10 +473,30 @@ HeterodyneTab::HeterodyneTab(PsSession* ps, QWidget* parent)
         m_bar->setMaximum(qMax(1, status.total));
         m_bar->setValue(status.done);
         m_count->setText(QStringLiteral("%1 / %2").arg(status.done).arg(status.total));
+        if (status.attA >= 0.0 || status.attB >= 0.0) {
+            m_filling = true;
+            if (status.freqMhz > 0.0) {
+                m_freq->setValue(status.freqMhz);
+            }
+            const auto sliderOf = [](double db) { return qBound(0, qRound((31.5 - db) * 2.0), 63); };
+            if (status.attA >= 0.0) {
+                m_att1->setValue(sliderOf(status.attA));
+            }
+            if (status.attB >= 0.0) {
+                m_att2->setValue(sliderOf(status.attB));
+            }
+            m_filling = false;
+        }
+        if (m_measureFields != nullptr) {
+            m_measureFields->setEnabled(!m_runActive);
+        }
         m_last->setText(status.lastLine);
         m_confirm->setVisible(status.status == QLatin1String("waiting"));
         m_confirm->setText(QStringLiteral("Кабель на выходе %1 — продолжить").arg(status.port));
         m_stop->setVisible(status.status == QLatin1String("running") || status.status == QLatin1String("waiting"));
+        if (m_pause != nullptr) {
+            m_pause->setVisible(status.status == QLatin1String("running") || status.status == QLatin1String("waiting"));
+        }
         m_pdfPath = status.pdfPath;
         m_pdf->setVisible(!status.pdfPath.isEmpty());
         m_start->setEnabled(!m_runActive);
@@ -481,6 +505,7 @@ HeterodyneTab::HeterodyneTab(PsSession* ps, QWidget* parent)
             m_filled = false;
             refreshArchive();
         }
+        updateResumeButton();
     });
 
     m_thread->start();
@@ -528,12 +553,7 @@ HeterodyneTab::~HeterodyneTab()
     settings.setValue(QStringLiteral("heterodyne/psu_ip"), m_psuIp->text());
     settings.setValue(QStringLiteral("heterodyne/enables"), m_enables->currentData().toString());
     settings.setValue(QStringLiteral("heterodyne/routing"), m_route->currentData().toString());
-    settings.setValue(QStringLiteral("heterodyne/freq_lo"), m_freqLo->value());
-    settings.setValue(QStringLiteral("heterodyne/freq_hi"), m_freqHi->value());
-    settings.setValue(QStringLiteral("heterodyne/freq_step"), m_freqStep->value());
-    settings.setValue(QStringLiteral("heterodyne/att_lo"), m_attLo->value());
-    settings.setValue(QStringLiteral("heterodyne/att_hi"), m_attHi->value());
-    settings.setValue(QStringLiteral("heterodyne/span"), m_span->value());
+    settings.setValue(QStringLiteral("heterodyne/freq_step_mhz"), m_freqStep->currentData().toDouble());
 
     disconnect(m_session, nullptr, this, nullptr);
     disconnect(m_measure, nullptr, this, nullptr);
@@ -681,8 +701,18 @@ QWidget* HeterodyneTab::buildFirmware()
     m_flashBar->setFixedHeight(8);
     m_flashStatus = ui::hintLabel(QStringLiteral("Рабочая прошивка — RS-485 или ST-Link. Загрузчик — только ST-Link."), box);
     m_flashStatus->setObjectName(QStringLiteral("heterFirmwareStatus"));
+    auto* firmwareFolder = new QPushButton(QStringLiteral("Папка"), box);
+    firmwareFolder->setObjectName(QStringLiteral("heterFirmwareFolder"));
     layout->addWidget(m_firmwarePath);
+    layout->addWidget(firmwareFolder);
     layout->addWidget(browse);
+    connect(firmwareFolder, &QPushButton::clicked, this, [this] {
+        const QString path = m_firmwarePath->text().trimmed();
+        const QString dir = path.isEmpty() ? QString() : QFileInfo(path).absolutePath();
+        if (!dir.isEmpty() && QDir(dir).exists()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        }
+    });
     layout->addWidget(m_firmwareMethod);
     layout->addWidget(m_flash);
     layout->addWidget(m_flashBar);
@@ -1076,44 +1106,21 @@ QWidget* HeterodyneTab::buildMeasurePage()
     if (const int index = m_route->findData(savedRoute); index >= 0) {
         m_route->setCurrentIndex(index);
     }
-    m_freqLo = mhzBox(settings.value(QStringLiteral("heterodyne/freq_lo"), 5070).toDouble(), m_measureFields);
-    m_freqHi = mhzBox(settings.value(QStringLiteral("heterodyne/freq_hi"), 5070).toDouble(), m_measureFields);
-    m_freqStep = new QDoubleSpinBox(m_measureFields);
-    m_freqStep->setRange(0.000001, 6600);
-    m_freqStep->setDecimals(4);
-    m_freqStep->setSuffix(QStringLiteral(" МГц"));
-    m_freqStep->setValue(settings.value(QStringLiteral("heterodyne/freq_step"), 10).toDouble());
-    m_attLo = new QDoubleSpinBox(m_measureFields);
-    m_attHi = new QDoubleSpinBox(m_measureFields);
-    for (QDoubleSpinBox* att : {m_attLo, m_attHi}) {
-        att->setRange(0, 31.5);
-        att->setSingleStep(0.5);
-        att->setDecimals(1);
-        att->setSuffix(QStringLiteral(" дБ"));
-    }
-    m_attLo->setValue(settings.value(QStringLiteral("heterodyne/att_lo"), 0).toDouble());
-    m_attHi->setValue(settings.value(QStringLiteral("heterodyne/att_hi"), 31.5).toDouble());
-    m_span = new QDoubleSpinBox(m_measureFields);
-    m_span->setRange(2, 200);
-    m_span->setDecimals(1);
-    m_span->setSuffix(QStringLiteral(" МГц"));
-    m_span->setValue(settings.value(QStringLiteral("heterodyne/span"), 100).toDouble());
     grid->addWidget(ui::captionLabel(QStringLiteral("Какие каналы включены"), m_measureFields), 0, 0);
     grid->addWidget(m_enables, 1, 0);
     grid->addWidget(ui::captionLabel(QStringLiteral("С какого разъёма снимать"), m_measureFields), 0, 1);
     grid->addWidget(m_route, 1, 1);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Частота от"), m_measureFields), 2, 0);
-    grid->addWidget(m_freqLo, 3, 0);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Частота до"), m_measureFields), 2, 1);
-    grid->addWidget(m_freqHi, 3, 1);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Шаг частоты"), m_measureFields), 4, 0);
-    grid->addWidget(m_freqStep, 5, 0);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Ослабление от"), m_measureFields), 4, 1);
-    grid->addWidget(m_attLo, 5, 1);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Ослабление до"), m_measureFields), 6, 0);
-    grid->addWidget(m_attHi, 7, 0);
-    grid->addWidget(ui::captionLabel(QStringLiteral("Полная полоса поиска"), m_measureFields), 6, 1);
-    grid->addWidget(m_span, 7, 1);
+    m_freqStep = new QComboBox(m_measureFields);
+    m_freqStep->setObjectName(QStringLiteral("heterFreqStep"));
+    for (const double step : {1.0, 2.0, 5.0, 10.0, 20.0, 50.0}) {
+        m_freqStep->addItem(QStringLiteral("%1 МГц").arg(step, 0, 'f', 0), step);
+    }
+    const double savedStep = settings.value(QStringLiteral("heterodyne/freq_step_mhz"), 10).toDouble();
+    if (const int index = m_freqStep->findData(savedStep); index >= 0) {
+        m_freqStep->setCurrentIndex(index);
+    }
+    grid->addWidget(ui::captionLabel(QStringLiteral("Шаг частоты"), m_measureFields), 2, 0);
+    grid->addWidget(m_freqStep, 3, 0);
     layout->addWidget(m_measureFields);
     m_planHint = ui::hintLabel(QString(), box);
     m_planHint->setObjectName(QStringLiteral("heterPlanHint"));
@@ -1122,6 +1129,13 @@ QWidget* HeterodyneTab::buildMeasurePage()
     m_start = new QPushButton(QStringLiteral("Начать измерение"), box);
     m_start->setObjectName(QStringLiteral("heterMeasureStart"));
     ui::setButtonRole(m_start, ui::ButtonRole::Primary);
+    m_resume = new QPushButton(QStringLiteral("Продолжить"), box);
+    m_resume->setObjectName(QStringLiteral("heterMeasureResume"));
+    ui::setButtonRole(m_resume, ui::ButtonRole::Primary);
+    m_resume->setVisible(false);
+    m_pause = new QPushButton(QStringLiteral("Пауза"), box);
+    m_pause->setObjectName(QStringLiteral("heterMeasurePause"));
+    m_pause->setVisible(false);
     m_stop = new QPushButton(QStringLiteral("Остановить"), box);
     m_stop->setObjectName(QStringLiteral("heterMeasureStop"));
     ui::setButtonRole(m_stop, ui::ButtonRole::Danger);
@@ -1133,6 +1147,8 @@ QWidget* HeterodyneTab::buildMeasurePage()
     m_pdf->setObjectName(QStringLiteral("heterPdf"));
     m_pdf->setVisible(false);
     buttons->addWidget(m_start);
+    buttons->addWidget(m_resume);
+    buttons->addWidget(m_pause);
     buttons->addWidget(m_stop);
     buttons->addWidget(m_confirm);
     buttons->addWidget(m_pdf);
@@ -1156,18 +1172,30 @@ QWidget* HeterodyneTab::buildMeasurePage()
     m_archive = new QListWidget(box);
     m_archive->setObjectName(QStringLiteral("heterArchive"));
     m_archive->setMaximumHeight(90);
-    layout->addWidget(ui::captionLabel(QStringLiteral("Сохранённые отчёты"), box));
+    auto* archiveRow = new QHBoxLayout();
+    archiveRow->addWidget(ui::captionLabel(QStringLiteral("Сохранённые отчёты"), box), 1);
+    auto* openReportFolder = new QPushButton(QStringLiteral("Папка отчёта"), box);
+    openReportFolder->setObjectName(QStringLiteral("heterOpenReportFolder"));
+    archiveRow->addWidget(openReportFolder);
+    layout->addLayout(archiveRow);
     layout->addWidget(m_archive);
+    connect(openReportFolder, &QPushButton::clicked, this, [this] {
+        QString dir = reportDirectory();
+        if (QListWidgetItem* item = m_archive->currentItem()) {
+            const QString pdf = item->data(Qt::UserRole).toString();
+            if (!pdf.isEmpty()) {
+                dir = QFileInfo(pdf).absolutePath();
+            }
+        } else if (!m_pdfPath.isEmpty()) {
+            dir = QFileInfo(m_pdfPath).absolutePath();
+        }
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    });
 
     const auto hint = [this] { updatePlanHint(); };
     connect(m_enables, &QComboBox::currentIndexChanged, this, hint);
     connect(m_route, &QComboBox::currentIndexChanged, this, hint);
-    connect(m_freqLo, &QDoubleSpinBox::valueChanged, this, hint);
-    connect(m_freqHi, &QDoubleSpinBox::valueChanged, this, hint);
-    connect(m_freqStep, &QDoubleSpinBox::valueChanged, this, hint);
-    connect(m_attLo, &QDoubleSpinBox::valueChanged, this, hint);
-    connect(m_attHi, &QDoubleSpinBox::valueChanged, this, hint);
-    connect(m_span, &QDoubleSpinBox::valueChanged, this, hint);
+    connect(m_freqStep, &QComboBox::currentIndexChanged, this, hint);
     updatePlanHint();
     refreshArchive();
     connect(m_start, &QPushButton::clicked, this, [this] {
@@ -1176,12 +1204,12 @@ QWidget* HeterodyneTab::buildMeasurePage()
         job.psuIp = m_psuIp->text().trimmed();
         job.routing = m_route->currentData().toString();
         job.enables = m_enables->currentData().toString();
-        job.freqMinMhz = m_freqLo->value();
-        job.freqMaxMhz = m_freqHi->value();
-        job.freqStepMhz = m_freqStep->value();
-        job.attMinDb = m_attLo->value();
-        job.attMaxDb = m_attHi->value();
-        job.spanMhz = m_span->value();
+        job.freqMinMhz = 4400;
+        job.freqMaxMhz = 5500;
+        job.freqStepMhz = m_freqStep->currentData().toDouble();
+        job.attMinDb = 0;
+        job.attMaxDb = 31.5;
+        job.spanMhz = 10;
         const QString error = HeterMeasure::explain(job);
         if (!error.isEmpty()) {
             m_benchMessage->setText(error);
@@ -1194,6 +1222,20 @@ QWidget* HeterodyneTab::buildMeasurePage()
         const QString dir = reportDirectory();
         m_benchMessage->clear();
         QMetaObject::invokeMethod(m_measure, [this, job, dir] { m_measure->start(job, dir); }, Qt::QueuedConnection);
+    });
+    connect(m_pause, &QPushButton::clicked, this, [this] { m_measure->requestPause(); });
+    connect(m_resume, &QPushButton::clicked, this, [this] {
+        const QString folder = resumableFolder();
+        if (folder.isEmpty()) {
+            m_benchMessage->setText(QStringLiteral("Нет серии, которую можно продолжить."));
+            return;
+        }
+        if (!m_session->state().connected) {
+            m_benchMessage->setText(QStringLiteral("Сначала подключите плату."));
+            return;
+        }
+        m_benchMessage->setText(QStringLiteral("Продолжаю %1").arg(QFileInfo(folder).fileName()));
+        QMetaObject::invokeMethod(m_measure, [this, folder] { m_measure->resume(folder); }, Qt::QueuedConnection);
     });
     connect(m_stop, &QPushButton::clicked, this, [this] { m_measure->requestCancel(); });
     connect(m_confirm, &QPushButton::clicked, this, [this] { m_measure->requestResume(m_runId, m_waitPort); });
@@ -1408,7 +1450,7 @@ void HeterodyneTab::applyState(const HeterState& state)
         m_tempValue->setText(QStringLiteral("нет данных"));
     }
     // Центр анализатора следует за частотой, которую плата реально приняла.
-    if (state.fOutHz != 0 && state.fOutHz != m_analyzerHz) {
+    if (!m_runActive && state.fOutHz != 0 && state.fOutHz != m_analyzerHz) {
         m_analyzerHz = state.fOutHz;
         const QString ip = m_fswIp->text().trimmed();
         if (!ip.isEmpty()) {
@@ -1513,26 +1555,23 @@ void HeterodyneTab::updatePlanHint()
 {
     const QString route = m_route->currentData().toString();
     const int ports = (route == QLatin1String("sum") || route.size() == 1) ? 1 : 2;
-    const int steps = 1 + qRound(2.0 * (m_attHi->value() - m_attLo->value()));
-    int freqs = 0;
-    if (m_freqStep->value() > 0 && m_freqLo->value() <= m_freqHi->value()) {
-        double cursor = m_freqLo->value();
-        while (cursor < m_freqHi->value() - 1e-9 && freqs <= 256) {
-            ++freqs;
-            cursor += m_freqStep->value();
-        }
-        ++freqs;
-    }
-    const int points = qMax(0, steps) * freqs * ports;
+    constexpr int steps = 64;
+    const double stepMhz = m_freqStep->currentData().toDouble();
+    const int freqs = stepMhz > 0 ? static_cast<int>((5500.0 - 4400.0) / stepMhz + 1e-9) + 1 : 0;
+    const int points = steps * freqs * ports;
+    const int minutes = qRound(points * 0.5 / 60.0);
     const QString on = m_enables->currentText();
     const QString where = route == QLatin1String("sum") ? QStringLiteral("Кабель через сумматор на оба выхода.")
                          : route.size() == 1
                              ? QStringLiteral("Кабель на одном выходе.")
                              : QStringLiteral("Программа попросит переставить кабель между выходами.");
-    m_planHint->setText(QStringLiteral("Включены %1. %2 Частоты идут от «от» до «до» с заданным шагом, последняя точка всегда «до». "
-                                      "Ослабление — от большего к меньшему, шаг 0,5 дБ. Точек и снимков: %3.")
+    m_planHint->setText(QStringLiteral("Включены %1. %2 Частота 4400–5500 МГц, шаг %3 МГц, частот %4. "
+                                      "Ослабление от −31,5 дБ (код 0) до 0 дБ (код 63). Точек: %5, около %6 мин.")
                             .arg(on, where)
-                            .arg(points));
+                            .arg(stepMhz, 0, 'f', 0)
+                            .arg(freqs)
+                            .arg(points)
+                            .arg(minutes));
 }
 
 void HeterodyneTab::refreshArchive()
@@ -1545,11 +1584,89 @@ void HeterodyneTab::refreshArchive()
         if (!QFile::exists(pdf)) {
             continue;
         }
-        auto* item = new QListWidgetItem(name + QStringLiteral(" · PDF"), m_archive);
+        const QString folderPath = dir.filePath(name);
+        QString label = name + QStringLiteral(" · PDF");
+        int done = 0;
+        int total = 0;
+        QFile result(folderPath + QStringLiteral("/result.json"));
+        if (result.open(QIODevice::ReadOnly)) {
+            const QJsonObject object = QJsonDocument::fromJson(result.readAll()).object();
+            done = object.value(QStringLiteral("captured")).toInt();
+            const QString outcome = object.value(QStringLiteral("outcome")).toString();
+            if (outcome != QLatin1String("Серия завершена")) {
+                label = QStringLiteral("%1 · %2, точек %3").arg(name, outcome).arg(done);
+            }
+        }
+        Q_UNUSED(total);
+        auto* item = new QListWidgetItem(label, m_archive);
         item->setData(Qt::UserRole, pdf);
     }
     if (m_archive->count() == 0) {
         m_archive->addItem(QStringLiteral("Готовых отчётов пока нет."));
+    }
+    updateResumeButton();
+}
+
+QString HeterodyneTab::resumableFolder(int* done, int* total) const
+{
+    QDir root(reportDirectory());
+    const QStringList folders = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::Reversed);
+    for (const QString& name : folders) {
+        const QString folder = root.filePath(name);
+        if (!QFile::exists(folder + QStringLiteral("/measurements.csv"))
+            || !QFile::exists(folder + QStringLiteral("/plan.json"))) {
+            continue;
+        }
+        QFile planFile(folder + QStringLiteral("/plan.json"));
+        if (!planFile.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        const QJsonObject plan = QJsonDocument::fromJson(planFile.readAll()).object();
+        const int freqs = plan.value(QStringLiteral("frequencies")).toArray().size();
+        const double attMin = plan.value(QStringLiteral("att_min")).toDouble();
+        const double attMax = plan.value(QStringLiteral("att_max")).toDouble();
+        const int steps = static_cast<int>(qRound((attMax - attMin) * 2.0)) + 1;
+        const QString routing = plan.value(QStringLiteral("routing")).toString();
+        const int ports = (routing == QLatin1String("A-B") || routing == QLatin1String("B-A")) ? 2 : 1;
+        const int expected = freqs * steps * ports;
+        int captured = 0;
+        QString outcome;
+        QFile result(folder + QStringLiteral("/result.json"));
+        if (result.open(QIODevice::ReadOnly)) {
+            const QJsonObject object = QJsonDocument::fromJson(result.readAll()).object();
+            captured = object.value(QStringLiteral("captured")).toInt();
+            outcome = object.value(QStringLiteral("outcome")).toString();
+        }
+        if (outcome == QLatin1String("Серия завершена") || (expected > 0 && captured >= expected)) {
+            continue;
+        }
+        if (captured <= 0) {
+            continue;
+        }
+        if (done != nullptr) {
+            *done = captured;
+        }
+        if (total != nullptr) {
+            *total = expected;
+        }
+        return folder;
+    }
+    return QString();
+}
+
+void HeterodyneTab::updateResumeButton()
+{
+    if (m_resume == nullptr) {
+        return;
+    }
+    int done = 0;
+    int total = 0;
+    const QString folder = resumableFolder(&done, &total);
+    const bool show = !folder.isEmpty() && !m_runActive;
+    m_resume->setVisible(show);
+    if (show) {
+        m_resume->setText(QStringLiteral("Продолжить предыдущее измерение"));
+        m_resume->setToolTip(QStringLiteral("%1\nснято %2 из %3").arg(QFileInfo(folder).fileName()).arg(done).arg(total));
     }
 }
 

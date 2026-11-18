@@ -13,6 +13,12 @@
 #include "PsSession.h"
 #include "UiStyle.h"
 
+#include <QDesktopServices>
+#include <QDir>
+#include <QFileInfo>
+#include <QSettings>
+#include <QUrl>
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -116,12 +122,12 @@ SettingsTab::SettingsTab(PsSession* session, QWidget* parent)
     connect(m_session, &PsSession::controlsChanged, this, &SettingsTab::refreshConnection);
     connect(m_session, &PsSession::hostResolved, this, [this](const QString& ip) {
         // Найденный адрес подставляем, но не затираем то, что оператор сейчас печатает.
-        if (!m_host->hasFocus()) {
+        if (!m_hostDirty && !m_host->hasFocus()) {
             m_host->setText(ip);
         }
     });
     connect(m_session, &PsSession::boardMacDetected, this, [this](const QString& mac) {
-        if (!m_mac->hasFocus()) {
+        if (!m_macDirty && !m_mac->hasFocus()) {
             m_mac->setText(mac);
         }
         if (m_mac2 != nullptr && !m_mac2->hasFocus()) {
@@ -130,14 +136,14 @@ SettingsTab::SettingsTab(PsSession* session, QWidget* parent)
         m_message->setText(QStringLiteral("MAC платы определён по таблице ARP и подставлен: %1").arg(mac));
     });
     connect(m_session, &PsSession::boardCandidate, this, [this](const QString& ip, const QString& mac) {
-        if (!m_host->hasFocus()) {
+        if (!m_hostDirty && !m_host->hasFocus()) {
             m_host->setText(ip);
         }
-        if (!mac.isEmpty() && !m_mac->hasFocus()) {
+        if (!mac.isEmpty() && !m_macDirty && !m_mac->hasFocus()) {
             m_mac->setText(mac);
         }
-        m_message->setText(m_message->text() + QStringLiteral(" Адрес %1%2 подставлен — нажмите «Подключиться».")
-                                                   .arg(ip, mac.isEmpty() ? QString() : QStringLiteral(" и MAC %1").arg(mac)));
+        m_message->setText(QStringLiteral("Нашёл плату %1%2 и подключаюсь.")
+                               .arg(ip, mac.isEmpty() ? QString() : QStringLiteral(", MAC %1").arg(mac)));
     });
     connect(m_session, &PsSession::message, this, [this](const QString& text) {
         m_message->setText(text);
@@ -462,8 +468,10 @@ QWidget* SettingsTab::buildCodesPage()
     fill->addWidget(m_fillAtt);
     fill->addWidget(fillBtn);
     fill->addStretch(1);
+    auto* codesFolder = new QPushButton(QStringLiteral("Папка набора"), page);
     fill->addWidget(saveBtn);
     fill->addWidget(loadBtn);
+    fill->addWidget(codesFolder);
     // Две строки кнопок: вкладка не растягивает «Модули» вширь.
     auto* write = new QHBoxLayout;
     write->setSpacing(ui::kInnerGap);
@@ -479,15 +487,28 @@ QWidget* SettingsTab::buildCodesPage()
         const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Сохранить набор кодов"),
                                                           QStringLiteral("codes.json"), filter);
         QString error;
-        if (!path.isEmpty() && !saveCodes(path, &error)) {
-            log(error);
+        if (!path.isEmpty()) {
+            QSettings().setValue(QStringLiteral("ps/codes_path"), path);
+            if (!saveCodes(path, &error)) {
+                log(error);
+            }
         }
     });
     connect(loadBtn, &QPushButton::clicked, this, [this, filter] {
         const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Загрузить набор кодов"), QString(), filter);
         QString error;
+        if (!path.isEmpty()) {
+            QSettings().setValue(QStringLiteral("ps/codes_path"), path);
+        }
         if (!path.isEmpty() && !loadCodes(path, &error)) {
             log(error);
+        }
+    });
+    connect(codesFolder, &QPushButton::clicked, this, [] {
+        const QString path = QSettings().value(QStringLiteral("ps/codes_path")).toString();
+        const QString dir = path.isEmpty() ? QString() : QFileInfo(path).absolutePath();
+        if (!dir.isEmpty() && QDir(dir).exists()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
         }
     });
 
@@ -812,12 +833,14 @@ QWidget* SettingsTab::buildConnectionBox()
     m_host->setObjectName(QStringLiteral("psHost"));
     m_host->setPlaceholderText(QStringLiteral("например 172.16.226.99"));
     m_host->setClearButtonEnabled(true);
-    m_host->setToolTip(QStringLiteral("IP платы меняется. Если адрес пустой или не отвечает, "
-                                      "программа ищет обе запомненные платы по MAC."));
+    connect(m_host, &QLineEdit::textEdited, this, [this] { m_hostDirty = true; });
+    m_host->setToolTip(QStringLiteral("IP платы меняется. Программа сама ищет её по MAC "
+                                      "в сети лаборатории и подключается. Поиск повторяется, пока платы нет."));
     m_mac = new QLineEdit(m_session->mac(), box);
     m_mac->setObjectName(QStringLiteral("psMac"));
     m_mac->setPlaceholderText(QStringLiteral("AA:BB:CC:DD:EE:FF"));
     m_mac->setToolTip(QStringLiteral("MAC текущей платы. IP меняется, MAC постоянный."));
+    connect(m_mac, &QLineEdit::textEdited, this, [this] { m_macDirty = true; });
     m_mac2 = new QLineEdit(m_session->mac2(), box);
     m_mac2->setObjectName(QStringLiteral("psMac2"));
     m_mac2->setPlaceholderText(QStringLiteral("MAC второй платы"));
@@ -954,8 +977,16 @@ void SettingsTab::connectNow()
     if (!m_session->rememberMac2(m_mac2->text())) {
         return;
     }
-    m_session->connectTo(m_host->text(), static_cast<quint16>(m_port->value()),
-                         static_cast<quint16>(m_tlmPort->value()), m_mac->text());
+    QString host = m_host->text();
+    const QString mac = m_mac->text();
+    // Новый MAC без правки IP — подключаться по нему, а не по старому адресу в соседнем поле.
+    if (m_macDirty && !m_hostDirty) {
+        host.clear();
+    }
+    m_hostDirty = false;
+    m_macDirty = false;
+    m_session->connectTo(host, static_cast<quint16>(m_port->value()),
+                         static_cast<quint16>(m_tlmPort->value()), mac);
 }
 
 void SettingsTab::onMainButton()

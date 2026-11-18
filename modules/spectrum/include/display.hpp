@@ -61,6 +61,8 @@ private:
     void render_device_section();  // выбор устройства и параметры захвата
     void render_tuning_section();  // частота и усиление — то, что крутят постоянно
     void render_gain_controls();   // режим АРУ, уровень по каналам, обратная связь от платы
+    // Собрать lo/bw/fs/gain и попросить MainWindow отправить set_adc.
+    void commit_adc_settings();
     void render_display_section(); // размер БПФ, калибровка, удержание пика, курсор
     void render_demod_section();   // режим демодуляции и его настройки, звук
     void render_record_section();  // запись IQ и воспроизведение файла

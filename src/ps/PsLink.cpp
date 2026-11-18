@@ -1,5 +1,7 @@
 #include "PsLink.h"
 
+#include "MacResolver.h"
+
 #include <QHostAddress>
 #include <QNetworkDatagram>
 #include <QNetworkProxy>
@@ -132,6 +134,15 @@ void PsLink::startConnect()
     setState(State::Connecting);
     m_connectStartMs = m_clock.elapsed();
     m_tick.start();
+    // xray перехватывает исходящий TCP. Привязка к адресу лабораторной сети
+    // оставляет соединение на Ethernet и не пускает его в туннель.
+    m_socket.abort();
+    const QHostAddress local = psBindAddress(m_host);
+    if (!local.isNull() && !m_socket.bind(local)) {
+        m_lastError = QStringLiteral("не удалось занять %1 для обхода xray: %2")
+                          .arg(local.toString(), m_socket.errorString());
+        emit errorOccurred(m_lastError);
+    }
     m_socket.connectToHost(m_host, m_port);
 }
 

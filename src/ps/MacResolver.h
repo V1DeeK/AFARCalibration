@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHostAddress>
 #include <QHash>
 #include <QObject>
 #include <QPair>
@@ -8,6 +9,11 @@
 #include <QVector>
 
 #include <functional>
+
+/// Локальный адрес той же подсети, что и плата, на физическом интерфейсе.
+/// Пустой адрес — петля или рядом только VPN/xray. Сокет к плате надо привязать сюда,
+/// иначе xray уводит соединение на свой туннель.
+[[nodiscard]] QHostAddress psBindAddress(const QString& peerIpv4);
 
 class QTcpSocket;
 class QTimer;

@@ -249,7 +249,7 @@ MainWindow::MainWindow(SpectrumEngine& spectrumEngine, QWidget* parent)
     m_tabs->addTab(ui::scrollPage(acceptance), QStringLiteral("Приёмка"));
     setCentralWidget(m_tabs);
 
-    const QString tabKey = QStringLiteral("ui/active_tab_v4");
+    const QString tabKey = QStringLiteral("ui/active_tab_v5");
     m_tabs->setCurrentIndex(qBound(0, QSettings().value(tabKey, 0).toInt(), m_tabs->count() - 1));
     connect(m_tabs, &QTabWidget::currentChanged, this,
             [tabKey](int index) { QSettings().setValue(tabKey, index); });
@@ -748,6 +748,7 @@ void MainWindow::onExportTwoPort()
     if (selected.isEmpty()) {
         return;
     }
+    QSettings().setValue(QStringLiteral("ui/two_port_export_path"), selected);
     m_measure->setTwoPortExportInProgress(true);
     setOperationProgress(QStringLiteral("Подготовка S2P и PDF-отчёта"), 0, 2);
     const QVector<double> markers = m_measure->graphMarkerFrequenciesGhz();

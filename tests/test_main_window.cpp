@@ -28,6 +28,7 @@
 #include <QImage>
 #include <QTemporaryDir>
 #include <QElapsedTimer>
+#include <limits>
 #include <QGroupBox>
 #include <QLabel>
 #include <QLayout>
@@ -592,17 +593,24 @@ TEST_CASE("CSV усиления и фазы S21", "[gridcsv]")
     next.step.atten = 1;
     next.s21GainDb = {20.92, 20.6, 20.3};
     next.s21PhaseDeg = {12.30, -170.1, 33.7};
+    ChannelPoint floor = zero;
+    floor.step.phase = 2;
+    floor.s21GainDb = {std::numeric_limits<double>::infinity(),
+                       -std::numeric_limits<double>::infinity(),
+                       std::numeric_limits<double>::quiet_NaN()};
+    floor.s21PhaseDeg = {0, 0, 0};
     QTemporaryDir dir;
     REQUIRE(dir.isValid());
-    CHECK(writeChannelCsv(dir.path(), {zero, next}).isEmpty());
+    CHECK(writeChannelCsv(dir.path(), {zero, next, floor}).isEmpty());
     QFile file(dir.filePath(QStringLiteral("measurements.csv")));
     REQUIRE(file.open(QIODevice::ReadOnly));
     const QString text = QString::fromUtf8(file.readAll());
-    CHECK(text.startsWith(QStringLiteral("channel_id,freq_hz,phase_code,att_code,gain_db,phase_deg\n")));
-    CHECK(text.count(QLatin1Char('\n')) == 7);
-    CHECK(text.contains(QStringLiteral("0,4900000000,0,0,21.400,12.000\n")));
-    CHECK(text.contains(QStringLiteral("0,5500000000,0,0,21.125,-170.500\n")));
-    CHECK(text.contains(QStringLiteral("0,6000000000,0,1,20.300,33.700\n")));
+    CHECK(text.startsWith(QStringLiteral("channel_id,freq_hz,freq_mhz,phase_code,att_code,gain_db,phase_deg\n")));
+    CHECK(text.count(QLatin1Char('\n')) == 10);
+    CHECK(text.contains(QStringLiteral("0,4900000000,4900.000,2,0,-200.000,\n")));
+    CHECK(text.contains(QStringLiteral("0,4900000000,4900.000,0,0,21.400,12.000\n")));
+    CHECK(text.contains(QStringLiteral("0,5500000000,5500.000,0,0,21.125,-170.500\n")));
+    CHECK(text.contains(QStringLiteral("0,6000000000,6000.000,0,1,20.300,33.700\n")));
 }
 
 TEST_CASE("Сетка фазы и аттенюации", "[gridsteps]")

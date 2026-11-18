@@ -168,9 +168,9 @@ void PlutoCaptureThread::run() {
 
         if (state_.is_connected.load() && rx_buf_) {
             uint64_t new_freq = state_.center_freq_hz.load();
-            if (state_.ps_iio_read_only.load()) {
-                state_.center_freq_hz.store(current_freq_);
-            } else if (new_freq != current_freq_) {
+            // В режиме PS частоту оси держит вкладка: на плату уходит set_adc,
+            // а не запись LO через libiio.
+            if (!state_.ps_iio_read_only.load() && new_freq != current_freq_) {
                 struct iio_channel* lo_chan = iio_device_find_channel(phy_dev_, "altvoltage0", true);
                 if (lo_chan) {
                     iio_channel_attr_write_longlong(lo_chan, "frequency", new_freq);
@@ -233,10 +233,15 @@ bool PlutoCaptureThread::open_device() {
     }
 
     phy_dev_ = iio_context_find_device(ctx_, "ad9361-phy");
-    rx_dev_  = iio_context_find_device(ctx_, "cf-ad9361-lpc");
+    // Старый HDL называет приёмный DMA cf-ad9361-lpc, новая прошивка ADI — axi_ad9361.
+    // cf-ad9361-dds-core — это передатчик, его сюда не берём.
+    rx_dev_ = iio_context_find_device(ctx_, "cf-ad9361-lpc");
+    if (!rx_dev_) {
+        rx_dev_ = iio_context_find_device(ctx_, "axi_ad9361");
+    }
 
     if (!rx_dev_ || (!phy_dev_ && !state_.ps_iio_read_only.load())) {
-        cerr << "[pluto] failed to find required IIO devices\n";
+        cerr << "[pluto] failed to find required IIO devices (cf-ad9361-lpc / axi_ad9361)\n";
         return false;
     }
 
@@ -371,6 +376,7 @@ bool PlutoCaptureThread::configure_device() {
         cerr << "[pluto] failed to create RX buffer\n";
         return false;
     }
+    state_.iq_stream_rate_hz.store(fs);
 
     return true;
 }

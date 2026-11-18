@@ -11,6 +11,7 @@
 #include <QPdfWriter>
 #include <QStringList>
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -60,7 +61,7 @@ QString writeHeterodyneReport(const QString& folder, const HeterReportRun& run, 
     pdf.setTitle(QStringLiteral("Протокол измерений гетеродина • ") + run.id);
     pdf.setPageSize(QPageSize(QPageSize::A4));
     pdf.setPageOrientation(QPageLayout::Landscape);
-    pdf.setResolution(72);
+    pdf.setResolution(96);
     QPainter painter(&pdf);
     if (!painter.isActive()) {
         return QStringLiteral("не удалось открыть PDF");
@@ -76,23 +77,10 @@ QString writeHeterodyneReport(const QString& folder, const HeterReportRun& run, 
         painter.setPen(color);
         painter.drawText(QPointF(x, y), text);
     };
-    const auto header = [&](const QString& title, const QString& subtitle) {
-        label(32, h - 31, QStringLiteral("СТЕНД ВЧ    /    ADF4355-3"), 10, QColor(QStringLiteral("#13725e")));
-        label(32, h - 63, title, 18, QColor(QStringLiteral("#193448")));
-        label(32, h - 83, subtitle, 10, QColor(QStringLiteral("#193448")));
-        painter.setPen(QColor(QStringLiteral("#c7d5d9")));
-        painter.drawLine(QPointF(32, h - 94), QPointF(w - 32, h - 94));
-    };
     const auto footer = [&] {
-        label(32, 17, run.id + QStringLiteral("   •   ") + run.started, 8, QColor(QStringLiteral("#193448")));
-        label(w - 84, 17, QStringLiteral("стр. %1").arg(page), 8, QColor(QStringLiteral("#193448")));
+        label(28, h - 18, run.id + QStringLiteral("   •   ") + run.started, 9, QColor(QStringLiteral("#193448")));
+        label(w - 90, h - 18, QStringLiteral("стр. %1").arg(page), 9, QColor(QStringLiteral("#193448")));
     };
-    const auto nextPage = [&] {
-        footer();
-        pdf.newPage();
-        ++page;
-    };
-
     QHash<QString, double> baselines;
     for (const HeterReportPoint& point : points) {
         if (point.signal && point.lock && std::abs(point.stepDb - run.attMin) < 0.01) {
@@ -101,20 +89,32 @@ QString writeHeterodyneReport(const QString& folder, const HeterReportRun& run, 
         }
     }
 
-    header(QStringLiteral("Протокол измерений гетеродина"),
-           QStringLiteral("%1   •   точек %2 из %3").arg(run.outcome).arg(points.size()).arg(run.total));
+    label(28, 36, QStringLiteral("Протокол измерений гетеродина"), 18, QColor(QStringLiteral("#193448")));
+    label(28, 58, QStringLiteral("%1   •   точек %2 из %3").arg(run.outcome).arg(points.size()).arg(run.total), 11,
+          QColor(QStringLiteral("#193448")));
     QStringList lines;
     lines << QStringLiteral("Анализатор    %1    /    %2")
                  .arg(run.instrument.isEmpty() ? QStringLiteral("нет идентификации") : run.instrument, run.analyzerIp);
-    lines << QStringLiteral("Питание    ручная установка    /    IP блока %1")
-                 .arg(run.psuIp.isEmpty() ? QStringLiteral("не указан") : run.psuIp);
     lines << QStringLiteral("Серия    %1 — %2    /    RS-485 %3")
                  .arg(run.started, run.ended, run.rs485Port.isEmpty() ? QStringLiteral("—") : run.rs485Port);
     lines << QStringLiteral("Тракт    %1    /    ослабление %2…%3 дБ, шаг 0,5 дБ")
                  .arg(run.routing)
                  .arg(run.attMax, 0, 'g', 4)
                  .arg(run.attMin, 0, 'g', 4);
-    lines << QStringLiteral("Частоты задания, МГц    ") + run.frequencies;
+    double freqLo = 0;
+    double freqHi = 0;
+    if (!points.isEmpty()) {
+        freqLo = points.first().setHz;
+        freqHi = points.first().setHz;
+        for (const HeterReportPoint& point : points) {
+            freqLo = std::min(freqLo, point.setHz);
+            freqHi = std::max(freqHi, point.setHz);
+        }
+    }
+    lines << QStringLiteral("Частоты    %1…%2 МГц. В таблице — все %3 точек, каждая частота и каждый код ослабления.")
+                 .arg(freqLo / 1e6, 0, 'f', 0)
+                 .arg(freqHi / 1e6, 0, 'f', 0)
+                 .arg(points.size());
     if (run.haveInitial) {
         lines << QStringLiteral("Опора    %1 50 МГц    /    мощность A, B по настройке: %2, %3 дБм")
                      .arg(run.externalRef ? QStringLiteral("внешняя") : QStringLiteral("на плате"))
@@ -123,41 +123,68 @@ QString writeHeterodyneReport(const QString& folder, const HeterReportRun& run, 
     } else {
         lines << QStringLiteral("Исходные параметры платы не получены.");
     }
-    lines << QStringLiteral("Поиск пика ±%1 МГц. При превышении медианы трассы на 10 дБ — уточнение в полосе обзора 2 МГц.")
+    lines << QStringLiteral("Поиск пика ±%1 МГц, 1000 точек, разрешающая полоса 10 кГц. Уровень — на входе анализатора.")
                  .arg(run.spanHz / 2e6, 0, 'g', 4);
-    lines << QStringLiteral("Ослабление по уровню = уровень при минимальной уставке серии минус уровень в точке. "
-                            "Для слабого пика или LOCK=0 — прочерк.");
-    lines << QStringLiteral("Уровень указан на входе анализатора. Поправки на внешние кабели и делители не применялись.");
     if (!run.error.isEmpty()) {
         lines << run.error;
     }
-    qreal y = h - 115;
+    qreal y = 80;
     for (const QString& line : lines) {
-        for (const QString& part : wrap(line, 110)) {
-            label(32, y, part, 9, QColor(QStringLiteral("#193448")));
-            y -= 14;
+        for (const QString& part : wrap(line, 120)) {
+            label(28, y, part, 10, QColor(QStringLiteral("#193448")));
+            y += 16;
         }
     }
-    y -= 8;
-    const qreal cols[] = {34, 68, 120, 183, 271, 358, 465, 584, 650, 726};
-    const QStringList titles{QStringLiteral("№"), QStringLiteral("Тракт"), QStringLiteral("Вкл."),
-                             QStringLiteral("ATT A, дБ"), QStringLiteral("ATT B, дБ"), QStringLiteral("Зад., МГц"),
-                             QStringLiteral("Пик, МГц"), QStringLiteral("дБм"), QStringLiteral("Ослаб., дБ"),
+    y += 10;
+    const QStringList titles{QStringLiteral("№"), QStringLiteral("Выход"), QStringLiteral("Вкл."),
+                             QStringLiteral("ATT A, дБ"), QStringLiteral("ATT B, дБ"), QStringLiteral("Задано, МГц"),
+                             QStringLiteral("Пик, МГц"), QStringLiteral("дБм"), QStringLiteral("Ослабл., дБ"),
                              QStringLiteral("Статус")};
-    const auto tableHeader = [&](qreal top) {
-        painter.fillRect(QRectF(32, top - 14, w - 64, 17), QColor(QStringLiteral("#deeee8")));
-        for (int i = 0; i < titles.size(); ++i) {
-            label(cols[i], top, titles.at(i), 8, QColor(QStringLiteral("#193448")));
+    const qreal tableLeft = 24;
+    const qreal tableW = w - 48;
+    const qreal colW = tableW / titles.size();
+    const qreal rowH = 16;
+    const auto paintRow = [&](const QStringList& cells, bool headerRow) {
+        if (headerRow) {
+            painter.fillRect(QRectF(tableLeft, y, tableW, rowH), QColor(QStringLiteral("#deeee8")));
         }
-        return top - 19;
+        painter.setPen(QPen(QColor(QStringLiteral("#334155")), 1));
+        painter.drawRect(QRectF(tableLeft, y, tableW, rowH));
+        for (int c = 1; c < cells.size(); ++c) {
+            painter.drawLine(QPointF(tableLeft + c * colW, y), QPointF(tableLeft + c * colW, y + rowH));
+        }
+        font.setPixelSize(headerRow ? 10 : 9);
+        font.setBold(headerRow);
+        painter.setFont(font);
+        painter.setPen(QColor(QStringLiteral("#193448")));
+        for (int c = 0; c < cells.size(); ++c) {
+            painter.drawText(QRectF(tableLeft + c * colW + 4, y, colW - 8, rowH),
+                             Qt::AlignVCenter | Qt::AlignLeft, cells.at(c));
+        }
+        font.setBold(false);
+        y += rowH;
     };
-    y = tableHeader(y);
-    for (const HeterReportPoint& point : points) {
-        if (y < 40) {
-            nextPage();
-            header(QStringLiteral("Таблица измерений"),
-                   QStringLiteral("Номер строки совпадает с номером снимка в приложении."));
-            y = tableHeader(h - 120);
+    QVector<HeterReportPoint> tableRows = points;
+    std::sort(tableRows.begin(), tableRows.end(), [](const HeterReportPoint& a, const HeterReportPoint& b) {
+        if (a.setHz != b.setHz) {
+            return a.setHz < b.setHz;
+        }
+        if (a.stepDb != b.stepDb) {
+            return a.stepDb > b.stepDb;
+        }
+        return a.n < b.n;
+    });
+    paintRow(titles, true);
+    for (const HeterReportPoint& point : tableRows) {
+        if (y + rowH > h - 28) {
+            footer();
+            pdf.newPage();
+            ++page;
+            y = 36;
+            label(28, y, QStringLiteral("Таблица измерений — все частоты и коды ослабления"), 12,
+                  QColor(QStringLiteral("#193448")));
+            y = 58;
+            paintRow(titles, true);
         }
         const QString key = point.port + QLatin1Char('|') + point.mode + QLatin1Char('|')
                             + QString::number(point.setHz, 'f', 0);
@@ -173,57 +200,14 @@ QString writeHeterodyneReport(const QString& folder, const HeterReportRun& run, 
                                  point.mode,
                                  QString::number(point.attA, 'f', 1),
                                  QString::number(point.attB, 'f', 1),
-                                 QString::number(point.setHz / 1e6, 'f', 6),
-                                 QString::number(point.peakHz / 1e6, 'f', 6),
+                                 QString::number(point.setHz / 1e6, 'f', 3),
+                                 QString::number(point.peakHz / 1e6, 'f', 3),
                                  QString::number(point.levelDbm, 'f', 2),
                                  loss,
                                  status};
-        for (int i = 0; i < values.size(); ++i) {
-            label(cols[i], y, values.at(i), 8, QColor(QStringLiteral("#193448")));
-        }
-        y -= 15;
+        paintRow(values, false);
     }
-    if (points.isEmpty()) {
-        footer();
-        painter.end();
-        return {};
-    }
-    nextPage();
-    for (int index = 0; index < points.size(); ++index) {
-        const HeterReportPoint& point = points.at(index);
-        const QString status = !point.signal ? QStringLiteral("слабый пик")
-                               : point.lock  ? QStringLiteral("захват")
-                                             : QStringLiteral("нет LOCK");
-        header(QStringLiteral("Снимок %1   /   выход %2   /   включены %3")
-                   .arg(point.n, 4, 10, QLatin1Char('0'))
-                   .arg(point.port, point.mode),
-               QStringLiteral("Задано %1 МГц     Пик %2 МГц     Уровень %3 дБм     LOCK %4")
-                   .arg(point.setHz / 1e6, 0, 'f', 6)
-                   .arg(point.peakHz / 1e6, 0, 'f', 6)
-                   .arg(point.levelDbm, 0, 'f', 2)
-                   .arg(point.lock ? 1 : 0));
-        QImage image(folder + QLatin1Char('/') + point.imageFile);
-        if (!image.isNull()) {
-            const QRectF box(32, 63, w - 64, h - 171);
-            const QSizeF fitted = image.size().scaled(box.size().toSize(), Qt::KeepAspectRatio);
-            const QRectF target(box.center().x() - fitted.width() / 2.0, box.center().y() - fitted.height() / 2.0,
-                                fitted.width(), fitted.height());
-            painter.drawImage(target, image);
-        }
-        label(32, 45,
-              QStringLiteral("ATT A/B %1 / %2 дБ    |    Обзор %3 МГц    |    RBW %4 кГц    |    %5    |    %6")
-                  .arg(point.attA, 0, 'f', 1)
-                  .arg(point.attB, 0, 'f', 1)
-                  .arg(point.spanHz / 1e6, 0, 'g', 4)
-                  .arg(point.rbwHz / 1000.0, 0, 'g', 4)
-                  .arg(status, point.time),
-              9, QColor(QStringLiteral("#193448")));
-        if (index + 1 < points.size()) {
-            nextPage();
-        } else {
-            footer();
-        }
-    }
+    footer();
     painter.end();
     return {};
 }

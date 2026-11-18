@@ -12,6 +12,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSlider>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -47,6 +48,17 @@ QString prefix(PsModulesPage::Module m)
 QString flagText(bool on)
 {
     return on ? QStringLiteral("да (1)") : QStringLiteral("нет (0)");
+}
+
+/// Как в Video_receiver: на экране 0 дБ — код 0, −31,5 дБ — код 63.
+QString videoAttText(double protocolDb)
+{
+    const double shown = -protocolDb;
+    QString text = QString::number(std::abs(shown), 'f', 1).replace(QLatin1Char('.'), QLatin1Char(','));
+    if (shown < -0.05) {
+        text.prepend(QString(QChar(0x2212)));
+    }
+    return text + QStringLiteral(" дБ");
 }
 
 QString valueText(const ps::ModuleField& f, double v)
@@ -119,7 +131,8 @@ PsModulesPage::PsModulesPage(PsLink* link, QWidget* parent)
     setAllowed(false);
 }
 
-QWidget* PsModulesPage::makeEditor(const ps::ModuleField& f, const QString& name, QCheckBox* send)
+QWidget* PsModulesPage::makeEditor(const ps::ModuleField& f, const QString& name, QCheckBox* send,
+                                  bool videoGain)
 {
     const auto mark = [this, send] {
         if (!m_filling) {
@@ -157,6 +170,31 @@ QWidget* PsModulesPage::makeEditor(const ps::ModuleField& f, const QString& name
     }
     case ps::ModuleFieldKind::Att31:
     case ps::ModuleFieldKind::Att15: {
+        if (videoGain && f.kind == ps::ModuleFieldKind::Att31) {
+            auto* wrap = new QWidget(this);
+            auto* row = new QHBoxLayout(wrap);
+            row->setContentsMargins(0, 0, 0, 0);
+            auto* slider = new QSlider(Qt::Horizontal, wrap);
+            slider->setObjectName(name);
+            slider->setRange(0, 63);
+            slider->setValue(63);
+            slider->setToolTip(QStringLiteral("Слева −31,5 дБ (код 63), справа 0 дБ (код 0)"));
+            auto* label = new QLabel(videoAttText(0.0), wrap);
+            label->setMinimumWidth(72);
+            const auto refresh = [slider, label] {
+                label->setText(videoAttText(31.5 - slider->value() / 2.0));
+            };
+            refresh();
+            connect(slider, &QSlider::valueChanged, this, [mark, refresh](int) {
+                refresh();
+                mark();
+            });
+            row->addWidget(slider, 1);
+            row->addWidget(label);
+            editor = wrap;
+            editor->setObjectName(name + QStringLiteral("Wrap"));
+            break;
+        }
         auto* box = new QDoubleSpinBox(this);
         box->setDecimals(1);
         box->setSingleStep(0.5);
@@ -168,7 +206,9 @@ QWidget* PsModulesPage::makeEditor(const ps::ModuleField& f, const QString& name
         break;
     }
     }
-    editor->setObjectName(name);
+    if (editor->objectName().isEmpty()) {
+        editor->setObjectName(name);
+    }
     editor->setToolTip(QStringLiteral("%1: %2").arg(qs(f.key), qs(ps::moduleRangeText(f.kind))));
     return editor;
 }
@@ -181,7 +221,11 @@ double PsModulesPage::editorValue(const ps::ModuleField& f, QWidget* editor) con
     case ps::ModuleFieldKind::FrequencyHz:
         return std::round(static_cast<QDoubleSpinBox*>(editor)->value() * 1e6);
     case ps::ModuleFieldKind::Att31:
-    case ps::ModuleFieldKind::Att15: return static_cast<QDoubleSpinBox*>(editor)->value();
+    case ps::ModuleFieldKind::Att15:
+        if (auto* slider = editor->findChild<QSlider*>()) {
+            return 31.5 - slider->value() / 2.0;
+        }
+        return static_cast<QDoubleSpinBox*>(editor)->value();
     }
     return 0.0;
 }
@@ -200,7 +244,13 @@ void PsModulesPage::setEditorValue(const ps::ModuleField& f, QWidget* editor, do
     }
     case ps::ModuleFieldKind::FrequencyHz: static_cast<QDoubleSpinBox*>(editor)->setValue(v / 1e6); break;
     case ps::ModuleFieldKind::Att31:
-    case ps::ModuleFieldKind::Att15: static_cast<QDoubleSpinBox*>(editor)->setValue(v); break;
+    case ps::ModuleFieldKind::Att15:
+        if (auto* slider = editor->findChild<QSlider*>()) {
+            slider->setValue(qRound((31.5 - v) * 2.0));
+        } else {
+            static_cast<QDoubleSpinBox*>(editor)->setValue(v);
+        }
+        break;
     }
 }
 
@@ -278,7 +328,7 @@ QWidget* PsModulesPage::buildModule(Module m, const std::vector<ps::ModuleField>
         FieldRow r{f};
         r.send = new QCheckBox(page);
         r.send->setObjectName(name + QStringLiteral("_send"));
-        r.editor = makeEditor(f, name, r.send);
+        r.editor = makeEditor(f, name, r.send, m == Video);
         r.actual = new QLabel(QStringLiteral("—"), page);
         r.actual->setProperty("role", QStringLiteral("hint"));
         grid->addWidget(r.send, row, base, Qt::AlignHCenter);
@@ -311,6 +361,12 @@ QWidget* PsModulesPage::buildModule(Module m, const std::vector<ps::ModuleField>
     layout->setSpacing(ui::kGap);
     grid->setRowStretch(grid->rowCount(), 1);
     layout->addWidget(scrolled(grid, page), 1);
+    if (m == Video) {
+        layout->addWidget(ui::hintLabel(
+            QStringLiteral("Ослабление HMC624A: 0 дБ — код 0, −31,5 дБ — код 63. "
+                           "В команду уходит ослабление 0…31,5 дБ."),
+            page));
+    }
     layout->addLayout(buttons);
     return page;
 }
@@ -528,7 +584,9 @@ void PsModulesPage::showModule(Module m, ps::Status status, const json& payload)
             continue;
         }
         const double v = it->get<double>();
-        r.actual->setText(valueText(r.field, v));
+        r.actual->setText(m == Video && r.field.kind == ps::ModuleFieldKind::Att31
+                              ? videoAttText(v)
+                              : valueText(r.field, v));
         setEditorValue(r.field, r.editor, v);
     }
     m_filling = false;

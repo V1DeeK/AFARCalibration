@@ -89,6 +89,10 @@ public:
     void set_sweep_points(std::uint32_t points);
     /// `SENS:FREQ:STAR` и `STOP`. Точки, ПЧ и мощность не меняет.
     void set_sweep_band(std::uint64_t start_hz, std::uint64_t stop_hz);
+    /// `SOUR:POW`. Частоту и точки не меняет.
+    void set_source_power(double dbm);
+    /// Дождаться одного законченного свипа (`TRIG:SING`, `*OPC?`).
+    void complete_one_sweep();
     /// Комплекс выбранного графика с текущего свипа. `CALC1:PAR<Tr>:SEL`, затем XAX и SDAT.
     /// Новый запуск и формат графика не меняет.
     ComplexSweep read_native_complex(int trace, SParameter parameter);

@@ -6,19 +6,24 @@
 #include "UiStyle.h"
 
 #include "ChannelAnalysis.h"
+#include "BeamCodes.h"
 #include <QApplication>
 #include <QComboBox>
 #include <QPointer>
 #include <QThread>
 #include <QDesktopServices>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMenu>
 #include <QMessageBox>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QDateTime>
 #include <QDir>
 #include <QDoubleSpinBox>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -289,6 +294,7 @@ FourChannelPanel::FourChannelPanel(QWidget* parent)
     row->addWidget(makeAttenBox(), 1);
     root->addLayout(row);
     root->addWidget(makeMeasureBox());
+    root->addWidget(makeBeamBox());
     root->addWidget(makeLogBox());
 
     connect(m_sendDebounce, &QTimer::timeout, this, &FourChannelPanel::requestSend);
@@ -579,6 +585,128 @@ QWidget* FourChannelPanel::makeLogBox()
     m_log->setFixedHeight(90);
     lay->addWidget(m_log);
     return box;
+}
+
+QWidget* FourChannelPanel::makeBeamBox()
+{
+    auto* box = new QGroupBox(QStringLiteral("Коды луча · две антенны, 16 каналов"), this);
+    auto* lay = new QVBoxLayout(box);
+    ui::applyGroupLayout(lay);
+    lay->addWidget(ui::hintLabel(
+        QStringLiteral("Расчёт как в beam_reference.py. Общий CSV и отдельный файл на изделие. "
+                       "Запускать после измерений: чтение 16 файлов тяжёлое."),
+        box));
+    auto* grid = new QGridLayout();
+    QSettings settings;
+    for (int i = 0; i < 16; ++i) {
+        const int product = i / 4 + 1;
+        const int channel = i % 4 + 1;
+        m_beamCsv[static_cast<std::size_t>(i)] = settings.value(QStringLiteral("beam/csv_%1").arg(i)).toString();
+        auto* button = new QPushButton(QStringLiteral("И%1 К%2").arg(product).arg(channel), box);
+        button->setToolTip(m_beamCsv[static_cast<std::size_t>(i)]);
+        ui::setButtonRole(button, ui::ButtonRole::Secondary);
+        connect(button, &QPushButton::clicked, this, [this, i, button]() {
+            const QString path = QFileDialog::getOpenFileName(
+                this, QStringLiteral("measurements.csv изделия %1 канала %2").arg(i / 4 + 1).arg(i % 4 + 1),
+                m_beamCsv[static_cast<std::size_t>(i)], QStringLiteral("CSV (*.csv)"));
+            if (path.isEmpty()) {
+                return;
+            }
+            m_beamCsv[static_cast<std::size_t>(i)] = path;
+            QSettings().setValue(QStringLiteral("beam/csv_%1").arg(i), path);
+            button->setToolTip(path);
+        });
+        grid->addWidget(button, i / 4, i % 4);
+    }
+    lay->addLayout(grid);
+    auto* row = new QHBoxLayout();
+    row->addWidget(new QLabel(QStringLiteral("Цель, дБ"), box));
+    m_beamTarget = new QDoubleSpinBox(box);
+    m_beamTarget->setRange(0.0, 40.0);
+    m_beamTarget->setDecimals(1);
+    m_beamTarget->setSingleStep(0.5);
+    m_beamTarget->setValue(settings.value(QStringLiteral("beam/target_db"), 29.0).toDouble());
+    row->addWidget(m_beamTarget);
+    m_beamCalc = new QPushButton(QStringLiteral("Посчитать коды"), box);
+    ui::setButtonRole(m_beamCalc, ui::ButtonRole::Primary);
+    connect(m_beamCalc, &QPushButton::clicked, this, &FourChannelPanel::calculateBeamCodes);
+    auto* beamFolder = new QPushButton(QStringLiteral("Папка таблиц"), box);
+    beamFolder->setObjectName(QStringLiteral("fourChannelBeamFolder"));
+    ui::setButtonRole(beamFolder, ui::ButtonRole::Secondary);
+    row->addWidget(m_beamCalc);
+    row->addWidget(beamFolder);
+    lay->addLayout(row);
+    connect(beamFolder, &QPushButton::clicked, this, [this] {
+        const QString dir = QSettings().value(QStringLiteral("beam/output_dir")).toString();
+        if (!dir.isEmpty() && QDir(dir).exists()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        }
+    });
+    m_beamStatus = ui::hintLabel(QStringLiteral("Шаг 1 МГц, 4,9–6,0 ГГц, воздух 37,2 мм и ROGERS 32,7 мм."), box);
+    lay->addWidget(m_beamStatus);
+    return box;
+}
+
+void FourChannelPanel::calculateBeamCodes()
+{
+    if (m_running || m_beamRunning) {
+        m_beamStatus->setText(QStringLiteral("Сначала дождитесь конца измерения."));
+        return;
+    }
+    for (const QString& path : m_beamCsv) {
+        if (!QFileInfo::exists(path)) {
+            m_beamStatus->setText(QStringLiteral("Не для всех 16 каналов выбран measurements.csv."));
+            return;
+        }
+    }
+    const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Куда сохранить таблицы луча"));
+    if (dir.isEmpty()) {
+        return;
+    }
+    BeamTableRequest request;
+    request.measurementsCsv.reserve(16);
+    for (const QString& path : m_beamCsv) {
+        request.measurementsCsv.push_back(path.toStdString());
+    }
+    request.targetGainDb = m_beamTarget->value();
+    request.outputDir = dir.toStdString();
+    QSettings().setValue(QStringLiteral("beam/target_db"), request.targetGainDb);
+    QSettings().setValue(QStringLiteral("beam/output_dir"), dir);
+    m_beamRunning = true;
+    m_beamCalc->setEnabled(false);
+    m_beamStatus->setText(QStringLiteral("Считаю…"));
+    QPointer<FourChannelPanel> self(this);
+    QThread* thread = QThread::create([request, self]() {
+        const std::string error = writeBeamCodeTables(request, [self](const std::string& text) {
+            if (!self) {
+                return;
+            }
+            const QString line = QString::fromStdString(text);
+            QMetaObject::invokeMethod(self.data(), [self, line]() {
+                if (self && self->m_beamStatus) {
+                    self->m_beamStatus->setText(line);
+                }
+            }, Qt::QueuedConnection);
+        });
+        if (!self) {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(), [self, error]() {
+            if (!self) {
+                return;
+            }
+            self->m_beamRunning = false;
+            if (self->m_beamCalc) {
+                self->m_beamCalc->setEnabled(true);
+            }
+            if (self->m_beamStatus) {
+                self->m_beamStatus->setText(error.empty() ? QStringLiteral("Таблицы луча записаны.")
+                                                          : QString::fromStdString(error));
+            }
+        }, Qt::QueuedConnection);
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
 }
 
 void FourChannelPanel::refreshPorts()
@@ -1446,8 +1574,23 @@ QWidget* FourChannelPanel::makeMeasureBox()
     m_openReport = new QPushButton(QStringLiteral("Открыть отчёт"), box);
     m_openReport->setObjectName(QStringLiteral("fourChannelOpenReport"));
     ui::setButtonRole(m_openReport, ui::ButtonRole::Secondary);
+    auto* openReportFolder = new QPushButton(QStringLiteral("Папка отчёта"), box);
+    openReportFolder->setObjectName(QStringLiteral("fourChannelOpenReportFolder"));
+    ui::setButtonRole(openReportFolder, ui::ButtonRole::Secondary);
+    m_measureResume = new QPushButton(QStringLiteral("Продолжить измерение"), box);
+    m_measureResume->setObjectName(QStringLiteral("fourChannelResume"));
+    ui::setButtonRole(m_measureResume, ui::ButtonRole::Primary);
+    m_measureResume->setToolTip(QStringLiteral("Продолжить последний проход с сохранённого шага, если связь или программа оборвались."));
+    connect(m_measureResume, &QPushButton::clicked, this, &FourChannelPanel::resumeSweep);
     buttons->addWidget(m_measureStop);
+    buttons->addWidget(m_measureResume);
     buttons->addWidget(m_openReport);
+    buttons->addWidget(openReportFolder);
+    connect(openReportFolder, &QPushButton::clicked, this, [this] {
+        const QString dir = latestReportDir();
+        QDir().mkpath(dir);
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    });
     lay->addLayout(buttons);
 
     // Полоса прохода: все точки свипа пишутся в measurements.csv (замечание: одна частота 5,5 ГГц — мало).
@@ -1653,6 +1796,7 @@ void FourChannelPanel::beginSweep(bool allChannels)
     m_pointBase = 0;
     m_stepIndex = 0;
     m_stopAsked = false;
+    m_preserveCsv = false;
     m_runKind = RunKind::Sweep;
     m_stepPhase = StepPhase::Idle;
     m_running = true;
@@ -1668,6 +1812,7 @@ void FourChannelPanel::beginSweep(bool allChannels)
                                  .arg(m_bandStop->value(), 0, 'f', 1)
                                  .arg(points));
     appendLog(QStringLiteral("старт измерения: жду анализатор, кадры на плату пойдут после его ответа"));
+    writeSweepProgress(false);
     emit channelGridRequested(m_bandStart->value() * 1.0e6, m_bandStop->value() * 1.0e6, points);
 }
 
@@ -1748,6 +1893,7 @@ void FourChannelPanel::stopMeasure(const QString& outcome)
         m_measureStatus->setText(outcome);
     }
     ui::setTone(m_measureStatus, ui::Tone::Info);
+    writeSweepProgress(outcome.startsWith(QStringLiteral("Готово")));
     m_runKind = RunKind::None;
     m_stopAsked = false;
     setMeasureUi();
@@ -1968,8 +2114,12 @@ void FourChannelPanel::finishMeasurePdf(bool openReport)
     if (m_runDir.isEmpty() || m_points.isEmpty()) {
         return;
     }
+    if (m_preserveCsv) {
+        appendLog(QStringLiteral("продолжение дописано в measurements.csv. Прежний PDF оставлен как был."));
+        return;
+    }
     const QString pdfError = writeChannelReport(m_runDir, m_runTitle, m_points, m_sweepNote);
-    const QString csvError = writeChannelCsv(m_runDir, m_points);
+    const QString csvError = m_preserveCsv ? QString() : writeChannelCsv(m_runDir, m_points);
     if (!csvError.isEmpty()) {
         appendLog(csvError);
     }
@@ -1977,6 +2127,26 @@ void FourChannelPanel::finishMeasurePdf(bool openReport)
         m_measureStatus->setText(pdfError);
         ui::setTone(m_measureStatus, ui::Tone::Error);
         return;
+    }
+    if (csvError.isEmpty()) {
+        const QString csv = m_runDir + QStringLiteral("/measurements.csv");
+        const QString folder = m_runDir + QStringLiteral("/analysis");
+        const QPointer<FourChannelPanel> self(this);
+        QThread* worker = QThread::create([self, csv, folder] {
+            const ChannelAnalysisResult result = analyzeChannelMeasurements(csv, folder, ChannelAnalysisOptions{});
+            QMetaObject::invokeMethod(qApp, [self, result] {
+                if (!self) {
+                    return;
+                }
+                if (!result.error.isEmpty()) {
+                    self->appendLog(QStringLiteral("разбор даташитов: ") + result.error);
+                    return;
+                }
+                self->appendLog(QStringLiteral("даташиты и таблицы коррекции: %1").arg(result.folder));
+            });
+        });
+        connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+        worker->start();
     }
     if (openReport) {
         showReport(m_runDir + QStringLiteral("/report.pdf"));
@@ -2012,6 +2182,7 @@ void FourChannelPanel::finishSweepStep()
     m_stepPhase = StepPhase::Idle;
     ++m_stepIndex;
     m_measureBar->setValue(m_stepIndex);
+    writeSweepProgress(false);
     continueMeasure();
 }
 
@@ -2071,6 +2242,14 @@ void FourChannelPanel::onChannelMarkers(bool ok, const QString& message, int ste
         point.s21FreqHz = freqHz;
         point.s21GainDb = gainDb;
         point.s21PhaseDeg = phaseDeg;
+        if (freqHz.isEmpty()) {
+            appendLog(QStringLiteral("частоты S21 не записаны, в CSV эта точка не попадёт"));
+        } else if (!m_runDir.isEmpty()) {
+            const QString csvError = appendChannelCsv(m_runDir, point);
+            if (!csvError.isEmpty()) {
+                appendLog(csvError);
+            }
+        }
     }
     if (!ok) {
         appendLog(message.isEmpty() ? QStringLiteral("маркеры не прочитаны") : message);
@@ -2222,8 +2401,130 @@ void FourChannelPanel::askNextChannel()
     m_measureBar->setRange(0, m_steps.size());
     m_measureBar->setValue(0);
     m_measureStatus->setText(QStringLiteral("Канал %1. Перекрутите кабель и дождитесь шагов.").arg(next + 1));
+    writeSweepProgress(false);
     setMeasureUi();
     continueMeasure();
+}
+
+void FourChannelPanel::writeSweepProgress(bool done)
+{
+    if (m_runDir.isEmpty()) {
+        return;
+    }
+    QJsonObject object;
+    object.insert(QStringLiteral("step"), m_stepIndex);
+    object.insert(QStringLiteral("channel"), selectedIndex());
+    object.insert(QStringLiteral("allChannels"), m_allChannels);
+    object.insert(QStringLiteral("bandStart"), m_bandStart != nullptr ? m_bandStart->value() : 0);
+    object.insert(QStringLiteral("bandStop"), m_bandStop != nullptr ? m_bandStop->value() : 0);
+    object.insert(QStringLiteral("product"), m_product != nullptr ? m_product->currentIndex() + 1 : 1);
+    object.insert(QStringLiteral("title"), m_runTitle);
+    object.insert(QStringLiteral("done"), done);
+    QFile file(m_runDir + QStringLiteral("/progress.json"));
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        file.write(QJsonDocument(object).toJson(QJsonDocument::Indented));
+    }
+}
+
+void FourChannelPanel::resumeSweep()
+{
+    if (m_running || m_sendInFlight) {
+        m_measureStatus->setText(QStringLiteral("Измерение уже идёт."));
+        return;
+    }
+    if (!m_connected) {
+        m_measureStatus->setText(QStringLiteral("Сначала подключите плату ППКХ4."));
+        ui::setTone(m_measureStatus, ui::Tone::Warn);
+        return;
+    }
+    QString folder;
+    QDateTime newest;
+    const QDir root(reportsRoot());
+    const QStringList names = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QString& name : names) {
+        const QString path = root.filePath(name + QStringLiteral("/progress.json"));
+        const QFileInfo info(path);
+        if (!info.exists()) {
+            continue;
+        }
+        if (!newest.isValid() || info.lastModified() > newest) {
+            newest = info.lastModified();
+            folder = root.filePath(name);
+        }
+    }
+    QFile file(folder + QStringLiteral("/progress.json"));
+    if (folder.isEmpty() || !file.open(QIODevice::ReadOnly)) {
+        m_measureStatus->setText(QStringLiteral("Нет незаконченного прохода."));
+        return;
+    }
+    const QJsonObject object = QJsonDocument::fromJson(file.readAll()).object();
+    if (object.value(QStringLiteral("done")).toBool()) {
+        m_measureStatus->setText(QStringLiteral("Последний проход уже закончен."));
+        return;
+    }
+    const int channel = object.value(QStringLiteral("channel")).toInt();
+    if (channel < 0 || channel >= kChannels) {
+        m_measureStatus->setText(QStringLiteral("В progress.json битый номер канала."));
+        return;
+    }
+    if (m_bandStart != nullptr) {
+        m_bandStart->setValue(object.value(QStringLiteral("bandStart")).toDouble());
+    }
+    if (m_bandStop != nullptr) {
+        m_bandStop->setValue(object.value(QStringLiteral("bandStop")).toDouble());
+    }
+    if (m_product != nullptr) {
+        const int product = object.value(QStringLiteral("product")).toInt(1) - 1;
+        if (product >= 0 && product < m_product->count()) {
+            m_product->setCurrentIndex(product);
+        }
+    }
+    {
+        const QSignalBlocker block(m_slot);
+        m_slot->setCurrentIndex(channel);
+    }
+    saveSelection();
+    showSelected(false);
+    m_savedPhase = m_confirmedPhase;
+    m_savedAtten = m_confirmedAtten;
+    m_runDir = folder;
+    m_runTitle = object.value(QStringLiteral("title")).toString();
+    if (m_runTitle.isEmpty()) {
+        m_runTitle = QFileInfo(folder).fileName();
+    }
+    m_allChannels = object.value(QStringLiteral("allChannels")).toBool();
+    m_preserveCsv = true;
+    m_points.clear();
+    m_pointBase = 0;
+    m_steps = buildChannelSteps({channel}, max_code(m_format.phase.width), max_code(m_format.atten.width),
+                                m_savedPhase, m_savedAtten);
+    if (m_steps.isEmpty()) {
+        m_measureStatus->setText(QStringLiteral("Нет шагов для продолжения."));
+        return;
+    }
+    int step = object.value(QStringLiteral("step")).toInt();
+    if (step < 0) {
+        step = 0;
+    }
+    if (step > m_steps.size()) {
+        step = m_steps.size();
+    }
+    chooseScreenshots();
+    m_stepIndex = step;
+    m_captureIndex = -1;
+    m_stopAsked = false;
+    m_runKind = RunKind::Sweep;
+    m_running = true;
+    m_gridPending = true;
+    m_measureBar->setRange(0, m_steps.size());
+    m_measureBar->setValue(step);
+    setMeasureUi();
+    appendLog(QStringLiteral("продолжение %1, канал %2, шаг %3 из %4")
+                  .arg(m_runTitle)
+                  .arg(channel + 1)
+                  .arg(step + 1)
+                  .arg(m_steps.size()));
+    emit channelGridRequested(m_bandStart->value() * 1.0e6, m_bandStop->value() * 1.0e6, bandPoints());
 }
 
 void FourChannelPanel::applyBestAndSave()
@@ -2333,6 +2634,19 @@ void FourChannelPanel::setMeasureUi()
     m_repeatStart->setEnabled(idle);
     m_repeatCount->setEnabled(idle);
     m_measureStop->setEnabled(m_running);
+    if (m_measureResume != nullptr) {
+        bool pending = false;
+        const QDir root(reportsRoot());
+        const QStringList names = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (int i = names.size() - 1; i >= 0 && !pending; --i) {
+            QFile file(root.filePath(names.at(i) + QStringLiteral("/progress.json")));
+            if (!file.open(QIODevice::ReadOnly)) {
+                continue;
+            }
+            pending = !QJsonDocument::fromJson(file.readAll()).object().value(QStringLiteral("done")).toBool();
+        }
+        m_measureResume->setVisible(idle && pending);
+    }
     m_slot->setEnabled(idle);
     for (QPushButton* row : m_rows) {
         if (row != nullptr) {

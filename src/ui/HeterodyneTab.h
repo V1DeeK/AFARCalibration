@@ -55,7 +55,10 @@ private:
     void renderSchema(const HeterState& state);
     void updatePlanHint();
     void refreshArchive();
+    void updateResumeButton();
     [[nodiscard]] QString reportDirectory() const;
+    /// Папка серии, которую можно продолжить. Пусто, если такой нет.
+    [[nodiscard]] QString resumableFolder(int* done = nullptr, int* total = nullptr) const;
 
     QThread* m_thread = nullptr;
     HeterSession* m_session = nullptr;
@@ -125,12 +128,7 @@ private:
     QLineEdit* m_psuIp = nullptr;
     QComboBox* m_enables = nullptr;
     QComboBox* m_route = nullptr;
-    QDoubleSpinBox* m_freqLo = nullptr;
-    QDoubleSpinBox* m_freqHi = nullptr;
-    QDoubleSpinBox* m_freqStep = nullptr;
-    QDoubleSpinBox* m_attLo = nullptr;
-    QDoubleSpinBox* m_attHi = nullptr;
-    QDoubleSpinBox* m_span = nullptr;
+    QComboBox* m_freqStep = nullptr;
     QLabel* m_planHint = nullptr;
     QLabel* m_benchMessage = nullptr;
     QLabel* m_detail = nullptr;
@@ -138,7 +136,9 @@ private:
     QLabel* m_last = nullptr;
     QProgressBar* m_bar = nullptr;
     QPushButton* m_start = nullptr;
+    QPushButton* m_pause = nullptr;
     QPushButton* m_stop = nullptr;
+    QPushButton* m_resume = nullptr;
     QPushButton* m_confirm = nullptr;
     QPushButton* m_pdf = nullptr;
     QListWidget* m_archive = nullptr;

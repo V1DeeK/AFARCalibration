@@ -690,6 +690,32 @@ void C2220Vna::set_sweep_band(std::uint64_t start_hz, std::uint64_t stop_hz)
     }
 }
 
+void C2220Vna::set_source_power(double dbm)
+{
+    require_connected("set_source_power");
+    if (!std::isfinite(dbm) || dbm < -90.0 || dbm > 20.0) {
+        throw std::invalid_argument("C2220Vna: source power out of range");
+    }
+    write_cmd("SOUR:POW " + format_double(dbm));
+    if (trim_scpi_text(query("*OPC?")) != "1") {
+        throw std::runtime_error("C2220Vna: source power update did not complete");
+    }
+    const auto errors = drain_errors();
+    if (!errors.empty()) {
+        throw std::runtime_error("C2220Vna: source power update failed: " + errors.front());
+    }
+}
+
+void C2220Vna::complete_one_sweep()
+{
+    require_connected("complete_one_sweep");
+    transport_.set_io_timeout_ms(profile_.sweep_timeout_ms);
+    write_cmd("TRIG:SING");
+    if (query("*OPC?").find('1') == std::string::npos) {
+        throw std::runtime_error("C2220Vna: sweep did not complete");
+    }
+}
+
 ComplexSweep C2220Vna::read_native_complex(int trace, SParameter parameter)
 {
     require_connected("read_native_complex");

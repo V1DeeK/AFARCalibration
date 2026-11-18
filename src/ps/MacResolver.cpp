@@ -70,6 +70,11 @@ QHostAddress bindAddressFor(const QString& ip)
 
 }  // namespace
 
+QHostAddress psBindAddress(const QString& peerIpv4)
+{
+    return bindAddressFor(peerIpv4);
+}
+
 MacResolver::MacResolver(QObject* parent)
     : QObject(parent)
     , m_sweepTimeout(new QTimer(this))
@@ -377,16 +382,14 @@ void MacResolver::launchNextProbes()
         auto* timeout = new QTimer(socket);
         timeout->setSingleShot(true);
         timeout->setInterval(kProbeTimeoutMs);
-        // Любой ответ узла (принял или отказал) наполняет таблицу ARP — этого достаточно.
-        connect(socket, &QTcpSocket::connected, this, [this, socket, ip] {
-            m_openHosts.append(ip);
-            finishProbe(socket);
-        });
+        // Порт 1, не 49600: SYN только наполняет ARP. Подключение к порту PS
+        // заняло бы единственного клиента, и гетеродин по RS-485 терял плату.
+        connect(socket, &QTcpSocket::connected, this, [this, socket] { finishProbe(socket); });
         connect(socket, &QTcpSocket::errorOccurred, this,
                 [this, socket](QAbstractSocket::SocketError) { finishProbe(socket); });
         connect(timeout, &QTimer::timeout, this, [this, socket] { finishProbe(socket); });
         m_probes.insert(socket);
-        socket->connectToHost(ip, m_port);
+        socket->connectToHost(ip, 1);
         timeout->start();
     }
     if (m_probes.isEmpty() && m_nextCandidate >= m_candidates.size()) {
@@ -456,9 +459,7 @@ void MacResolver::finishSweep()
                           .arg(m_port)
                           .arg(described.join(QStringLiteral(", ")));
         } else {
-            reason += QStringLiteral("Ни один узел подсети не принял подключение на порт %1: плата выключена, "
-                                     "не в этой подсети или программе закрыт доступ к локальной сети.")
-                          .arg(m_port);
+            reason += QStringLiteral("Плата выключена, не в этой подсети или программе закрыт доступ к локальной сети.");
         }
         emit failed(reason);
         emit portOpenHosts(open);

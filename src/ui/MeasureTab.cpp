@@ -26,7 +26,11 @@
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QDesktopServices>
+#include <QDir>
+#include <QFileInfo>
 #include <QSettings>
+#include <QUrl>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -666,6 +670,16 @@ QWidget* MeasureTab::makeGraphsPage()
     actionLayout->addWidget(m_nativeStateButton);
     actionLayout->addWidget(m_nativeStateUndoButton);
     actionLayout->addWidget(m_exportTwoPort);
+    auto* exportFolder = new QPushButton(QStringLiteral("Папка отчёта .s2p и PDF"), side);
+    exportFolder->setObjectName(QStringLiteral("exportTwoPortFolder"));
+    actionLayout->addWidget(exportFolder);
+    connect(exportFolder, &QPushButton::clicked, this, [] {
+        const QString path = QSettings().value(QStringLiteral("ui/two_port_export_path")).toString();
+        const QString dir = path.isEmpty() ? QString() : QFileInfo(path).absolutePath();
+        if (!dir.isEmpty() && QDir(dir).exists()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        }
+    });
     actionLayout->addWidget(openSweepSettings);
     actionLayout->addWidget(m_graphDataStatus);
     sideLayout->addWidget(actionBox);

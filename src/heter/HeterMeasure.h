@@ -36,12 +36,16 @@ public:
     [[nodiscard]] HeterRunStatus status() const;
 
     void requestCancel();
+    /// Закончить текущую точку, записать её и оставить серию, чтобы её можно было продолжить.
+    void requestPause();
     void requestResume(const QString& runId, const QString& port);
 
 public slots:
     void identify(const QString& ip, const QString& device);
     void tune(const QString& ip, double centerMhz);
-    void start(const HeterJob& job, const QString& reportDir);
+    void start(const HeterJob& job, const QString& reportDir, const QString& resumeFolder = QString());
+    /// Продолжить папку, в которой уже есть plan.json и measurements.csv.
+    void resume(const QString& folder);
 
 signals:
     void identified(const QString& text, bool ok);
@@ -61,4 +65,5 @@ private:
     QWaitCondition m_wait;
     HeterRunStatus m_status;
     bool m_stopping = false;
+    bool m_pausing = false;
 };

@@ -8,20 +8,31 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QHostAddress>
+#include <QSet>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QThread>
 #include <QUuid>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
+class HeterPaused : public std::runtime_error {
+public:
+    explicit HeterPaused(const QString& text)
+        : std::runtime_error(text.toStdString())
+    {
+    }
+};
+
 namespace {
 
-constexpr int kMaxFreqs = 256;
-constexpr int kMaxPoints = 4096;
+constexpr int kMaxFreqs = 2048;
+constexpr int kMaxPoints = 160000;
 
 qint64 hzOfMhz(double mhz)
 {
@@ -269,6 +280,21 @@ void HeterMeasure::publish(const HeterRunStatus& status)
     emit statusChanged(status);
 }
 
+void HeterMeasure::requestPause()
+{
+    HeterRunStatus copy;
+    {
+        QMutexLocker lock(&m_guard);
+        m_pausing = true;
+        if (m_status.status == QLatin1String("running") || m_status.status == QLatin1String("waiting")) {
+            m_status.detail = QStringLiteral("Пауза после текущей точки, уже снятое сохраняется");
+        }
+        copy = m_status;
+        m_wait.wakeAll();
+    }
+    emit statusChanged(copy);
+}
+
 void HeterMeasure::requestCancel()
 {
     HeterRunStatus copy;
@@ -299,6 +325,9 @@ void HeterMeasure::checkpoint()
     if (m_stopping) {
         throw Cancelled();
     }
+    if (m_pausing) {
+        throw HeterPaused(QStringLiteral("Пауза. Снятые точки лежат в папке серии, измерение можно продолжить."));
+    }
 }
 
 void HeterMeasure::waitCable(const QString& port)
@@ -313,11 +342,14 @@ void HeterMeasure::waitCable(const QString& port)
     }
     emit statusChanged(copy);
     QMutexLocker lock(&m_guard);
-    while (!m_stopping && m_status.status == QLatin1String("waiting")) {
+    while (!m_stopping && !m_pausing && m_status.status == QLatin1String("waiting")) {
         m_wait.wait(&m_guard);
     }
     if (m_stopping) {
         throw Cancelled();
+    }
+    if (m_pausing) {
+        throw HeterPaused(QStringLiteral("Пауза. Снятые точки лежат в папке серии, измерение можно продолжить."));
     }
 }
 
@@ -352,7 +384,41 @@ void HeterMeasure::tune(const QString& ip, double centerMhz)
     }
 }
 
-void HeterMeasure::start(const HeterJob& job, const QString& reportDir)
+void HeterMeasure::resume(const QString& folder)
+{
+    const QString planPath = QDir(folder).filePath(QStringLiteral("plan.json"));
+    QFile file(planPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        HeterRunStatus failed;
+        failed.status = QStringLiteral("failed");
+        failed.detail = QStringLiteral("В папке нет plan.json, продолжить нечего.");
+        publish(failed);
+        return;
+    }
+    const QJsonObject plan = QJsonDocument::fromJson(file.readAll()).object();
+    const QJsonArray freqs = plan.value(QStringLiteral("frequencies")).toArray();
+    if (freqs.size() < 2) {
+        HeterRunStatus failed;
+        failed.status = QStringLiteral("failed");
+        failed.detail = QStringLiteral("В плане серии нет сетки частот.");
+        publish(failed);
+        return;
+    }
+    HeterJob job;
+    job.analyzerIp = plan.value(QStringLiteral("analyzer_ip")).toString();
+    job.psuIp = plan.value(QStringLiteral("psu_ip")).toString();
+    job.routing = plan.value(QStringLiteral("routing")).toString();
+    job.enables = plan.value(QStringLiteral("enables")).toString();
+    job.freqMinMhz = freqs.first().toDouble() / 1e6;
+    job.freqMaxMhz = freqs.last().toDouble() / 1e6;
+    job.freqStepMhz = (freqs.at(1).toDouble() - freqs.at(0).toDouble()) / 1e6;
+    job.attMinDb = plan.value(QStringLiteral("att_min")).toDouble();
+    job.attMaxDb = plan.value(QStringLiteral("att_max")).toDouble();
+    job.spanMhz = plan.value(QStringLiteral("span_hz")).toDouble() / 1e6;
+    start(job, QFileInfo(folder).absolutePath(), folder);
+}
+
+void HeterMeasure::start(const HeterJob& job, const QString& reportDir, const QString& resumeFolder)
 {
     if (active()) {
         HeterRunStatus busy = status();
@@ -371,21 +437,26 @@ void HeterMeasure::start(const HeterJob& job, const QString& reportDir)
         return;
     }
 
+    const bool resuming = !resumeFolder.isEmpty();
     const int steps = plan.attMaxCode - plan.attMinCode + 1;
     const int total = steps * plan.frequencies.size() * plan.ports.size();
-    const QString runId = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")) + QLatin1Char('-')
-                          + QUuid::createUuid().toString(QUuid::Id128).left(8);
-    const QString folder = QDir(reportDir).filePath(runId);
+    const QString runId = resuming
+                              ? QFileInfo(resumeFolder).fileName()
+                              : QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")) + QLatin1Char('-')
+                                    + QUuid::createUuid().toString(QUuid::Id128).left(8);
+    const QString folder = resuming ? QFileInfo(resumeFolder).absoluteFilePath() : QDir(reportDir).filePath(runId);
     QDir().mkpath(folder);
 
     {
         QMutexLocker lock(&m_guard);
         m_stopping = false;
+        m_pausing = false;
         m_status = {};
         m_status.id = runId;
         m_status.status = QStringLiteral("running");
         m_status.total = total;
-        m_status.detail = QStringLiteral("Подключение к FSW");
+        m_status.detail = resuming ? QStringLiteral("Продолжение серии, подключение к FSW")
+                                   : QStringLiteral("Подключение к FSW");
     }
     emit statusChanged(status());
 
@@ -400,6 +471,15 @@ void HeterMeasure::start(const HeterJob& job, const QString& reportDir)
     report.spanHz = plan.spanHz;
     report.total = total;
     report.started = nowText();
+    if (resuming) {
+        QFile previous(folder + QStringLiteral("/result.json"));
+        if (previous.open(QIODevice::ReadOnly)) {
+            const QString started = QJsonDocument::fromJson(previous.readAll()).object().value(QStringLiteral("started")).toString();
+            if (!started.isEmpty()) {
+                report.started = started;
+            }
+        }
+    }
     QStringList mhz;
     for (qint64 hz : plan.frequencies) {
         mhz << QString::number(hz / 1e6, 'g', 10);
@@ -419,9 +499,11 @@ void HeterMeasure::start(const HeterJob& job, const QString& reportDir)
     planJson.insert(QStringLiteral("att_min"), report.attMin);
     planJson.insert(QStringLiteral("att_max"), report.attMax);
     planJson.insert(QStringLiteral("span_hz"), static_cast<double>(plan.spanHz));
-    QFile planFile(folder + QStringLiteral("/plan.json"));
-    if (planFile.open(QIODevice::WriteOnly)) {
-        planFile.write(QJsonDocument(planJson).toJson(QJsonDocument::Indented));
+    if (!resuming) {
+        QFile planFile(folder + QStringLiteral("/plan.json"));
+        if (planFile.open(QIODevice::WriteOnly)) {
+            planFile.write(QJsonDocument(planJson).toJson(QJsonDocument::Indented));
+        }
     }
 
     QString outcome = QStringLiteral("done");
@@ -431,38 +513,176 @@ void HeterMeasure::start(const HeterJob& job, const QString& reportDir)
     const Enables on = plan.on;
     const QString mode = modeName(on);
 
+    QSet<QString> doneKeys;
+    int lastN = 0;
+    if (resuming) {
+        QFile existing(folder + QStringLiteral("/measurements.csv"));
+        if (!existing.open(QIODevice::ReadOnly)) {
+            HeterRunStatus failed;
+            failed.status = QStringLiteral("failed");
+            failed.detail = QStringLiteral("В папке нет measurements.csv, продолжить нечего.");
+            publish(failed);
+            return;
+        }
+        existing.readLine();
+        while (!existing.atEnd()) {
+            const QString line = QString::fromUtf8(existing.readLine()).trimmed();
+            const QStringList cells = line.split(QLatin1Char(','));
+            if (cells.size() < 13) {
+                continue;
+            }
+            HeterReportPoint row;
+            row.n = cells.at(0).toInt();
+            row.port = cells.at(1);
+            row.mode = cells.at(2);
+            row.setHz = cells.at(3).toDouble();
+            row.attA = cells.at(5).toDouble();
+            row.attB = cells.at(6).toDouble();
+            row.stepDb = cells.at(7).toDouble();
+            row.peakHz = cells.at(8).toDouble();
+            row.levelDbm = cells.at(9).toDouble();
+            row.lock = cells.at(10) != QLatin1String("0");
+            row.signal = cells.at(11) != QLatin1String("0");
+            row.spanHz = cells.at(12).toDouble();
+            row.rbwHz = cells.size() > 13 ? cells.at(13).toDouble() : 10000;
+            row.imageFile = cells.size() > 14 ? cells.at(14) : QString();
+            rows.append(row);
+            lastN = std::max(lastN, row.n);
+            doneKeys.insert(row.port + QLatin1Char('|') + QString::number(static_cast<qint64>(std::llround(row.setHz)))
+                            + QLatin1Char('|') + QString::number(row.stepDb, 'f', 1));
+        }
+    }
+
     try {
-        HeterFsw fsw(plan.analyzerIp);
-        report.instrument = fsw.idn();
+        auto connectFsw = [&] {
+            auto next = std::make_unique<HeterFsw>(plan.analyzerIp);
+            report.instrument = next->idn();
+            return next;
+        };
+        std::unique_ptr<HeterFsw> fsw = connectFsw();
+        const auto measureFsw = [&](double freq) {
+            QString lastError;
+            for (int attempt = 0; attempt < 4; ++attempt) {
+                checkpoint();
+                try {
+                    return fsw->measure(freq, static_cast<double>(plan.spanHz));
+                } catch (const HeterPaused&) {
+                    throw;
+                } catch (const Cancelled&) {
+                    throw;
+                } catch (const std::exception& failure) {
+                    lastError = QString::fromUtf8(failure.what());
+                    HeterRunStatus waiting = status();
+                    waiting.detail = QStringLiteral("Нет связи с FSW (%1). Повтор %2 из 3…").arg(lastError).arg(attempt + 1);
+                    waiting.status = QStringLiteral("running");
+                    publish(waiting);
+                    QThread::sleep(3);
+                    try {
+                        fsw.reset();
+                        fsw = connectFsw();
+                    } catch (const std::exception& again) {
+                        lastError = QString::fromUtf8(again.what());
+                    }
+                }
+            }
+            throw HeterPaused(QStringLiteral("Связь с FSW не восстановилась: %1. Серия на паузе, её можно продолжить.")
+                                  .arg(lastError));
+        };
+        const auto board = [&](const auto& action) {
+            QString lastError;
+            for (int attempt = 0; attempt < 4; ++attempt) {
+                checkpoint();
+                try {
+                    action();
+                    return;
+                } catch (const HeterPaused&) {
+                    throw;
+                } catch (const Cancelled&) {
+                    throw;
+                } catch (const std::exception& failure) {
+                    lastError = QString::fromUtf8(failure.what());
+                    HeterRunStatus waiting = status();
+                    waiting.detail = QStringLiteral("Нет ответа платы (%1). Повтор %2 из 3…").arg(lastError).arg(attempt + 1);
+                    waiting.status = QStringLiteral("running");
+                    publish(waiting);
+                    QThread::sleep(2);
+                }
+            }
+            throw HeterPaused(QStringLiteral("Плата не отвечает: %1. Серия на паузе, её можно продолжить.").arg(lastError));
+        };
         checkpoint();
-        initial = fresh(m_session);
+        board([&] { initial = fresh(m_session); });
         report.haveInitial = true;
         report.rs485Port = initial.port;
         report.externalRef = initial.sw2;
         report.aDbm = initial.aDbm;
         report.bDbm = initial.bDbm;
         dirty = true;
+        QFile csv(folder + QStringLiteral("/measurements.csv"));
+        const auto csvMode = resuming ? QIODevice::WriteOnly | QIODevice::Append
+                                       : QIODevice::WriteOnly | QIODevice::Truncate;
+        if (csv.open(csvMode)) {
+            if (!resuming) {
+                csv.write("\xEF\xBB\xBF");
+                csv.write("n,port,mode,set_hz,freq_mhz,att_a_db,att_b_db,step_db,peak_hz,level_dbm,lock,signal,span_hz,rbw_hz,image\n");
+            }
+        }
         QFile log(folder + QStringLiteral("/points.jsonl"));
         if (!log.open(QIODevice::WriteOnly | QIODevice::Append)) {
             // Точки остаются в PDF: журнал points.jsonl в этом прогоне недоступен.
         }
+        const auto pointKey = [](const QString& port, qint64 freq, double step) {
+            return port + QLatin1Char('|') + QString::number(freq) + QLatin1Char('|') + QString::number(step, 'f', 1);
+        };
         try {
             for (int pass = 0; pass < plan.ports.size(); ++pass) {
                 checkpoint();
                 const QString port = plan.ports.at(pass);
-                sendConfig(m_session, initial, false, false, false, true);
-                sendAtt(m_session, 31.5, 31.5);
+                bool portNeeds = false;
+                for (qint64 freq : plan.frequencies) {
+                    for (int code = plan.attMaxCode; code >= plan.attMinCode; --code) {
+                        if (!doneKeys.contains(pointKey(port, freq, code / 2.0))) {
+                            portNeeds = true;
+                            break;
+                        }
+                    }
+                    if (portNeeds) {
+                        break;
+                    }
+                }
+                if (!portNeeds) {
+                    continue;
+                }
+                board([&] {
+                    sendConfig(m_session, initial, false, false, false, true);
+                    sendAtt(m_session, 31.5, 31.5);
+                });
                 if (pass > 0) {
                     waitCable(port);
                 }
                 for (qint64 freq : plan.frequencies) {
                     checkpoint();
-                    sendAtt(m_session, 31.5, 31.5);
-                    must(m_session, 0x02, heter::packU64(static_cast<quint64>(freq)));
-                    sendConfig(m_session, initial, on.a, on.b, true, true);
+                    bool freqNeeds = false;
+                    for (int code = plan.attMaxCode; code >= plan.attMinCode; --code) {
+                        if (!doneKeys.contains(pointKey(port, freq, code / 2.0))) {
+                            freqNeeds = true;
+                            break;
+                        }
+                    }
+                    if (!freqNeeds) {
+                        continue;
+                    }
+                    board([&] {
+                        sendAtt(m_session, 31.5, 31.5);
+                        must(m_session, 0x02, heter::packU64(static_cast<quint64>(freq)));
+                        sendConfig(m_session, initial, on.a, on.b, true, true);
+                    });
                     for (int code = plan.attMaxCode; code >= plan.attMinCode; --code) {
                         checkpoint();
                         const double step = code / 2.0;
+                        if (doneKeys.contains(pointKey(port, freq, step))) {
+                            continue;
+                        }
                         const double attA = on.a ? step : 31.5;
                         const double attB = on.b ? step : 31.5;
                         HeterRunStatus progress = status();
@@ -470,17 +690,24 @@ void HeterMeasure::start(const HeterJob& job, const QString& reportDir)
                                               .arg(port, mode)
                                               .arg(freq / 1e6, 0, 'g', 8)
                                               .arg(step, 0, 'g', 4);
+                        progress.freqMhz = freq / 1e6;
+                        progress.attA = attA;
+                        progress.attB = attB;
+                        progress.done = lastN;
                         progress.status = QStringLiteral("running");
                         publish(progress);
-                        sendAtt(m_session, attA, attB);
-                        QThread::msleep(120);
-                        const HeterState read = fresh(m_session);
+                        HeterState read;
+                        board([&] {
+                            sendAtt(m_session, attA, attB);
+                            QThread::msleep(30);
+                            read = fresh(m_session);
+                        });
                         if (!sameSetup(read, freq, attA, attB, on, initial)) {
                             throw std::runtime_error("Параметры платы не совпали с заданием");
                         }
-                        const HeterPeak peak = fsw.measure(static_cast<double>(freq), static_cast<double>(plan.spanHz));
+                        const HeterPeak peak = measureFsw(static_cast<double>(freq));
                         HeterReportPoint row;
-                        row.n = rows.size() + 1;
+                        row.n = ++lastN;
                         row.port = port;
                         row.mode = mode;
                         row.attA = attA;
@@ -494,11 +721,14 @@ void HeterMeasure::start(const HeterJob& job, const QString& reportDir)
                         row.spanHz = peak.spanHz;
                         row.rbwHz = peak.rbwHz;
                         row.time = nowText();
-                        row.imageFile = QStringLiteral("point-%1.png").arg(row.n, 5, 10, QLatin1Char('0'));
-                        const QByteArray png = fsw.screenshot();
-                        QFile image(folder + QLatin1Char('/') + row.imageFile);
-                        if (!image.open(QIODevice::WriteOnly) || image.write(png) != png.size()) {
-                            throw std::runtime_error("не удалось сохранить снимок FSW");
+                        const bool shot = std::abs(step) < 0.01 && freq % 100000000LL == 0;
+                        if (shot) {
+                            row.imageFile = QStringLiteral("point-%1.png").arg(row.n, 5, 10, QLatin1Char('0'));
+                            const QByteArray png = fsw->screenshot();
+                            QFile image(folder + QLatin1Char('/') + row.imageFile);
+                            if (!image.open(QIODevice::WriteOnly) || image.write(png) != png.size()) {
+                                throw std::runtime_error("не удалось сохранить снимок FSW");
+                            }
                         }
                         QJsonObject point;
                         point.insert(QStringLiteral("n"), row.n);
@@ -524,6 +754,25 @@ void HeterMeasure::start(const HeterJob& job, const QString& reportDir)
                             log.flush();
                         }
                         rows.append(row);
+                        if (csv.isOpen()) {
+                            const QString line = QStringLiteral("%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15\n")
+                                                     .arg(row.n)
+                                                     .arg(row.port, row.mode)
+                                                     .arg(static_cast<qint64>(std::llround(row.setHz)))
+                                                     .arg(row.setHz / 1e6, 0, 'f', 3)
+                                                     .arg(row.attA, 0, 'f', 1)
+                                                     .arg(row.attB, 0, 'f', 1)
+                                                     .arg(row.stepDb, 0, 'f', 1)
+                                                     .arg(static_cast<qint64>(std::llround(row.peakHz)))
+                                                     .arg(row.levelDbm, 0, 'f', 3)
+                                                     .arg(row.lock ? 1 : 0)
+                                                     .arg(row.signal ? 1 : 0)
+                                                     .arg(static_cast<qint64>(std::llround(row.spanHz)))
+                                                     .arg(static_cast<qint64>(std::llround(row.rbwHz)))
+                                                     .arg(row.imageFile);
+                            csv.write(line.toUtf8());
+                            csv.flush();
+                        }
                         progress = status();
                         progress.done = row.n;
                         progress.lastLine = QStringLiteral("Последняя точка №%1 · выход %2 · включены %3 · пик %4 МГц · %5 дБм · LOCK=%6%7")
@@ -581,6 +830,10 @@ void HeterMeasure::start(const HeterJob& job, const QString& reportDir)
             }
             dirty = false;
         }
+    } catch (const HeterPaused& paused) {
+        outcome = QStringLiteral("paused");
+        const QString text = QString::fromUtf8(paused.what());
+        error = error.isEmpty() ? text : text + QStringLiteral(". ") + error;
     } catch (const Cancelled&) {
         outcome = QStringLiteral("cancelled");
     } catch (const std::exception& failure) {
@@ -601,7 +854,8 @@ void HeterMeasure::start(const HeterJob& job, const QString& reportDir)
     publish(saving);
 
     report.ended = nowText();
-    report.outcome = outcome == QLatin1String("done") ? QStringLiteral("Серия завершена")
+    report.outcome = outcome == QLatin1String("done")       ? QStringLiteral("Серия завершена")
+                     : outcome == QLatin1String("paused")   ? QStringLiteral("Серия на паузе")
                      : outcome == QLatin1String("cancelled") ? QStringLiteral("Серия остановлена")
                                                              : QStringLiteral("Ошибка измерения");
     report.error = error;

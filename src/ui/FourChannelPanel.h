@@ -119,6 +119,8 @@ private:
     void startSweep();
     void startAllChannels();
     void beginSweep(bool allChannels);
+    void resumeSweep();
+    void writeSweepProgress(bool done);
     /// Число точек свипа по полосе и шагу из полей. Нет полосы — 0.
     [[nodiscard]] int bandPoints() const;
     /// Выбрать measurements.csv, проверить даташиты и записать таблицы коррекции.
@@ -138,6 +140,8 @@ private:
     void showReport(const QString& path);
     void chooseScreenshots();
     void openReportFiles();
+    QWidget* makeBeamBox();
+    void calculateBeamCodes();
     QString reportsRoot() const;
     QString latestReportDir() const;
     void setMeasureUi();
@@ -211,6 +215,11 @@ private:
     QSpinBox* m_atNum = nullptr;
 
     QPlainTextEdit* m_log = nullptr;
+    QDoubleSpinBox* m_beamTarget = nullptr;
+    QPushButton* m_beamCalc = nullptr;
+    QLabel* m_beamStatus = nullptr;
+    std::array<QString, 16> m_beamCsv;
+    bool m_beamRunning = false;
 
     enum class RunKind { None, Sweep, Repeat };
     enum class StepPhase { Idle, Settle, Collect };
@@ -219,6 +228,7 @@ private:
     bool m_stopAsked = false;
     bool m_gridPending = false;
     bool m_allChannels = false;
+    bool m_preserveCsv = false;
     QString m_sweepNote;
     int m_sweepSettleMs = 1500;
     RunKind m_runKind = RunKind::None;
@@ -249,6 +259,7 @@ private:
     QPushButton* m_repeatStart = nullptr;
     QComboBox* m_repeatCount = nullptr;
     QPushButton* m_measureStop = nullptr;
+    QPushButton* m_measureResume = nullptr;
     QPushButton* m_openReport = nullptr;
     QPushButton* m_analyze = nullptr;
     QDoubleSpinBox* m_bandStart = nullptr;

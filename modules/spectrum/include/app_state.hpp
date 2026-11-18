@@ -65,8 +65,21 @@ struct AppState {
     std::atomic<bool>     is_connected     { false };
     std::atomic<bool>     ps_control_connected{ false };
     std::atomic<bool>     ps_service_mode{ false };
-    // При подключении через PS сервер IQ доступен только для чтения (протокол v8).
+    // При подключении через PS поток IQ читается через libiio, а тракт
+    // (частота, полоса, дискретизация, усиление) меняется командой set_adc.
     std::atomic<bool>     ps_iio_read_only { false };
+    // UI увеличивает счётчик, когда оператор отпустил настройку приёма.
+    std::atomic<uint32_t> adc_push_seq   { 0 };
+    std::atomic<uint64_t> adc_push_ms    { 0 };
+    std::atomic<uint64_t> adc_lo_hz      { 0 };
+    std::atomic<uint32_t> adc_bw_hz      { 0 };
+    std::atomic<uint32_t> adc_fs_hz      { 0 };
+    std::atomic<int>      adc_gain_db    { 0 };
+    // 0 — тишина, 1 — ждём ответ, 2 — плата подтвердила, 3 — отказ.
+    std::atomic<int>      adc_apply_state{ 0 };
+    // Частота дискретизации открытого буфера IQ. Ответ set_adc с другой fs
+    // переоткрывает поток.
+    std::atomic<uint32_t> iq_stream_rate_hz{ 0 };
 
     // Поиск платы по MAC — UI пишет запрос, BoardFinderThread выполняет.
     // Адрес плате выдаёт DHCP и он меняется между загрузками, а MAC постоянный,

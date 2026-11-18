@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 
 namespace afar::cal {
 
@@ -82,6 +83,7 @@ AttenCheck check_attenuator(const ChipGrid& g)
             prevAtten = actual;
             havePrev = true;
         }
+        
         const int full = chip_state(p, 0);
         if (g.present[full]) {
             rangeSum += g.gain_db[ref] - g.gain_db[full];
@@ -245,7 +247,7 @@ FrequencyLut build_frequency_lut(const std::vector<const ChipGrid*>& grids, cons
             for (int s = 0; s < kChipStates; ++s) {
                 const std::size_t i = static_cast<std::size_t>(q) * kChipStates + static_cast<std::size_t>(s);
                 dphi[i] = wrap_deg(g->phase_deg[static_cast<std::size_t>(s)] - lut.target_phases_deg[static_cast<std::size_t>(q)]);
-                const double h = std::sin(dphi[i] * M_PI / 360.0);
+                const double h = std::sin(dphi[i] * std::numbers::pi / 360.0);
                 sin2[i] = h * h;
             }
         }

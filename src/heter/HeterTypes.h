@@ -67,6 +67,10 @@ struct HeterRunStatus {
     QString port;
     QString pdfPath;
     QString lastLine;
+    /// Текущая точка серии. Отрицательное ослабление — ползунок не трогать.
+    double freqMhz = 0;
+    double attA = -1;
+    double attB = -1;
 };
 
 Q_DECLARE_METATYPE(HeterState)

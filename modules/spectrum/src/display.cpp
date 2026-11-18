@@ -9,6 +9,7 @@
 
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cfloat>
 #include <cstdio>
@@ -798,6 +799,8 @@ void SpectrumRenderer::render_device_section() {
             state_.connect_requested.store(true);
     };
 
+    const bool via_ps = state_.ps_iio_read_only.load();
+    if (via_ps) ImGui::BeginDisabled();
     labeled_item(text("Вход", "Input"), 120.0f);
     static const char* chan_modes[] = { "Rx 1", "Rx 2", "Rx 1 + Rx 2" };
     int current_mode = static_cast<int>(state_.chan_mode.load());
@@ -855,13 +858,15 @@ void SpectrumRenderer::render_device_section() {
             ImGui::TextDisabled("%s", text("(переподключитесь для применения)", "(reconnect to apply)"));
         }
     }
+    if (via_ps) ImGui::EndDisabled();
 
     labeled_item(text("Дискретизация", "Sampling"), 130.0f);
     int sample_rate_mhz = static_cast<int>(state_.sample_rate_hz.load() / 1'000'000);
     if (ImGui::InputInt("MSPS##rate", &sample_rate_mhz)) {
-        sample_rate_mhz = max(1, min(61, sample_rate_mhz));
+        sample_rate_mhz = max(via_ps ? 3 : 1, min(61, sample_rate_mhz));
         state_.sample_rate_hz.store(sample_rate_mhz * 1'000'000);
-        reapply_if_connected();
+        if (via_ps) commit_adc_settings();
+        else reapply_if_connected();
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", text(
@@ -870,37 +875,47 @@ void SpectrumRenderer::render_device_section() {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(130.0f);
     int bandwidth_mhz = static_cast<int>(state_.bandwidth_hz.load() / 1'000'000);
-    if (ImGui::InputInt(text("МГц, фильтр", "MHz filter"), &bandwidth_mhz)) {
+    if (ImGui::InputInt(text(via_ps ? "МГц, полоса RF" : "МГц, фильтр", "MHz filter"), &bandwidth_mhz)) {
         bandwidth_mhz = max(1, min(56, bandwidth_mhz));
         state_.bandwidth_hz.store(bandwidth_mhz * 1'000'000);
-        reapply_if_connected();
+        if (via_ps) commit_adc_settings();
+        else reapply_if_connected();
     }
+}
+
+void SpectrumRenderer::commit_adc_settings()
+{
+    // Запрос уже записан в поля спектра. Отправку set_adc делает главное окно.
 }
 
 void SpectrumRenderer::render_tuning_section() {
     ImGui::SeparatorText(text("Настройка приёма", "Tuning"));
 
-    labeled_item(text("Частота", "Frequency"), 260.0f);
+    const bool via_ps = state_.ps_iio_read_only.load();
+    labeled_item(text(via_ps ? "Гетеродин" : "Частота", "Frequency"), 260.0f);
     float freq_mhz = static_cast<float>(state_.center_freq_hz.load()) / 1e6f;
-    if (ImGui::SliderFloat("##freqslider", &freq_mhz, 0.0f, 6000.0f,
+    const float freq_min = via_ps ? 70.0f : 0.0f;
+    if (ImGui::SliderFloat("##freqslider", &freq_mhz, freq_min, 6000.0f,
                            text("%.1f МГц", "%.1f MHz"))) {
         state_.center_freq_hz.store(static_cast<uint64_t>(freq_mhz * 1e6f));
         freq_axis_.clear();
         state_.peak_hold_reset.store(true);
     }
     bool freq_slider_hovered = ImGui::IsItemHovered();
+    if (via_ps && ImGui::IsItemDeactivatedAfterEdit()) commit_adc_settings();
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100.0f);
     static float freq_input = freq_mhz;
     if (ImGui::InputFloat(text("МГц##input", "MHz##input"), &freq_input, 0.0f, 0.0f, "%.3f", ImGuiInputTextFlags_EnterReturnsTrue)) {
-        freq_input = max(0.0f, min(6000.0f, freq_input));
+        freq_input = max(freq_min, min(6000.0f, freq_input));
         state_.center_freq_hz.store(static_cast<uint64_t>(freq_input * 1e6f));
         freq_axis_.clear();
         state_.peak_hold_reset.store(true);
+        if (via_ps) commit_adc_settings();
     }
     bool freq_input_hovered = ImGui::IsItemHovered();
-    if (ImGui::IsItemDeactivated())
+    if (!ImGui::IsItemActive())
         freq_input = static_cast<float>(state_.center_freq_hz.load()) / 1e6f;
 
     // Fine-tuning: a step-size picker plus arrow buttons (held-repeat) and
@@ -918,11 +933,13 @@ void SpectrumRenderer::render_tuning_section() {
     auto nudge_freq = [&](int direction) {
         int64_t cur  = static_cast<int64_t>(state_.center_freq_hz.load());
         int64_t next = cur + static_cast<int64_t>(direction) * static_cast<int64_t>(freq_step_hz);
-        next = max<int64_t>(0, min<int64_t>(6'000'000'000LL, next));
+        const int64_t lo_min = via_ps ? 70'000'000LL : 0LL;
+        next = max<int64_t>(lo_min, min<int64_t>(6'000'000'000LL, next));
         state_.center_freq_hz.store(static_cast<uint64_t>(next));
         freq_input = static_cast<float>(next) / 1e6f;
         freq_axis_.clear();
         state_.peak_hold_reset.store(true);
+        if (via_ps) commit_adc_settings();
     };
 
     ImGui::SameLine(0.0f, 4.0f);
@@ -945,6 +962,17 @@ void SpectrumRenderer::render_tuning_section() {
         nudge_freq(wheel > 0.0f ? 1 : -1);
 
     render_gain_controls();
+    if (via_ps) {
+        const int apply = state_.adc_apply_state.load();
+        if (apply == 1)
+            ImGui::TextDisabled("%s", text("отправляю тракт на плату…", "sending receiver settings…"));
+        else if (apply == 3)
+            ImGui::TextColored({0.9f, 0.35f, 0.35f, 1.0f}, "%s",
+                               text("плата не приняла настройку приёма", "board rejected the receiver setting"));
+        else if (apply == 2)
+            ImGui::TextDisabled("%s", text("плата подтвердила тракт. Гетеродин встаёт по сетке синтезатора и может отличаться от заданного.",
+                                           "board confirmed the path; the LO may snap to the synthesizer grid"));
+    }
 }
 
 // Усиление AD9361. Режим и уровень применяются на лету, без переподключения,
@@ -1351,18 +1379,12 @@ void SpectrumRenderer::render_controls() {
         ImGui::TableNextColumn();
         card("##card_device", [&] {
             if (state_.ps_iio_read_only.load()) {
-                ImGui::TextWrapped("Режим PS: IQ только для чтения. Настройка приёмника через libiio недоступна.");
-                ImGui::BeginDisabled();
+                ImGui::TextWrapped("Приёмник AD9361: частота, полоса, дискретизация и усиление уходят командой set_adc. Порт, АРУ и инверсия фазы этой командой не задаются.");
             }
             render_device_section();
-            if (state_.ps_iio_read_only.load()) ImGui::EndDisabled();
         });
         ImGui::TableNextColumn();
-        card("##card_tuning", [&] {
-            if (state_.ps_iio_read_only.load()) ImGui::BeginDisabled();
-            render_tuning_section();
-            if (state_.ps_iio_read_only.load()) ImGui::EndDisabled();
-        });
+        card("##card_tuning", [&] { render_tuning_section(); });
         card("##card_display", [&] { render_display_section(); });
         ImGui::TableNextColumn();
         card("##card_demod", [&] { render_demod_section(); });

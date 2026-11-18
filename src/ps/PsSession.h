@@ -161,6 +161,9 @@ private:
     QString m_lastError;
     QString m_searchText;
     bool m_macSearchDone = false;
+    bool m_manualHost = false;
+    /// Поиск запущен, чтобы подключиться, даже если автоподключение выключено кнопкой.
+    bool m_searchWantsConnect = false;
     bool m_seriesActive = false;
     bool m_reconnectAfterSeries = false;
     bool m_checkRunning = false;

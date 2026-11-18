@@ -242,12 +242,13 @@ void HeterFsw::check()
     }
 }
 
-std::pair<double, double> HeterFsw::sweep(double centerHz, double spanHz, double rbwHz)
+std::pair<double, double> HeterFsw::sweep(double centerHz, double spanHz, double rbwHz, int points)
 {
-    command(QStringLiteral("FREQ:CENT %1;:FREQ:SPAN %2;:BAND:RES %3")
+    command(QStringLiteral("FREQ:CENT %1;:FREQ:SPAN %2;:BAND:RES %3;:SWE:POIN %4")
                 .arg(centerHz, 0, 'f', 0)
                 .arg(spanHz, 0, 'f', 0)
-                .arg(rbwHz, 0, 'f', 0));
+                .arg(rbwHz, 0, 'f', 0)
+                .arg(points));
     command(QStringLiteral("INIT:IMM"));
     wait();
     command(QStringLiteral("CALC:MARK1:MAX"));
@@ -262,7 +263,22 @@ std::pair<double, double> HeterFsw::sweep(double centerHz, double spanHz, double
 
 HeterPeak HeterFsw::measure(double centerHz, double spanHz)
 {
-    auto [peak, level] = sweep(centerHz, spanHz, 100000);
+    // Узкий обзор — один проход. Широкий сначала ищет пик, потом уточняет.
+    const bool narrow = spanHz <= 20e6;
+    if (narrow) {
+        command(QStringLiteral("DET SAMP"));
+        command(QStringLiteral("SWE:TYPE FFT"));
+    }
+    auto [peak, level] = sweep(centerHz, spanHz, narrow ? 10000 : 100000, narrow ? 1000 : 1001);
+    if (narrow) {
+        HeterPeak result;
+        result.peakHz = peak;
+        result.levelDbm = level;
+        result.spanHz = spanHz;
+        result.rbwHz = 10000;
+        result.signal = level > -80.0;
+        return result;
+    }
     const QString traceText = query(QStringLiteral("TRAC:DATA? TRACE1"));
     std::vector<double> trace;
     for (const QString& part : traceText.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
@@ -285,7 +301,7 @@ HeterPeak HeterFsw::measure(double centerHz, double spanHz)
     if (contrast >= 10.0) {
         usedSpan = 2000000;
         rbw = 10000;
-        const auto refined = sweep(peak, usedSpan, rbw);
+        const auto refined = sweep(peak, usedSpan, rbw, 1001);
         peak = refined.first;
         level = refined.second;
     }

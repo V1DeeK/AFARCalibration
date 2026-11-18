@@ -39,7 +39,7 @@ private:
     void check();
     void cleanup(const QString& previous);
     QByteArray readBytes(int count);
-    std::pair<double, double> sweep(double centerHz, double spanHz, double rbwHz);
+    std::pair<double, double> sweep(double centerHz, double spanHz, double rbwHz, int points);
 
     std::unique_ptr<QTcpSocket> m_sock;
     QByteArray m_buf;

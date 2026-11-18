@@ -77,6 +77,8 @@ add_library(afar_cal STATIC
     cal/InverseLut.cpp
     cal/ChipCheck.cpp
     cal/ChipCheck.h
+    cal/BeamCodes.cpp
+    cal/BeamCodes.h
 )
 target_include_directories(afar_cal PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/cal

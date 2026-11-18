@@ -3,8 +3,13 @@
 #include "PsServiceCheckRunner.h"
 #include "UiStyle.h"
 
+#include <QDesktopServices>
+#include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QSettings>
+#include <QUrl>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -48,7 +53,18 @@ PsServiceCheckPage::PsServiceCheckPage(PsLink* link, QWidget* parent)
     buttons->addWidget(m_start);
     buttons->addWidget(m_stop);
     buttons->addStretch(1);
+    auto* reportFolder = new QPushButton(QStringLiteral("Папка отчёта"), this);
+    reportFolder->setObjectName(QStringLiteral("psCheckFolder"));
+    ui::setButtonRole(reportFolder, ui::ButtonRole::Secondary);
     buttons->addWidget(m_save);
+    buttons->addWidget(reportFolder);
+    connect(reportFolder, &QPushButton::clicked, this, [] {
+        const QString path = QSettings().value(QStringLiteral("ps/check_report_path")).toString();
+        const QString dir = path.isEmpty() ? QString() : QFileInfo(path).absolutePath();
+        if (!dir.isEmpty() && QDir(dir).exists()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        }
+    });
 
     auto* hint = ui::hintLabel(QStringLiteral(
         "Проверка по контракту ps-json-protocol.md: PS переходит IDLE → SERVICE → IDLE, "
@@ -128,6 +144,7 @@ PsServiceCheckPage::PsServiceCheckPage(PsLink* link, QWidget* parent)
         if (path.isEmpty()) {
             return;
         }
+        QSettings().setValue(QStringLiteral("ps/check_report_path"), path);
         QString error;
         if (!saveReport(path, &error)) {
             refreshSummary(error);

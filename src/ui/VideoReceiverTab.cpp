@@ -8,6 +8,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
@@ -797,7 +798,16 @@ QWidget* VideoReceiverTab::buildTest()
     m_verdict = new QLabel(box);
     r3->addWidget(m_testStart);
     r3->addWidget(m_testStop);
+    auto* reportFolder = new QPushButton(QStringLiteral("Папка протокола"), box);
     r3->addWidget(m_reportSave);
+    r3->addWidget(reportFolder);
+    connect(reportFolder, &QPushButton::clicked, this, [] {
+        const QString path = QSettings().value(QStringLiteral("video/report_path")).toString();
+        const QString dir = path.isEmpty() ? QString() : QFileInfo(path).absolutePath();
+        if (!dir.isEmpty() && QDir(dir).exists()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        }
+    });
     r3->addWidget(m_verdict, 1);
     boxLay->addLayout(r3);
     boxLay->addWidget(ui::hintLabel(QStringLiteral(
@@ -816,8 +826,20 @@ QWidget* VideoReceiverTab::buildTest()
                              QStringLiteral("Версия ПО"), QStringLiteral("Итог")}, hist);
     m_histTable->setMaximumHeight(140);
     histLay->addWidget(m_histTable);
+    auto* histButtons = new QHBoxLayout();
     auto* csv = new QPushButton(QStringLiteral("Сохранить CSV"), hist);
-    histLay->addWidget(csv, 0, Qt::AlignLeft);
+    auto* csvFolder = new QPushButton(QStringLiteral("Папка CSV"), hist);
+    histButtons->addWidget(csv);
+    histButtons->addWidget(csvFolder);
+    histButtons->addStretch(1);
+    histLay->addLayout(histButtons);
+    connect(csvFolder, &QPushButton::clicked, this, [] {
+        const QString path = QSettings().value(QStringLiteral("video/history_path")).toString();
+        const QString dir = path.isEmpty() ? QString() : QFileInfo(path).absolutePath();
+        if (!dir.isEmpty() && QDir(dir).exists()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        }
+    });
     lay->addWidget(hist, 1);
 
     connect(m_testStart, &QPushButton::clicked, this, [this] {
@@ -862,8 +884,17 @@ QWidget* VideoReceiverTab::buildFirmware()
     m_fwVersion = new QLineEdit(QStringLiteral("0.1"), box);
     m_fwVersion->setMaximumWidth(70);
     r1->addWidget(new QLabel(QStringLiteral("Файл"), box));
+    auto* fwFolder = new QPushButton(QStringLiteral("Папка"), box);
     r1->addWidget(m_fwPath, 1);
+    r1->addWidget(fwFolder);
     r1->addWidget(choose);
+    connect(fwFolder, &QPushButton::clicked, this, [this] {
+        const QString path = m_fwPath->text().trimmed();
+        const QString dir = path.isEmpty() ? QString() : QFileInfo(path).absolutePath();
+        if (!dir.isEmpty() && QDir(dir).exists()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        }
+    });
     r1->addWidget(new QLabel(QStringLiteral("Версия"), box));
     r1->addWidget(m_fwVersion);
     boxLay->addLayout(r1);
@@ -1218,6 +1249,7 @@ void VideoReceiverTab::saveReport()
     if (path.isEmpty()) {
         return;
     }
+    QSettings().setValue(QStringLiteral("video/report_path"), path);
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
         || file.write("\xEF\xBB\xBF" + reportText(r).toUtf8()) < 0) {
@@ -1237,6 +1269,7 @@ void VideoReceiverTab::saveHistory()
     if (path.isEmpty()) {
         return;
     }
+    QSettings().setValue(QStringLiteral("video/history_path"), path);
     const auto q = [](QString v) { return QLatin1Char('"') + v.replace(QLatin1Char('"'), QStringLiteral("\"\"")) + QLatin1Char('"'); };
     QStringList lines{QStringLiteral("Время;Зав. номер;Проверяющий;BOOT_ID;ПО;Итог;Ошибки")};
     for (const TestReport& r : m_history) {
